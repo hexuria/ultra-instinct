@@ -87,6 +87,16 @@ cargo run -p aui-cli --features model-text -- run --cdp http://127.0.0.1:9222 \
   --goal "type rust ownership in the Search box" --text-model-cmd ./my-text-model.sh
 ```
 
+Without `--text-model-cmd`, `TEXT_MODEL_API_KEY` turns on the built-in HTTP model.
+`TEXT_MODEL_BASE_URL`, `TEXT_MODEL`, and `TEXT_MODEL_API` (`openai` | `anthropic` |
+`gemini`; unset, the base URL host picks it) select the provider wire shape:
+
+```bash
+TEXT_MODEL_API=anthropic TEXT_MODEL=claude-haiku-5-5 TEXT_MODEL_API_KEY=... \
+  cargo run -p aui-cli --features model-text -- run --cdp http://127.0.0.1:9222 \
+  --goal "type rust ownership in the Search box"
+```
+
 ```rust
 let mut agent = AgentBuilder::new(BrowserSession::new(transport), InstinctPolicy::default())
     .max_steps(20)
