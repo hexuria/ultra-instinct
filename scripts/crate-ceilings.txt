@@ -3,4 +3,3 @@
 # Current usage: aui-browser 4927, aui-cdp 1853, every other crate < 3.1k (2026-10-06).
 default 6000
 aui-browser 6700 # owned per-agent CDP tab lifecycle
-aui-cli 6400 # JEV transport: screenshots, boxes, page text (2026-10-17); split the remote transports out before raising again

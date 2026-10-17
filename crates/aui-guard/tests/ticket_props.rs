@@ -202,3 +202,59 @@ proptest! {
         prop_assert_eq!(presses, 1);
     }
 }
+
+// ---- Two-region (DRAG) tickets -------------------------------------------
+
+fn board(dest_label: &str, dest_x: u32) -> InteractionManifold {
+    parse_fixture(&format!(
+        "viewport w=1200 h=900\n\
+         region id=card role=generic label=\"Card\" x=10 y=10 w=60 h=40 actions=drag sources=dom\n\
+         region id=bin role=generic label=\"{dest_label}\" x={dest_x} y=600 w=120 h=80 sources=dom\n\
+         region id=other role=generic label=\"Other\" x=900 y=600 w=120 h=80 sources=dom\n"
+    ))
+    .unwrap()
+}
+
+#[test]
+fn drag_ticket_binds_both_ends() {
+    let m = board("Bin", 500);
+    let ticket = aui_guard::gate_drag(&m, &id("card"), &id("bin"), None, 0).expect("allowed");
+    assert_eq!(ticket.action, Action::Drag);
+    assert_eq!(ticket.dest.as_ref().map(|d| d.id.as_str()), Some("bin"));
+    assert_eq!(revalidate(&ticket, &m, None), Ok(()));
+    // The destination changed (relabelled): stale, like a source change.
+    assert_eq!(
+        revalidate(&ticket, &board("Trash", 500), None),
+        Err(TicketInvalid::TargetChanged)
+    );
+    // The destination moved far away: its world changed.
+    assert!(matches!(
+        revalidate(&ticket, &board("Bin", 20), None),
+        Err(TicketInvalid::WorldChanged | TicketInvalid::TargetChanged)
+    ));
+}
+
+#[test]
+fn drag_needs_a_drag_claim_and_a_visible_destination() {
+    let m = board("Bin", 500);
+    assert_eq!(
+        aui_guard::gate_drag(&m, &id("bin"), &id("card"), None, 0).unwrap_err(),
+        GuardReason::UnsupportedAction,
+        "a region that does not claim drag is not a source"
+    );
+    assert_eq!(
+        aui_guard::gate_drag(&m, &id("card"), &id("card"), None, 0).unwrap_err(),
+        GuardReason::UnsupportedAction,
+        "a region is never its own drop target"
+    );
+    let hidden = parse_fixture(
+        "viewport w=1200 h=900\n\
+         region id=card role=generic label=\"Card\" x=10 y=10 w=60 h=40 actions=drag sources=dom\n\
+         region id=bin role=generic label=\"Bin\" x=500 y=600 w=120 h=80 sources=dom flags=hidden\n",
+    )
+    .unwrap();
+    assert_eq!(
+        aui_guard::gate_drag(&hidden, &id("card"), &id("bin"), None, 0).unwrap_err(),
+        GuardReason::Hidden
+    );
+}

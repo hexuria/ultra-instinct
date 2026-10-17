@@ -29,7 +29,7 @@
 //! surface, where a host proposes a label rather than a finite choice.
 
 use aui_core::{Action, InteractionManifold, InteractionRegion, RegionId};
-use aui_protocol::{ActionTicket, GuardCandidate, GuardReason};
+use aui_protocol::{ActionTicket, GuardCandidate, GuardReason, TicketDest};
 
 use crate::ticket::issue_ticket;
 use crate::world::{blocker, WorldSnapshot};
@@ -58,6 +58,80 @@ pub fn gate(
         region,
         &world,
     ))
+}
+
+/// Gate a DRAG from `source` to `dest` and issue one ticket bound to both.
+///
+/// The source must claim Drag and pass every [`check`]; the destination must
+/// be another region and pass [`check_drop_target`]. Revalidation re-checks
+/// both neighborhoods, so a change at either end makes the ticket stale.
+pub fn gate_drag(
+    manifold: &InteractionManifold,
+    source: &RegionId,
+    dest: &RegionId,
+    focused: Option<RegionId>,
+    snapshot_id: u64,
+) -> Result<ActionTicket, GuardReason> {
+    if source == dest {
+        return Err(GuardReason::UnsupportedAction);
+    }
+    let mut ticket = gate(manifold, source, Action::Drag, focused, snapshot_id)?;
+    let region = manifold.get(dest).ok_or(GuardReason::MissingTarget)?;
+    check_drop_target(manifold, region)?;
+    // Focus is global and already bound by the source's world; the
+    // destination binds its own neighborhood.
+    let world = WorldSnapshot::of_target(manifold, None, dest);
+    ticket.dest = Some(Box::new(TicketDest {
+        id: region.id().clone(),
+        role: region.role(),
+        label: region.label().to_owned(),
+        fingerprint: region.fingerprint().bits(),
+        world_fingerprint: crate::ticket::world_fingerprint(&world),
+    }));
+    Ok(ticket)
+}
+
+/// Gate a click on one grid cell of a drawing surface. The surface must
+/// claim Point and pass every [`check`] for Click; the ticket binds the cell.
+pub fn gate_point(
+    manifold: &InteractionManifold,
+    surface: &RegionId,
+    cell: [u16; 2],
+    focused: Option<RegionId>,
+    snapshot_id: u64,
+) -> Result<ActionTicket, GuardReason> {
+    let region = manifold.get(surface).ok_or(GuardReason::MissingTarget)?;
+    if !region.actions().contains(&Action::Point)
+        || cell[0] >= aui_core::SURFACE_GRID
+        || cell[1] >= aui_core::SURFACE_GRID
+    {
+        return Err(GuardReason::UnsupportedAction);
+    }
+    let mut ticket = gate(manifold, surface, Action::Click, focused, snapshot_id)?;
+    ticket.cell = Some(cell);
+    Ok(ticket)
+}
+
+/// Hard checks for a release point: it needs no claim of its own, but it
+/// must be visible, uncovered, in front, and on screen.
+pub fn check_drop_target(
+    manifold: &InteractionManifold,
+    region: &InteractionRegion,
+) -> Result<(), GuardReason> {
+    let flags = region.flags();
+    if flags.hidden() || region.rect().is_zero_area() {
+        return Err(GuardReason::Hidden);
+    }
+    if flags.occluded() {
+        return Err(GuardReason::Occluded);
+    }
+    if blocker(manifold, region).is_some() {
+        return Err(GuardReason::FrontLayer);
+    }
+    if flags.offscreen() {
+        return Err(GuardReason::Offscreen);
+    }
+    Ok(())
 }
 
 /// The hard checks alone (no ticket). Exposed for tests and evidence.

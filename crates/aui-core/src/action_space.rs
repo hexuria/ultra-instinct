@@ -37,6 +37,12 @@ pub enum ActionKind {
     Wait,
     Done,
     Blocked,
+    /// Move the pointer over a region that opens something on hover.
+    Hover,
+    /// Scroll a scrollable region's own content down by one view.
+    ScrollIn,
+    /// Drag a draggable region onto another observed region.
+    Drag,
 }
 
 impl ActionKind {
@@ -55,6 +61,9 @@ impl ActionKind {
             Self::Wait => "WAIT",
             Self::Done => "DONE",
             Self::Blocked => "BLOCKED",
+            Self::Hover => "HOVER",
+            Self::ScrollIn => "SCROLL_IN",
+            Self::Drag => "DRAG",
         }
     }
 
@@ -68,6 +77,9 @@ impl ActionKind {
             "WAIT" | "wait" => Self::Wait,
             "DONE" | "done" => Self::Done,
             "BLOCKED" | "blocked" => Self::Blocked,
+            "HOVER" | "hover" => Self::Hover,
+            "SCROLL_IN" | "scroll_in" => Self::ScrollIn,
+            "DRAG" | "drag" => Self::Drag,
             _ => return None,
         })
     }
@@ -149,6 +161,19 @@ pub struct ObservedAction {
     /// For an unnamed target: the observed text that sits by it. Evidence
     /// only; [`Self::label`] stays the region label.
     near_text: Option<String>,
+    /// DRAG only: where the dragged region is released.
+    dest: Option<DragDest>,
+    /// Surface point clicks only: the grid cell `[col, row]`.
+    cell: Option<[u16; 2]>,
+}
+
+/// The release region of an offered DRAG.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DragDest {
+    pub id: RegionId,
+    pub label: String,
+    pub fingerprint: u64,
+    pub bounds: [i32; 4],
 }
 
 impl ObservedAction {
@@ -174,6 +199,8 @@ impl ObservedAction {
             state,
             bounds: None,
             near_text: None,
+            dest: None,
+            cell: None,
         }
     }
 
@@ -203,6 +230,13 @@ impl ObservedAction {
     }
     pub fn near_text(&self) -> Option<&str> {
         self.near_text.as_deref()
+    }
+    pub fn dest(&self) -> Option<&DragDest> {
+        self.dest.as_ref()
+    }
+    /// The surface cell `[col, row]` of a point click ([`SURFACE_GRID`] wide).
+    pub fn cell(&self) -> Option<[u16; 2]> {
+        self.cell
     }
 }
 
@@ -247,6 +281,13 @@ impl ActionSpace {
                 }
                 actions.insert(observed.id.clone(), observed);
             }
+        }
+
+        for observed in drag_actions(manifold) {
+            actions.insert(observed.id.clone(), observed);
+        }
+        for observed in point_actions(manifold) {
+            actions.insert(observed.id.clone(), observed);
         }
 
         for kind in [
@@ -320,6 +361,19 @@ impl ActionSpace {
         self.actions.values().any(|a| a.kind == kind)
     }
 
+    /// The same space without the actions `drop` names.
+    pub fn without_ids(&self, drop: &[ActionId]) -> Self {
+        Self {
+            captured_at_ms: self.captured_at_ms,
+            actions: self
+                .actions
+                .iter()
+                .filter(|(id, _)| !drop.contains(id))
+                .map(|(id, a)| (id.clone(), a.clone()))
+                .collect(),
+        }
+    }
+
     /// This space minus every action of `kind` (same capture time).
     pub fn without_kind(&self, kind: ActionKind) -> Self {
         Self {
@@ -350,9 +404,13 @@ const fn map_region_claim(claim: Action) -> Option<ActionKind> {
         Action::Click | Action::Toggle => Some(ActionKind::Click),
         Action::Type => Some(ActionKind::TypeText),
         Action::Select => Some(ActionKind::Select),
-        // Focus/Hover/Scroll on a region are not agent operations; page scroll
-        // is offered as SCROLL_UP / SCROLL_DOWN controls.
-        Action::Focus | Action::Hover | Action::Scroll => None,
+        // A region that opens something on hover, and a region whose own
+        // content scrolls. Page scroll stays the SCROLL_UP / SCROLL_DOWN controls.
+        Action::Hover => Some(ActionKind::Hover),
+        Action::Scroll => Some(ActionKind::ScrollIn),
+        // A drag needs a destination: offered as source / destination pairs.
+        // A surface's points are offered as a grid of cells.
+        Action::Focus | Action::Drag | Action::Point => None,
     }
 }
 
@@ -367,7 +425,112 @@ fn target_action(kind: ActionKind, region: &InteractionRegion) -> ObservedAction
         state: region.state().clone(),
         bounds: Some(pixel_box(region.rect())),
         near_text: None,
+        dest: None,
+        cell: None,
     }
+}
+
+/// Cells per side of the click grid offered on a drawing surface.
+pub const SURFACE_GRID: u16 = 8;
+/// Most surfaces whose points are offered per observation.
+const MAX_SURFACES: usize = 2;
+/// Smallest surface side, in pixels, that gets a grid.
+const MIN_SURFACE_PX: f64 = 40.0;
+
+/// The fraction `(fx, fy)` of the surface box at a cell's center.
+pub fn cell_center_fraction(cell: [u16; 2]) -> (f64, f64) {
+    let side = f64::from(SURFACE_GRID);
+    (
+        (f64::from(cell[0]) + 0.5) / side,
+        (f64::from(cell[1]) + 0.5) / side,
+    )
+}
+
+/// Point clicks on drawing surfaces: each viable region claiming Point gets a
+/// `SURFACE_GRID` x `SURFACE_GRID` grid of offered `CLICK:<surface>@c,r`
+/// cells. The policy picks a cell id; it never sends coordinates.
+fn point_actions(manifold: &InteractionManifold) -> Vec<ObservedAction> {
+    let mut out = Vec::new();
+    let surfaces = manifold
+        .regions()
+        .filter(|r| region_is_viable_target(r) && r.actions().contains(&Action::Point))
+        .filter(|r| r.rect().width() >= MIN_SURFACE_PX && r.rect().height() >= MIN_SURFACE_PX)
+        .take(MAX_SURFACES);
+    for surface in surfaces {
+        let rect = surface.rect();
+        let (cw, ch) = (
+            rect.width() / f64::from(SURFACE_GRID),
+            rect.height() / f64::from(SURFACE_GRID),
+        );
+        for row in 0..SURFACE_GRID {
+            for col in 0..SURFACE_GRID {
+                let mut action = target_action(ActionKind::Click, surface);
+                action.id = ActionId(format!("CLICK:{}@{col},{row}", surface.id()));
+                action.cell = Some([col, row]);
+                let x = rect.x() + f64::from(col) * cw;
+                let y = rect.y() + f64::from(row) * ch;
+                action.bounds = Some([x, y, cw, ch].map(|v| v.round() as i32));
+                action.near_text = Some(format!(
+                    "{} point col {col} row {row} of {}",
+                    if surface.label().is_empty() {
+                        "surface"
+                    } else {
+                        surface.label()
+                    },
+                    SURFACE_GRID
+                ));
+                out.push(action);
+            }
+        }
+    }
+    out
+}
+
+/// Most drag sources offered per observation.
+const MAX_DRAG_SOURCES: usize = 8;
+/// Most destinations offered per drag source, nearest first.
+const MAX_DROPS_PER_SOURCE: usize = 16;
+
+/// DRAG offers: each viable region claiming Drag, paired with the nearest
+/// other viable regions as release points. The menu stays finite and every
+/// pair is an explicit offered id `DRAG:<src>><dst>`.
+fn drag_actions(manifold: &InteractionManifold) -> Vec<ObservedAction> {
+    let viable: Vec<&InteractionRegion> = manifold
+        .regions()
+        .filter(|r| region_is_viable_target(r))
+        .collect();
+    let mut out = Vec::new();
+    let sources = viable
+        .iter()
+        .filter(|r| r.actions().contains(&Action::Drag))
+        .filter(|r| !r.id().as_str().contains('>'))
+        .take(MAX_DRAG_SOURCES);
+    for src in sources {
+        let c = src.rect().center();
+        let mut drops: Vec<&&InteractionRegion> = viable
+            .iter()
+            .filter(|d| d.id() != src.id() && !d.id().as_str().contains('>'))
+            .collect();
+        drops.sort_by(|a, b| {
+            a.rect()
+                .center()
+                .distance(c)
+                .total_cmp(&b.rect().center().distance(c))
+                .then_with(|| a.id().cmp(b.id()))
+        });
+        for dst in drops.into_iter().take(MAX_DROPS_PER_SOURCE) {
+            let mut action = target_action(ActionKind::Drag, src);
+            action.id = ActionId(format!("DRAG:{}>{}", src.id(), dst.id()));
+            action.dest = Some(DragDest {
+                id: dst.id().clone(),
+                label: dst.label().to_owned(),
+                fingerprint: dst.fingerprint().bits(),
+                bounds: pixel_box(dst.rect()),
+            });
+            out.push(action);
+        }
+    }
+    out
 }
 
 fn pixel_box(rect: Rect) -> [i32; 4] {
@@ -449,6 +612,8 @@ fn control_action(kind: ActionKind) -> ObservedAction {
         state: ElementState::default(),
         bounds: None,
         near_text: None,
+        dest: None,
+        cell: None,
     }
 }
 
@@ -489,6 +654,9 @@ mod tests {
             ActionKind::Wait,
             ActionKind::Done,
             ActionKind::Blocked,
+            ActionKind::Hover,
+            ActionKind::ScrollIn,
+            ActionKind::Drag,
         ] {
             assert_eq!(ActionKind::parse(kind.as_str()), Some(kind));
         }
@@ -607,6 +775,86 @@ mod tests {
         // Directly above (x overlap) at the above limit and one pixel past it.
         assert_eq!(at(-100.0, NEAR_TEXT_ABOVE_GAP_PX).as_deref(), Some("Name"));
         assert_eq!(at(-100.0, NEAR_TEXT_ABOVE_GAP_PX + 1.0), None);
+    }
+
+    #[test]
+    fn hover_and_scroll_claims_offer_target_bound_hover_and_scroll_in() {
+        let m = parse_fixture(
+            r#"
+            viewport w=800 h=600
+            region id=menu role=menu_item label="File" x=10 y=10 w=60 h=24 actions=click,hover sources=dom
+            region id=list role=generic label="" x=10 y=50 w=200 h=300 actions=scroll sources=dom
+            "#,
+        )
+        .unwrap();
+        let space = ActionSpace::from_manifold(&m);
+        let hover = space.get_str("HOVER:menu").expect("hover offered");
+        assert_eq!(hover.kind(), ActionKind::Hover);
+        assert!(!hover.kind().is_control());
+        let scroll = space.get_str("SCROLL_IN:list").expect("scroll-in offered");
+        assert_eq!(scroll.target().map(RegionId::as_str), Some("list"));
+        assert!(
+            space.get_str("CLICK:list").is_none(),
+            "scrolling is not clicking"
+        );
+    }
+
+    #[test]
+    fn a_surface_offers_a_click_grid_of_cells() {
+        let m = parse_fixture(
+            "viewport w=800 h=600\n\
+             region id=pad role=image label=\"canvas\" x=0 y=0 w=160 h=80 actions=point,click sources=dom\n\
+             region id=tiny role=image label=\"canvas\" x=300 y=0 w=20 h=20 actions=point,click sources=dom\n",
+        )
+        .unwrap();
+        let space = ActionSpace::from_manifold(&m);
+        let cells: Vec<_> = space.actions().filter(|a| a.cell().is_some()).collect();
+        assert_eq!(
+            cells.len(),
+            usize::from(SURFACE_GRID * SURFACE_GRID),
+            "only the big surface"
+        );
+        let corner = space.get_str("CLICK:pad@7,7").expect("last cell offered");
+        assert_eq!(corner.kind(), ActionKind::Click);
+        assert_eq!(corner.target().map(RegionId::as_str), Some("pad"));
+        assert_eq!(corner.bounds(), Some([140, 70, 20, 10]));
+        assert!(space.get_str("CLICK:pad@8,0").is_none(), "off the grid");
+        assert_eq!(cell_center_fraction([0, 7]), (0.0625, 0.9375));
+    }
+
+    #[test]
+    fn drag_sources_pair_with_their_nearest_viable_regions() {
+        let mut src = String::from(
+            "viewport w=1200 h=900\n\
+             region id=card role=generic label=\"Card\" x=0 y=0 w=20 h=20 actions=drag sources=dom\n\
+             region id=gone role=generic label=\"Gone\" x=30 y=0 w=20 h=20 sources=dom flags=hidden\n",
+        );
+        for i in 0..20 {
+            src.push_str(&format!(
+                "region id=slot{i:02} role=generic label=\"Slot {i}\" x={} y=0 w=20 h=20 sources=dom\n",
+                40 + i * 30
+            ));
+        }
+        let space = ActionSpace::from_manifold(&parse_fixture(&src).unwrap());
+        let drags: Vec<_> = space.targets_of(ActionKind::Drag).collect();
+        assert_eq!(drags.len(), MAX_DROPS_PER_SOURCE, "capped, nearest first");
+        let first = space
+            .get_str("DRAG:card>slot00")
+            .expect("nearest slot offered");
+        assert_eq!(first.dest().map(|d| d.label.as_str()), Some("Slot 0"));
+        assert!(
+            space.get_str("DRAG:card>gone").is_none(),
+            "hidden is not a destination"
+        );
+        assert!(
+            space.get_str("DRAG:card>card").is_none(),
+            "never onto itself"
+        );
+        assert!(space.get_str("DRAG:card>slot19").is_none(), "past the cap");
+        assert!(
+            space.get_str("CLICK:card").is_none(),
+            "dragging is not clicking"
+        );
     }
 
     #[test]

@@ -21,12 +21,14 @@
 //! instead of finishing. See that function's docs for the connective limits.
 
 use aui_browser::ScrollDirection;
-use aui_core::{Action, ActionKind, ActionSpace, InteractionManifold, InteractionRegion, RegionId};
+use aui_core::{
+    Action, ActionId, ActionKind, ActionSpace, InteractionManifold, InteractionRegion, RegionId,
+};
 use aui_guard::{blocker, gate, neighborhood_of, with_front_layer, TicketLedger};
 use aui_policy::{
-    ground_select, label_covers_target, label_names_target, split_sequential_clauses, AgentGoal,
-    BrowserPolicy, DeterministicTextResolver, HistoryEntry, PolicyDecision, PolicyOutcome,
-    TextContext, TextError, TextResolver, TARGET_AMBIGUOUS,
+    ground_select, is_secret_field, label_covers_target, label_names_target,
+    split_sequential_clauses, AgentGoal, BrowserPolicy, DeterministicTextResolver, HistoryEntry,
+    PolicyDecision, PolicyOutcome, TextContext, TextError, TextResolver, TARGET_AMBIGUOUS,
 };
 #[cfg(feature = "model-text")]
 use aui_policy::{ModelTextResolver, TextModel};
@@ -133,6 +135,12 @@ fn marker_on_screen(manifold: &InteractionManifold, marker: &str) -> bool {
 /// Abstain reason when the policy picked TYPE_TEXT but the clause carries
 /// no text value; the agent re-decides once without TYPE_TEXT targets.
 const NO_TEXT_VALUE: &str = "text: no text value found in goal/context";
+
+/// Wait before a second look at a click that showed no change (ms).
+pub const LATE_RENDER_MS: u64 = 150;
+
+/// What a remote policy sees instead of a value typed into a secret field.
+const SECRET_MASK: &str = "••••";
 
 /// Lowercase, whitespace-collapsed label for duplicate checks.
 fn fold_label(label: &str) -> String {
@@ -307,6 +315,18 @@ pub struct Agent<B, P, T = DeterministicTextResolver> {
     /// discard, clause advance, and outcome. Drained once by the host via
     /// [`Self::take_journal`]; `aui-cli` maps it to the `aui-dojo` diary.
     journal: Vec<JournalEvent>,
+    /// Per successful TYPE_TEXT step: the clause it ran in and whether its
+    /// field was secret, read from the space the step was decided in.
+    typed_steps: std::collections::BTreeMap<u32, TypedStep>,
+    /// The last step's effect was seen only on the late second look.
+    late_effect: bool,
+}
+
+/// Where and into what a successful TYPE_TEXT step typed.
+#[derive(Clone, Copy, Debug)]
+struct TypedStep {
+    clause: usize,
+    secret: bool,
 }
 
 pub struct AgentBuilder<B, P, T = DeterministicTextResolver> {
@@ -442,6 +462,8 @@ impl<B, P, T> AgentBuilder<B, P, T> {
             consecutive_stale: 0,
             stale_total: 0,
             journal: Vec::new(),
+            typed_steps: std::collections::BTreeMap::new(),
+            late_effect: false,
         };
         agent.journal.push(JournalEvent::Run {
             goal: goal_text,
@@ -458,6 +480,9 @@ pub fn region_action(kind: ActionKind) -> Option<Action> {
         ActionKind::Click => Some(Action::Click),
         ActionKind::TypeText => Some(Action::Type),
         ActionKind::Select => Some(Action::Select),
+        ActionKind::Hover => Some(Action::Hover),
+        ActionKind::ScrollIn => Some(Action::Scroll),
+        ActionKind::Drag => Some(Action::Drag),
         _ => None,
     }
 }
@@ -484,6 +509,62 @@ where
                     && record.verification == VerificationKind::Success
             })
             .filter_map(|record| record.payload.clone())
+            .collect()
+    }
+
+    /// The run's progress for a remote policy: clauses, the active one,
+    /// which are satisfied, and values typed so far (secret fields masked).
+    fn progress(&self) -> aui_policy::Progress {
+        let satisfied = (0..self.clauses.len())
+            .map(|i| i < self.clause_index || (i == self.clause_index && self.clause_effect))
+            .collect();
+        let typed = self
+            .history
+            .iter()
+            .filter(|r| {
+                r.kind == ActionKind::TypeText && r.verification == VerificationKind::Success
+            })
+            .filter_map(|r| {
+                let value = r.payload.clone()?;
+                // Unknown counts as secret: mask rather than leak.
+                let secret = self.typed_steps.get(&r.step).is_none_or(|t| t.secret);
+                Some((
+                    r.action_id.as_str().to_owned(),
+                    if secret {
+                        SECRET_MASK.to_owned()
+                    } else {
+                        value
+                    },
+                ))
+            })
+            .collect();
+        aui_policy::Progress {
+            clauses: self.clauses.clone(),
+            current: self.clause_index,
+            satisfied,
+            typed,
+        }
+    }
+
+    /// TYPE_TEXT actions whose field still holds the value the active
+    /// clause successfully typed into it. A later clause may type another
+    /// value into the same field.
+    fn already_typed(&self, space: &ActionSpace) -> Vec<ActionId> {
+        self.history
+            .iter()
+            .filter(|record| {
+                record.kind == ActionKind::TypeText
+                    && record.verification == VerificationKind::Success
+                    && self
+                        .typed_steps
+                        .get(&record.step)
+                        .is_some_and(|t| t.clause == self.clause_index)
+            })
+            .filter_map(|record| {
+                let offered = space.get(&record.action_id)?;
+                let typed = record.payload.as_deref()?;
+                (offered.state().value.as_deref() == Some(typed)).then(|| record.action_id.clone())
+            })
             .collect()
     }
 
@@ -624,6 +705,12 @@ where
         if self.no_text_value {
             space = space.without_kind(ActionKind::TypeText);
         }
+        // Never offer to re-enter a value a field already holds: typing it
+        // again cannot make progress and only burns steps.
+        let retype = self.already_typed(&space);
+        if !retype.is_empty() {
+            space = space.without_ids(&retype);
+        }
         let space = std::sync::Arc::new(space);
         self.policy_calls += 1;
 
@@ -663,6 +750,9 @@ where
                 .then(|| self.browser.screenshot())
                 .flatten(),
             page: wants.page_text.then(|| self.browser.page_view()).flatten(),
+            // Built from the run's own history: no page reads, so it rides
+            // with any evidence, not only page text.
+            progress: (wants.page_text || wants.screenshot).then(|| self.progress()),
         };
         let outcome = match self.policy.decide_with_evidence(
             &space,
@@ -869,14 +959,31 @@ where
         };
         self.consecutive_stale = 0;
         self.steps_taken += 1;
+        // A change seen only on the late look may be the page's own (a
+        // toast, a ticking widget): it keeps the click out of the
+        // no-effect count but does not satisfy the clause.
         if matches!(
             record.verification,
             VerificationKind::Success
                 | VerificationKind::StateChanged
                 | VerificationKind::Navigation
-        ) && label_covers_target(self.goal.as_str(), &record.label)
+        ) && !self.late_effect
+            && label_covers_target(self.goal.as_str(), &record.label)
         {
             self.clause_effect = true;
+        }
+        if record.kind == ActionKind::TypeText && record.verification == VerificationKind::Success {
+            let secret = predicted
+                .space
+                .get(&record.action_id)
+                .is_none_or(|a| is_secret_field(a.state().input_type.as_deref(), a.label()));
+            self.typed_steps.insert(
+                record.step,
+                TypedStep {
+                    clause: self.clause_index,
+                    secret,
+                },
+            );
         }
         self.abstain_retries = 0;
         self.history.push(record.clone());
@@ -974,13 +1081,31 @@ where
             .cloned()
             .ok_or_else(|| AgentError::Guard("target-bound action missing region id".into()))?;
 
-        let ticket = gate(
-            &predicted.manifold,
-            &target,
-            action,
-            predicted.focused.clone(),
-            predicted.space_captured_at_ms,
-        )
+        let dest = offered.dest().map(|d| d.id.clone());
+        let cell = offered.cell();
+        let ticket = match (&dest, cell) {
+            (Some(dest), _) => aui_guard::gate_drag(
+                &predicted.manifold,
+                &target,
+                dest,
+                predicted.focused.clone(),
+                predicted.space_captured_at_ms,
+            ),
+            (None, Some(cell)) => aui_guard::gate_point(
+                &predicted.manifold,
+                &target,
+                cell,
+                predicted.focused.clone(),
+                predicted.space_captured_at_ms,
+            ),
+            (None, None) => gate(
+                &predicted.manifold,
+                &target,
+                action,
+                predicted.focused.clone(),
+                predicted.space_captured_at_ms,
+            ),
+        }
         .map_err(|reason| AgentError::Guard(format!("refuse: {reason}")))?;
 
         let input = match kind {
@@ -989,19 +1114,24 @@ where
             // M` clauses act on time-critical overlay controls (an ad's skip
             // button) that ignore script clicks: they stay trusted.
             ActionKind::Click
-                if !matches!(
-                    self.mode,
-                    ClauseMode::Optional {
-                        while_marker: Some(_)
-                    }
-                ) && self.history.last().is_some_and(|step| {
-                    step.kind == ActionKind::Click
-                        && step.label == predicted.decision.target_label
-                        && step.verification == VerificationKind::NoVisibleChange
-                }) =>
+                if cell.is_none()
+                    && !matches!(
+                        self.mode,
+                        ClauseMode::Optional {
+                            while_marker: Some(_)
+                        }
+                    )
+                    && self.history.last().is_some_and(|step| {
+                        step.kind == ActionKind::Click
+                            && step.label == predicted.decision.target_label
+                            && step.verification == VerificationKind::NoVisibleChange
+                    }) =>
             {
                 Input::ScriptClick
             }
+            ActionKind::Click if cell.is_some() => Input::ClickAt {
+                cell: cell.expect("checked"),
+            },
             ActionKind::Click => Input::Click,
             ActionKind::TypeText => Input::Type(
                 predicted
@@ -1015,12 +1145,21 @@ where
                     .clone()
                     .ok_or_else(|| AgentError::Text("SELECT without resolved option".into()))?,
             ),
+            ActionKind::Hover => Input::Hover,
+            ActionKind::ScrollIn => Input::ScrollIn,
+            ActionKind::Drag => Input::Drag {
+                to: dest.ok_or_else(|| AgentError::Guard("DRAG without a destination".into()))?,
+            },
             _ => unreachable!("region_action filtered kinds"),
         };
 
         let input_name = match &input {
             Input::Click => "click",
             Input::ScriptClick => "script-click",
+            Input::Hover => "hover",
+            Input::ScrollIn => "scroll-in",
+            Input::Drag { .. } => "drag",
+            Input::ClickAt { .. } => "click-at",
             Input::Type(_) => "type",
             Input::Select(_) => "select",
         };
@@ -1050,11 +1189,29 @@ where
             .browser
             .last_observation()
             .ok_or_else(|| AgentError::Browser("observe produced no manifold".into()))?;
-        let verification = match input.payload() {
+        let mut verification = match input.payload() {
             Some(expected) => classify_value(expected, value.as_ref())
                 .unwrap_or_else(|| classify_delta(&executed.before, after, page_d.as_ref())),
             None => classify_delta(&executed.before, after, page_d.as_ref()),
         };
+        // Popups, pickers, and menus often render a beat after the page
+        // settles. Look once more before calling a click "no visible change".
+        self.late_effect = false;
+        if verification == VerificationKind::NoVisibleChange && input.payload().is_none() {
+            self.browser.pause(LATE_RENDER_MS);
+            self.browser.observe()?;
+            let later_page = self.browser.page().cloned();
+            let page_d = match (executed.before_page.as_ref(), later_page.as_ref()) {
+                (Some(b), Some(a)) => Some(self.browser.page_delta_between(b, a)),
+                _ => None,
+            };
+            let later = self
+                .browser
+                .last_observation()
+                .ok_or_else(|| AgentError::Browser("observe produced no manifold".into()))?;
+            verification = classify_delta(&executed.before, later, page_d.as_ref());
+            self.late_effect = verification != VerificationKind::NoVisibleChange;
+        }
         Ok((record(verification), input_name))
     }
 

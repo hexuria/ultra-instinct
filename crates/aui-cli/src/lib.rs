@@ -445,12 +445,13 @@ pub(crate) mod replay_cmd;
 pub(crate) mod run_cmd;
 pub(crate) mod session_cmd;
 
+// Remote transports live in `aui-remote`; re-exported under their old paths.
 #[cfg(feature = "clef")]
-pub mod clef;
+pub use aui_remote::clef;
 #[cfg(feature = "model-text")]
-pub mod http_text;
+pub use aui_remote::http_text;
 #[cfg(feature = "jev")]
-pub mod typesafe;
+pub use aui_remote::typesafe;
 
 #[cfg(feature = "jev")]
 pub use compare::fixture_compare_live;

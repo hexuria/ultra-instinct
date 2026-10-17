@@ -18,7 +18,8 @@ use aui_agent::{execute_ticketed, ExecError, Input};
 use aui_browser::BrowserError;
 use aui_cdp::{activate_target, close_target, create_target, page_targets, DEFAULT_CDP_HTTP};
 use aui_core::{Action, ActionSpace, InteractionManifold, InteractionRegion, RegionId, Role};
-use aui_guard::{consume_ticket_once, gate, ConsumeError};
+use aui_guard::{check_drop_target, consume_ticket_once, gate, gate_drag, ConsumeError};
+use aui_protocol::GuardReason;
 
 use crate::error::ToolError;
 use crate::server::Server;
@@ -437,11 +438,7 @@ fn gated_input(
         "select" => Input::Select(req_str(arguments, "text")?.to_owned()),
         other => return Err(ToolError::UnknownTool(other.to_owned())),
     };
-    let action = match input {
-        Input::Click | Input::ScriptClick => Action::Click,
-        Input::Type(_) => Action::Type,
-        Input::Select(_) => Action::Select,
-    };
+    let action = input.action();
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
     let outcome = (|| {
@@ -612,14 +609,38 @@ fn drag(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
         let to_id = resolve(to)?;
         let focused = session.page().and_then(|p| p.focused().cloned());
         // Drag is a mutation: the source goes through the same
-        // gate → ticket → consume-before-press path as clicks.
-        let ticket = gate(
-            &manifold,
-            &from_id,
-            Action::Click,
-            focused.clone(),
-            manifold.captured_at_ms(),
-        )
+        // gate → ticket → consume-before-press path as clicks. A drag-marked
+        // source binds both ends like the agent's DRAG; any other source
+        // keeps the click gate.
+        let drag_source = manifold
+            .get(&from_id)
+            .is_some_and(|r| r.actions().contains(&Action::Drag));
+        let ticket = if drag_source {
+            gate_drag(
+                &manifold,
+                &from_id,
+                &to_id,
+                focused.clone(),
+                manifold.captured_at_ms(),
+            )
+        } else {
+            // The release still lands on `to`: it must be a visible,
+            // uncovered, reachable drop target like a DRAG destination.
+            gate(
+                &manifold,
+                &from_id,
+                Action::Click,
+                focused.clone(),
+                manifold.captured_at_ms(),
+            )
+            .and_then(|ticket| {
+                let dest = manifold.get(&to_id).ok_or(GuardReason::MissingTarget)?;
+                if from_id == to_id {
+                    return Err(GuardReason::UnsupportedAction);
+                }
+                check_drop_target(&manifold, dest).map(|()| ticket)
+            })
+        }
         .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
         let mut ledger = server.take_ledger(&key);
         let result = consume_ticket_once(

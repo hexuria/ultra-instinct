@@ -36,22 +36,39 @@ pub enum Input {
     Type(String),
     /// Choose the one option whose value / label / text matches.
     Select(String),
+    /// Move the trusted pointer over the target (no press).
+    Hover,
+    /// Scroll the target's own content down (a wheel at its center).
+    ScrollIn,
+    /// Press on the target, move to `to`'s center, release there.
+    Drag { to: RegionId },
+    /// A trusted click at the center of grid cell `[col, row]` of a drawing
+    /// surface, placed from the surface's fresh box.
+    ClickAt { cell: [u16; 2] },
 }
 
 impl Input {
     /// Region capability this input needs (and the ticket must carry).
     pub fn action(&self) -> Action {
         match self {
-            Self::Click | Self::ScriptClick => Action::Click,
+            Self::Click | Self::ScriptClick | Self::ClickAt { .. } => Action::Click,
             Self::Type(_) => Action::Type,
             Self::Select(_) => Action::Select,
+            Self::Hover => Action::Hover,
+            Self::ScrollIn => Action::Scroll,
+            Self::Drag { .. } => Action::Drag,
         }
     }
 
     /// Text payload, if any.
     pub fn payload(&self) -> Option<&str> {
         match self {
-            Self::Click | Self::ScriptClick => None,
+            Self::Click
+            | Self::ScriptClick
+            | Self::Hover
+            | Self::ScrollIn
+            | Self::Drag { .. }
+            | Self::ClickAt { .. } => None,
             Self::Type(text) | Self::Select(text) => Some(text),
         }
     }
@@ -186,6 +203,13 @@ impl<T: CdpTransport> BrowserRuntime for BrowserSession<T> {
             Input::Type(text) => BrowserSession::type_text(self, target, text).map(|_| ()),
             Input::Select(option) => {
                 BrowserSession::select_option(self, target, option).map(|_| ())
+            }
+            Input::Hover => BrowserSession::hover(self, target),
+            Input::ScrollIn => BrowserSession::scroll_region(self, target),
+            Input::Drag { to } => BrowserSession::drag(self, target, to),
+            Input::ClickAt { cell } => {
+                let (fx, fy) = aui_core::cell_center_fraction(*cell);
+                BrowserSession::pointer_click_at(self, target, fx, fy).map(|_| ())
             }
         }
         .map_err(browser_err)

@@ -142,7 +142,7 @@ function hitAt(doc,tx,ty){
 // get style and hit evidence. Everything else carries a rect only; a region
 // whose element lacks evidence takes the per-node fallback.
 var KEEP={BUTTON:1,A:1,INPUT:1,TEXTAREA:1,SELECT:1,OPTION:1,NAV:1,IMG:1,H1:1,H2:1,H3:1,H4:1,H5:1,H6:1,DIALOG:1};
-var TEXTUAL={LABEL:1,SPAN:1,P:1,DIV:1};
+var TEXTUAL={LABEL:1,SPAN:1,P:1,DIV:1,LI:1};
 function directText(el){
   for(var c=el.firstChild;c;c=c.nextSibling){
     if(c.nodeType===3&&c.nodeValue&&c.nodeValue.trim()!=='')return true;
@@ -159,14 +159,45 @@ function clickHint(el){
   var p=el.parentElement;
   return !p||view.getComputedStyle(p).cursor!=='pointer';
 }
+var SVG_NS='http://www.w3.org/2000/svg';
+// Mirrors `extract::drag_markup`.
+var DRAG_MARKERS=['ui-draggable','ui-sortable-handle','ui-slider-handle','ui-resizable-handle'];
+function dragMarked(el){
+  if((el.getAttribute('draggable')||'').toLowerCase()==='true')return true;
+  if(el.hasAttribute('aria-grabbed'))return true;
+  var cl=el.classList;
+  if(cl)for(var i=0;i<DRAG_MARKERS.length;i++)if(cl.contains(DRAG_MARKERS[i]))return true;
+  return false;
+}
+// A move / grab cursor the element sets itself: one inherited from a
+// draggable ancestor belongs to that ancestor (as in `clickHint`).
+function dragCursor(el){
+  var view=el.ownerDocument.defaultView;
+  var grabs=function(c){return c==='move'||c==='grab'||c==='grabbing';};
+  var cur=view.getComputedStyle(el).cursor;
+  if(!grabs(cur))return false;
+  var p=el.parentElement;
+  return !p||view.getComputedStyle(p).cursor!==cur;
+}
+var SHAPES={circle:1,ellipse:1,rect:1,polygon:1,polyline:1,path:1,text:1};
+// A box whose own content scrolls: overflow-y auto / scroll with more
+// content than room.
+function scrollable(el){
+  var oy=el.ownerDocument.defaultView.getComputedStyle(el).overflowY;
+  return (oy==='auto'||oy==='scroll')&&el.scrollHeight>el.clientHeight+4;
+}
 function candidate(el){
   var name=el.nodeName.toUpperCase();
   if(name==='SCRIPT'||name==='STYLE'||name==='HEAD'||name==='HTML'||name==='BODY')return false;
+  if(el.namespaceURI===SVG_NS&&SHAPES[el.localName])return true;
+  if(name==='CANVAS'||(el.namespaceURI===SVG_NS&&el.localName==='svg'))return true;
+  if(dragMarked(el))return true;
   if(el.hasAttribute('role'))return true;
   if(KEEP[name])return true;
   if(!TEXTUAL[name])return false;
   var aria=el.getAttribute('aria-label');
-  return (aria!==null&&aria.trim()!=='')||directText(el);
+  // A text-less box counts only with a click hint (extract::needs_hint).
+  return (aria!==null&&aria.trim()!=='')||directText(el)||clickHint(el)||scrollable(el);
 }
 function visit(el,doc,off){
   if(el.nodeType!==1)return;
@@ -180,6 +211,8 @@ function visit(el,doc,off){
       rec.s=stylePairs(el);
       rec.h=hitAt(document,r[0]+r[2]/2,r[1]+r[3]/2);
       if(clickHint(el))rec.ck=1;
+      if(scrollable(el))rec.sc=1;
+      if(dragCursor(el))rec.dg=1;
       var name=el.nodeName.toUpperCase();
       var inputType=(el.getAttribute('type')||'text').toLowerCase();
       if(name==='INPUT')rec.it=inputType;
@@ -255,6 +288,12 @@ pub(crate) struct CompactNode {
     /// The page made this element clickable by script: an `onclick`
     /// property, or a pointer cursor it sets itself.
     pub click_hint: bool,
+    /// The element's own content scrolls (overflow-y auto / scroll, taller
+    /// than its box).
+    pub scrollable: bool,
+    /// The element sets a move / grab cursor itself (not inherited from its
+    /// parent): it can be dragged.
+    pub drag_hint: bool,
 }
 
 /// Compact hit-test evidence for one element.
@@ -346,6 +385,8 @@ pub(crate) fn parse(eval_result_json: &str) -> Result<CompactSnapshot, BrowserEr
         };
         let state = parse_element_state(record);
         let click_hint = record.get("ck").is_some_and(|ck| ck.as_i64() == Some(1));
+        let scrollable = record.get("sc").is_some_and(|sc| sc.as_i64() == Some(1));
+        let drag_hint = record.get("dg").is_some_and(|dg| dg.as_i64() == Some(1));
         out.nodes.insert(
             k,
             CompactNode {
@@ -354,6 +395,8 @@ pub(crate) fn parse(eval_result_json: &str) -> Result<CompactSnapshot, BrowserEr
                 hit,
                 state,
                 click_hint,
+                scrollable,
+                drag_hint,
             },
         );
     }

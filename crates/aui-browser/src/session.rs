@@ -51,6 +51,17 @@ use crate::verify::{self, Expectation};
 
 pub const DOM_CLICK_FUNCTION: &str = "function(){this.click()}";
 
+/// Pointer moves between press and release in [`BrowserSession::drag`].
+pub const DRAG_STEPS: u32 = 5;
+
+/// How far past the destination's center [`BrowserSession::drag`] releases,
+/// along the direction of travel, as a fraction of the destination's size.
+/// Sortable lists move an item once the pointer crosses the target's
+/// midpoint in the direction of travel; a release exactly on the midpoint is
+/// ambiguous. A quarter keeps the release inside the destination, and a
+/// dragged element smaller than the destination stays wholly inside it.
+pub const DROP_PAST_CENTER: f64 = 0.25;
+
 /// JPEG quality of [`BrowserSession::screenshot_jpeg`]: small page text stays
 /// legible to a vision model at a fraction of the PNG size.
 pub const SCREENSHOT_JPEG_QUALITY: u8 = 80;
@@ -187,7 +198,15 @@ impl<T: CdpTransport> BrowserSession<T> {
         let ax_nodes = extract::ax_elements(&ax_tree)?;
 
         let mut dom_raw = Vec::new();
-        for element in &dom.elements {
+        // A text-less box is a region only with a confirmed click hint, so
+        // the per-node path never spends a call on one.
+        let hinted_boxes = dom.hint_boxes.iter().filter(|element| {
+            element
+                .hu_k
+                .and_then(|k| compact.as_ref().and_then(|c| c.node(k)))
+                .is_some_and(|n| n.click_hint || n.scrollable)
+        });
+        for element in dom.elements.iter().chain(hinted_boxes) {
             let node = element
                 .hu_k
                 .and_then(|k| compact.as_ref().and_then(|c| c.node(k)));
@@ -208,6 +227,13 @@ impl<T: CdpTransport> BrowserSession<T> {
                 // a pointer cursor) are offered like links.
                 if node.is_some_and(|n| n.click_hint) {
                     extract::add_click(&mut raw.actions);
+                }
+                // A box whose own content scrolls can be scrolled in place.
+                if node.is_some_and(|n| n.scrollable) && !raw.actions.contains(&Action::Scroll) {
+                    raw.actions.push(Action::Scroll);
+                }
+                if node.is_some_and(|n| n.drag_hint) {
+                    extract::add_drag(&mut raw.actions);
                 }
                 dom_raw.push(raw);
             }
@@ -334,7 +360,8 @@ impl<T: CdpTransport> BrowserSession<T> {
         Ok(())
     }
 
-    /// Mark clickable regions whose center is covered by another node.
+    /// Mark pointer targets (click, drag, hover, scroll) whose center is
+    /// covered by another node.
     ///
     /// `DOM.getNodeForLocation` at the region's center must land on the region
     /// itself or a descendant. Anything else (cookie banner, custom backdrop,
@@ -349,7 +376,7 @@ impl<T: CdpTransport> BrowserSession<T> {
         let parent_of = &dom.parent_of;
         let targets: Vec<(RegionId, i64, f64, f64)> = manifold
             .regions()
-            .filter(|region| region.actions().contains(&Action::Click))
+            .filter(|region| crate::stacking::pointer_target(region))
             .filter_map(|region| {
                 let binding = bindings.get(region.id())?;
                 let backend = binding.backend_node_id?;
@@ -488,6 +515,33 @@ impl<T: CdpTransport> BrowserSession<T> {
         }
     }
 
+    /// Trusted click at fraction `(fx, fy)` of the observed region's box
+    /// (each clamped into [0, 1], so the point never leaves the region).
+    #[doc(hidden)]
+    pub fn pointer_click_at(
+        &mut self,
+        id: &RegionId,
+        fx: f64,
+        fy: f64,
+    ) -> Result<ActMechanism, BrowserError> {
+        let rect = self
+            .manifold
+            .as_ref()
+            .and_then(|m| m.get(id))
+            .map(|region| region.rect())
+            .ok_or(BrowserError::TargetUnresolved)?;
+        self.binding_for(id)?;
+        let x = rect.x() + rect.width() * fx.clamp(0.0, 1.0);
+        let y = rect.y() + rect.height() * fy.clamp(0.0, 1.0);
+        self.stale = true;
+        self.call(
+            "Input.dispatchMouseEvent",
+            &json!({"type": "mouseMoved", "x": x, "y": y}).to_string(),
+        )?;
+        self.coordinate_click(x, y)?;
+        Ok(ActMechanism::Coordinate)
+    }
+
     /// Set `text` as the value of the observed editable region `id`.
     ///
     /// Low-level input used by the agent executor **after** ticket
@@ -517,6 +571,31 @@ impl<T: CdpTransport> BrowserSession<T> {
         self.stale = true;
         self.semantic_input(&binding, DOM_SELECT_FUNCTION, option)?;
         Ok(ActMechanism::DomSemantic)
+    }
+
+    /// Scroll the observed region `id`'s own content down by most of its
+    /// height: a trusted wheel at its center, which scrolls the innermost
+    /// scrollable box under the pointer.
+    #[doc(hidden)]
+    pub fn scroll_region(&mut self, id: &RegionId) -> Result<(), BrowserError> {
+        let height = self
+            .manifold
+            .as_ref()
+            .and_then(|m| m.get(id))
+            .map(|region| region.rect().height())
+            .ok_or(BrowserError::TargetUnresolved)?;
+        let binding = self.binding_for(id)?;
+        self.stale = true;
+        let params = json!({
+            "type": "mouseWheel",
+            "x": binding.center_x,
+            "y": binding.center_y,
+            "deltaX": 0,
+            "deltaY": (height * SCROLL_VIEWPORT_FRACTION).round().max(40.0)
+        })
+        .to_string();
+        self.call("Input.dispatchMouseEvent", &params)?;
+        Ok(())
     }
 
     /// Scroll the page by [`SCROLL_VIEWPORT_FRACTION`] of the viewport with a
@@ -738,10 +817,20 @@ impl<T: CdpTransport> BrowserSession<T> {
         Ok(())
     }
 
-    /// Press at `from`'s center, drag to `to`'s center, release (element drag).
+    /// Press at `from`'s center, drag onto `to`, release just past `to`'s
+    /// center in the direction of travel ([`DROP_PAST_CENTER`]).
     pub fn drag(&mut self, from: &RegionId, to: &RegionId) -> Result<(), BrowserError> {
         let a = self.binding_for(from)?;
         let b = self.binding_for(to)?;
+        let size_of = |id: &RegionId| {
+            self.manifold
+                .as_ref()
+                .and_then(|m| m.get(id))
+                .map(|region| (region.rect().width(), region.rect().height()))
+        };
+        let sizes = size_of(from).zip(size_of(to));
+        let (release_x, release_y) =
+            release_point((a.center_x, a.center_y), (b.center_x, b.center_y), sizes);
         self.stale = true;
         self.call(
             "Input.dispatchMouseEvent",
@@ -752,14 +841,35 @@ impl<T: CdpTransport> BrowserSession<T> {
             &json!({"type": "mousePressed", "x": a.center_x, "y": a.center_y, "button": "left", "clickCount": 1})
                 .to_string(),
         )?;
+        // Intermediate moves: pointer and HTML5 drag libraries start a drag
+        // only after the pointer travels with the button held.
+        let mut at = (a.center_x, a.center_y);
+        for step in 1..=DRAG_STEPS {
+            let t = f64::from(step) / f64::from(DRAG_STEPS);
+            let point = (
+                a.center_x + (release_x - a.center_x) * t,
+                a.center_y + (release_y - a.center_y) * t,
+            );
+            let moved = self.call(
+                "Input.dispatchMouseEvent",
+                &json!({"type": "mouseMoved", "x": point.0, "y": point.1, "button": "left", "buttons": 1})
+                    .to_string(),
+            );
+            if let Err(err) = moved {
+                // Never leave the button held: the next pointer action
+                // would continue this drag. Best effort; the move's error wins.
+                let _ = self.call(
+                    "Input.dispatchMouseEvent",
+                    &json!({"type": "mouseReleased", "x": at.0, "y": at.1, "button": "left", "clickCount": 1})
+                        .to_string(),
+                );
+                return Err(err);
+            }
+            at = point;
+        }
         self.call(
             "Input.dispatchMouseEvent",
-            &json!({"type": "mouseMoved", "x": b.center_x, "y": b.center_y, "button": "left"})
-                .to_string(),
-        )?;
-        self.call(
-            "Input.dispatchMouseEvent",
-            &json!({"type": "mouseReleased", "x": b.center_x, "y": b.center_y, "button": "left", "clickCount": 1})
+            &json!({"type": "mouseReleased", "x": release_x, "y": release_y, "button": "left", "clickCount": 1})
                 .to_string(),
         )?;
         Ok(())
@@ -1111,7 +1221,7 @@ fn compact_hit_owned(
     };
     manifold
         .regions()
-        .filter(|region| region.actions().contains(&Action::Click))
+        .filter(|region| crate::stacking::pointer_target(region))
         .filter(|region| {
             let Some(backend) = bindings.get(region.id()).and_then(|b| b.backend_node_id) else {
                 return false;
@@ -1256,9 +1366,83 @@ fn key_char_params(key: &str) -> Option<(String, String, i64, String)> {
     Some((ch.to_string(), code, vkey, ch.to_string()))
 }
 
+/// Release point of a drag from `from` to `to` (centers), given the
+/// `(source, destination)` sizes: past `to` along the unit direction of
+/// travel by [`DROP_PAST_CENTER`] of the destination's extent per axis. On an
+/// axis where the source is smaller than the destination, the offset is
+/// capped so the dropped source stays inside it. No travel, or no observed
+/// sizes, releases on the center.
+fn release_point(
+    from: (f64, f64),
+    to: (f64, f64),
+    sizes: Option<((f64, f64), (f64, f64))>,
+) -> (f64, f64) {
+    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+    let distance = dx.hypot(dy);
+    let Some(((sw, sh), (dw, dh))) = sizes.filter(|_| distance > 0.0 && distance.is_finite())
+    else {
+        return to;
+    };
+    let reach = |src: f64, dst: f64| {
+        let past = dst * DROP_PAST_CENTER;
+        if src < dst {
+            past.min((dst - src) / 2.0)
+        } else {
+            past
+        }
+    };
+    (
+        to.0 + reach(sw, dw) * dx / distance,
+        to.1 + reach(sh, dh) * dy / distance,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::key_params;
+
+    #[test]
+    fn drag_releases_past_the_destination_center_inside_it() {
+        use super::release_point;
+        let row = (100.0, 20.0);
+        // A row dragged straight down onto a same-size row: a quarter past center.
+        assert_eq!(
+            release_point((50.0, 10.0), (50.0, 50.0), Some((row, row))),
+            (50.0, 55.0)
+        );
+        // Straight up: past center toward the row's top.
+        assert_eq!(
+            release_point((50.0, 90.0), (50.0, 50.0), Some((row, row))),
+            (50.0, 45.0)
+        );
+        // Diagonal, same size: each axis moves at most a quarter of its extent.
+        let square = (40.0, 40.0);
+        let (x, y) = release_point((0.0, 0.0), (30.0, 40.0), Some((square, square)));
+        assert!(
+            (x - 36.0).abs() < 1e-9 && (y - 48.0).abs() < 1e-9,
+            "{x} {y}"
+        );
+        // A 30 px box into a 50 px box: capped at 10 px so it stays inside.
+        assert_eq!(
+            release_point(
+                (100.0, 0.0),
+                (100.0, 100.0),
+                Some(((30.0, 30.0), (50.0, 50.0)))
+            ),
+            (100.0, 110.0)
+        );
+        // A box as large as the destination gets no cap; a smaller one leaves no room.
+        assert_eq!(
+            release_point((0.0, 0.0), (0.0, 100.0), Some(((50.0, 50.0), (50.0, 50.0)))),
+            (0.0, 112.5)
+        );
+        // Nothing to go past: the center itself.
+        assert_eq!(
+            release_point((5.0, 5.0), (5.0, 5.0), Some((square, square))),
+            (5.0, 5.0)
+        );
+        assert_eq!(release_point((0.0, 0.0), (5.0, 5.0), None), (5.0, 5.0));
+    }
 
     #[test]
     fn key_params_covers_named_keys_chars_and_fail_closed() {

@@ -28,7 +28,7 @@ pub use fusion::{MAX_CENTROID_PX, MIN_IOU, MIN_LABEL_JACCARD};
 pub use page::{page_delta, PageDelta, PageState};
 pub use session::{
     BrowserSession, ScrollDirection, DOM_CLICK_FUNCTION, DOM_READ_VALUE_FUNCTION,
-    DOM_SELECT_FUNCTION, DOM_TYPE_FUNCTION, SCROLL_VIEWPORT_FRACTION,
+    DOM_SELECT_FUNCTION, DOM_TYPE_FUNCTION, DRAG_STEPS, DROP_PAST_CENTER, SCROLL_VIEWPORT_FRACTION,
 };
 pub use verify::{verify, verify_delta, Expectation, VerifyError};
 
@@ -940,6 +940,55 @@ mod compact_observe {
     }
 
     #[test]
+    fn a_scrollable_box_claims_scroll_but_not_click() {
+        let page = PageSpec::new(
+            vec![DomSpec::button(10, 100, "", (10.0, 60.0, 140.0, 120.0))
+                .with_tag("DIV")
+                .with_compact_state(serde_json::json!({"sc": 1}))],
+            vec![],
+            "https://example.test/",
+            "List",
+        );
+        let script = ScriptBuilder::new().observe_compact(&page).to_json();
+        let mut session = BrowserSession::new(ReplayTransport::parse(&script).unwrap());
+        let region = session
+            .observe()
+            .unwrap()
+            .get_str("n100")
+            .expect("scroll box kept")
+            .clone();
+        assert!(region.actions().contains(&aui_core::Action::Scroll));
+        assert!(!region.actions().contains(&aui_core::Action::Click));
+    }
+
+    #[test]
+    fn a_text_less_box_becomes_a_region_only_with_its_hint() {
+        let boxed = |node, backend, x, hint: bool| {
+            let spec = DomSpec::button(node, backend, "", (x, 100.0, 30.0, 30.0))
+                .with_tag("DIV")
+                .with_attr("style", "background-color: red;");
+            if hint {
+                spec.with_compact_state(serde_json::json!({"ck": 1}))
+            } else {
+                spec
+            }
+        };
+        let page = PageSpec::new(
+            vec![boxed(10, 100, 100.0, true), boxed(20, 200, 200.0, false)],
+            vec![],
+            "https://example.test/",
+            "Boxes",
+        );
+        let script = ScriptBuilder::new().observe_compact(&page).to_json();
+        let mut session = BrowserSession::new(ReplayTransport::parse(&script).unwrap());
+        let manifold = session.observe().unwrap();
+        let hinted = manifold.get_str("n100").expect("hinted box kept");
+        assert_eq!(hinted.label(), "red");
+        assert!(hinted.actions().contains(&aui_core::Action::Click));
+        assert!(manifold.get_str("n200").is_none(), "no hint, no region");
+    }
+
+    #[test]
     fn compact_and_per_node_observe_build_the_same_manifold() {
         let mut legacy = BrowserSession::new(
             ReplayTransport::parse(&ScriptBuilder::new().observe(&page()).to_json()).unwrap(),
@@ -965,6 +1014,46 @@ mod compact_observe {
                 .collect::<Vec<_>>()
         };
         assert_eq!(snapshot(&mut legacy), snapshot(&mut compact));
+    }
+
+    #[test]
+    fn covered_scroll_and_drag_targets_are_occluded_too() {
+        let mut overlay =
+            DomSpec::container(30, 300, "banner", "Cookies", (0.0, 0.0, 800.0, 400.0));
+        overlay.attributes.clear();
+        let page = PageSpec::new(
+            vec![
+                DomSpec::button(10, 100, "Inbox", (20.0, 20.0, 300.0, 200.0))
+                    .with_tag("DIV")
+                    .with_compact_state(serde_json::json!({"sc": 1})),
+                DomSpec::button(20, 200, "Card", (20.0, 250.0, 100.0, 40.0))
+                    .with_tag("DIV")
+                    .with_compact_state(serde_json::json!({"dg": 1})),
+                DomSpec::button(40, 400, "Open", (20.0, 500.0, 100.0, 40.0))
+                    .with_tag("DIV")
+                    .with_compact_state(serde_json::json!({"sc": 1})),
+                overlay,
+            ],
+            Vec::new(),
+            "https://example.test/mail",
+            "Mail",
+        )
+        .cover(100, 300)
+        .cover(200, 300);
+        let script = ScriptBuilder::new().observe_compact(&page).to_json();
+        let mut session = BrowserSession::new(ReplayTransport::parse(&script).unwrap());
+        let manifold = session.observe().unwrap();
+        let inbox = manifold.get_str("n100").unwrap();
+        assert!(
+            inbox.actions().contains(&aui_core::Action::Scroll),
+            "{inbox:?}"
+        );
+        assert!(inbox.flags().occluded(), "covered scroll box");
+        assert!(
+            manifold.get_str("n200").unwrap().flags().occluded(),
+            "covered drag source"
+        );
+        assert!(!manifold.get_str("n400").unwrap().flags().occluded());
     }
 
     #[test]

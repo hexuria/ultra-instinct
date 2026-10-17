@@ -18,6 +18,7 @@ aui-protocol = { path = "../aui-protocol" }
 aui-agent = { path = "../aui-agent" }
 aui-policy = { path = "../aui-policy" }
 aui-dojo = { path = "../aui-dojo" }
+aui-remote = { path = "../aui-remote", optional = true }
 
 [dev-dependencies]
 serde_json = "1"
@@ -43,28 +44,16 @@ path = "src/bin/aui.rs"
 [features]
 default = []
 # Optional System One client. Not part of `cargo build` or `cargo test`.
-jev = ["dep:typesafe-sdk", "dep:serde_json", "aui-policy/remote"]
+jev = ["dep:aui-remote", "aui-remote/jev", "dep:serde_json", "aui-policy/remote"]
 # Optional Cloudflare Workers AI Clef / Clef-Flash client (same closed remote wire).
-clef = ["jev", "typesafe-sdk/clef"]
+clef = ["jev", "aui-remote/clef"]
 # Experimental HGRA matcher (wires into aui-mcp / mcp locate+guard).
 hgra = ["aui-mcp/hgra"]
 # Model-backed TYPE_TEXT / SELECT payloads via `run --text-model-cmd <program>`;
 # without the flag, jev-ultrafast's TEXT_MODEL_* env drives an HTTP model (OpenAI-compatible,
 # Anthropic, or Gemini wire; TEXT_MODEL_API or the base URL host picks it).
-model-text = ["aui-agent/model-text", "aui-policy/model-text", "dep:reqwest", "dep:serde_json"]
-
-[dependencies.typesafe-sdk]
-version = "0.3.0"
-optional = true
-default-features = false
-features = ["blocking"]
+model-text = ["aui-agent/model-text", "aui-policy/model-text", "dep:aui-remote", "aui-remote/model-text", "dep:serde_json"]
 
 [dependencies.serde_json]
 version = "1"
 optional = true
-
-[dependencies.reqwest]
-version = "0.12"
-optional = true
-default-features = false
-features = ["blocking", "json", "rustls-tls", "http2", "system-proxy", "charset"]

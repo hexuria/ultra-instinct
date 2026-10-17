@@ -48,11 +48,6 @@ pub const DEFAULT_MAX_CHARS: usize = 256;
 /// Upper bound on a derived value (one read or worked out from the page).
 pub const DERIVED_MAX_CHARS: usize = 64;
 
-/// Label words that mark a secret field; a derived value never goes there.
-const SECRET_LABEL_WORDS: [&str; 10] = [
-    "password", "passcode", "pin", "cvv", "cvc", "otp", "ssn", "card", "security", "one-time",
-];
-
 /// What the model is asked. Only the active goal clause and the already-chosen
 /// target's label / role: no page dump, no other regions.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -295,15 +290,7 @@ fn derived_guard(context: &TextContext, text: &str) -> Result<(), ModelRefusal> 
     if context.page_text.is_none() {
         return Err(ModelRefusal::NoPageEvidence);
     }
-    let secret_type = matches!(
-        context.input_type.as_deref(),
-        Some("password" | "hidden" | "file")
-    );
-    let label = context.field_label.to_lowercase();
-    let secret_label = label
-        .split(|c: char| !c.is_alphanumeric() && c != '-')
-        .any(|word| SECRET_LABEL_WORDS.contains(&word));
-    if secret_type || secret_label {
+    if crate::text::is_secret_field(context.input_type.as_deref(), &context.field_label) {
         return Err(ModelRefusal::SecretField);
     }
     let chars = text.chars().count();
