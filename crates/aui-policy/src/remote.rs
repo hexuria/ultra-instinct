@@ -145,6 +145,10 @@ pub fn request_json_with_evidence(
             if let Some(near) = a.near_text() {
                 action["near_text"] = json!(near);
             }
+            if let Some(dest) = a.dest() {
+                action["dest"] =
+                    json!({"id": dest.id.as_str(), "label": dest.label, "box": dest.bounds});
+            }
             let observed = a.state();
             if !observed.is_empty() {
                 let mut state = Map::new();

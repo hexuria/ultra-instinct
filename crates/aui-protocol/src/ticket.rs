@@ -30,6 +30,19 @@ pub struct ActionTicket {
     pub target_fingerprint: u64,
     /// Hash of the world variables (focus, front layer, clickable, occluded).
     pub world_fingerprint: u64,
+    /// DRAG only: the release region, bound like the target.
+    pub dest: Option<Box<TicketDest>>,
+}
+
+/// The second end of a two-region ticket (DRAG). Revalidated like the target.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TicketDest {
+    pub id: RegionId,
+    pub role: Role,
+    pub label: String,
+    pub fingerprint: u64,
+    /// World fingerprint of the destination's neighborhood at issue time.
+    pub world_fingerprint: u64,
 }
 
 impl ActionTicket {

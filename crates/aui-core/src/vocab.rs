@@ -93,6 +93,8 @@ pub enum Action {
     Hover,
     Select,
     Toggle,
+    /// Press, move, and release: the region can be dragged.
+    Drag,
 }
 
 impl Action {
@@ -105,6 +107,7 @@ impl Action {
             Self::Hover => "hover",
             Self::Select => "select",
             Self::Toggle => "toggle",
+            Self::Drag => "drag",
         }
     }
 
@@ -117,6 +120,7 @@ impl Action {
             "hover" => Self::Hover,
             "select" => Self::Select,
             "toggle" => Self::Toggle,
+            "drag" => Self::Drag,
             _ => return None,
         })
     }

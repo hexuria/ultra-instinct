@@ -282,14 +282,13 @@ fn hover_moves_pointer_without_ticket() {
 
 #[test]
 fn drag_dispatches_move_press_move_release() {
-    let (mut server, log) = server(
-        ScriptBuilder::new()
-            .observe_compact(&page())
-            .call("Input.dispatchMouseEvent", json!({}))
-            .call("Input.dispatchMouseEvent", json!({}))
-            .call("Input.dispatchMouseEvent", json!({}))
-            .call("Input.dispatchMouseEvent", json!({})),
-    );
+    // move to A, press, DRAG_STEPS moves toward B, release at B.
+    let events = 3 + aui_browser::DRAG_STEPS as usize;
+    let mut script = ScriptBuilder::new().observe_compact(&page());
+    for _ in 0..events {
+        script = script.call("Input.dispatchMouseEvent", json!({}));
+    }
+    let (mut server, log) = server(script);
     let out = call(
         &mut server,
         "browser_drag",
@@ -301,7 +300,7 @@ fn drag_dispatches_move_press_move_release() {
             .iter()
             .filter(|m| *m == "Input.dispatchMouseEvent")
             .count(),
-        4
+        events
     );
 }
 

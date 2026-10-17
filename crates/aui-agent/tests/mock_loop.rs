@@ -1431,3 +1431,24 @@ fn hover_and_scroll_in_run_through_the_ticketed_executor() {
         assert_eq!((log[0].0.as_str(), &log[0].1), (target, &input));
     }
 }
+
+#[test]
+fn drag_runs_end_to_end_through_the_two_ended_ticket() {
+    let page = r#"
+        viewport w=800 h=600
+        region id=card role=generic label="Card" x=10 y=10 w=60 h=40 actions=drag sources=dom
+        region id=bin role=generic label="Bin" x=400 y=300 w=120 h=80 sources=dom
+        "#;
+    let mut agent = AgentBuilder::new(
+        MockBrowser::new(manifold(page)),
+        OnceThenDone(ActionKind::Drag),
+    )
+    .max_steps(3)
+    .build("Drag the card into the bin");
+    let _ = agent.run();
+    let browser = agent.into_browser();
+    let log = browser.input_log();
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert_eq!(log[0].0.as_str(), "card");
+    assert!(matches!(&log[0].1, aui_agent::Input::Drag { to } if to.as_str() == "bin"));
+}

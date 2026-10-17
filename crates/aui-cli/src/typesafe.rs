@@ -243,6 +243,12 @@ pub(crate) fn build_questions(request: &Value) -> Result<BuiltQuestions, String>
         operation_criteria.push((kind.to_owned(), Some(JsonContent::from(*label))));
         target_heads.push((head.to_owned(), targets));
     }
+    let drag = drag_heads(actions);
+    if let Some((sources, destinations, _)) = &drag {
+        operation_criteria.push(("DRAG".to_owned(), Some(JsonContent::from(DRAG_LABEL))));
+        target_heads.push((DRAG_SOURCE_HEAD.to_owned(), sources.clone()));
+        target_heads.push((DRAG_TARGET_HEAD.to_owned(), destinations.clone()));
+    }
     for (kind, label) in CONTROL_LABELS {
         if actions.iter().any(|a| a["id"].as_str() == Some(kind)) {
             operation_criteria.push((kind.to_owned(), Some(JsonContent::from(label))));
@@ -289,6 +295,10 @@ pub(crate) fn build_questions(request: &Value) -> Result<BuiltQuestions, String>
         ));
     }
 
+    if let Some((_, _, pairs)) = drag {
+        criteria_keys.push((DRAG_PAIRS.to_owned(), pairs));
+    }
+
     let mut state = json!({
         "goal": goal,
         "actions": request["actions"].clone(),
@@ -307,6 +317,48 @@ pub(crate) fn build_questions(request: &Value) -> Result<BuiltQuestions, String>
         questions,
         criteria_keys,
     })
+}
+
+const DRAG_LABEL: &str =
+    "Drag an element onto another: reorder a list, move a piece, slide a handle, resize.";
+const DRAG_SOURCE_HEAD: &str = "drag_source";
+const DRAG_TARGET_HEAD: &str = "drag_target";
+/// Not a question: the offered `src>dst` pairs, kept for answer validation.
+const DRAG_PAIRS: &str = "__drag_pairs";
+
+/// Source and destination criteria for the offered DRAG pairs, plus the
+/// pairs themselves. `None` when no DRAG is offered.
+fn drag_heads(actions: &[Value]) -> Option<(Criteria, Criteria, Vec<String>)> {
+    let mut sources: Criteria = Vec::new();
+    let mut destinations: Criteria = Vec::new();
+    let mut pairs = Vec::new();
+    for a in actions.iter().filter(|a| a["kind"] == "DRAG") {
+        let id = a["id"].as_str()?;
+        let pair = id.strip_prefix("DRAG:")?;
+        let (src, dst) = pair.split_once('>')?;
+        pairs.push(pair.to_owned());
+        if !sources.iter().any(|(k, _)| k == src) {
+            let mut element = Map::new();
+            let label = a["label"].as_str().unwrap_or("");
+            element.insert("element".to_owned(), json!(format!("[{src}] {label}")));
+            for key in ["role", "near_text", "box"] {
+                if let Some(value) = a.get(key) {
+                    element.insert(key.to_owned(), value.clone());
+                }
+            }
+            sources.push((src.to_owned(), Some(JsonContent::from(element))));
+        }
+        if !destinations.iter().any(|(k, _)| k == dst) {
+            let mut element = Map::new();
+            let label = a["dest"]["label"].as_str().unwrap_or("");
+            element.insert("element".to_owned(), json!(format!("[{dst}] {label}")));
+            if let Some(b) = a["dest"].get("box") {
+                element.insert("box".to_owned(), b.clone());
+            }
+            destinations.push((dst.to_owned(), Some(JsonContent::from(element))));
+        }
+    }
+    (!pairs.is_empty()).then_some((sources, destinations, pairs))
 }
 
 /// Yes / no head asked beside the operation whenever DONE is offered.
@@ -489,6 +541,23 @@ pub(crate) fn compose_reply<'a>(
         answer_for("operation")?,
         keys_for(criteria_keys, "operation")?,
     )?;
+    if operation == "DRAG" {
+        let source = validate_choice(
+            answer_for(DRAG_SOURCE_HEAD)?,
+            keys_for(criteria_keys, DRAG_SOURCE_HEAD)?,
+        )?;
+        let dest = validate_choice(
+            answer_for(DRAG_TARGET_HEAD)?,
+            keys_for(criteria_keys, DRAG_TARGET_HEAD)?,
+        )?;
+        let pair = format!("{source}>{dest}");
+        // Two valid heads can still name a pair the menu does not offer (or
+        // the same region twice): that is an abstain, never a new action.
+        if !keys_for(criteria_keys, DRAG_PAIRS)?.contains(&pair) {
+            return Ok(json!({"abstain": format!("drag {pair} was not offered")}).to_string());
+        }
+        return Ok(json!({"choice": {"id": format!("DRAG:{pair}"), "kind": "DRAG"}}).to_string());
+    }
     let target = match ELEMENT_HEADS.iter().find(|(kind, _)| *kind == operation) {
         Some((_, head)) => Some(validate_choice(
             answer_for(head)?,
@@ -625,6 +694,55 @@ mod tests {
         let state = build_questions(&request).unwrap().state;
         assert_eq!(state["page"]["text"], "3 + 9 = ?");
         assert_eq!(state["progress"]["current"], 0);
+    }
+
+    #[test]
+    fn drag_composes_only_offered_pairs() {
+        let request = json!({
+            "goal": "Drag Card into the bin",
+            "actions": [
+                {"id": "DRAG:n1>n2", "kind": "DRAG", "label": "Card", "dest": {"id": "n2", "label": "Bin", "box": [0, 0, 9, 9]}},
+                {"id": "DRAG:n1>n3", "kind": "DRAG", "label": "Card", "dest": {"id": "n3", "label": "Shelf", "box": [0, 0, 9, 9]}},
+                {"id": "DONE", "kind": "DONE", "label": "done"}
+            ],
+            "history": []
+        });
+        let built = build_questions(&request).unwrap();
+        let names: Vec<&str> = built.questions.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["operation", "drag_source", "drag_target"]);
+        let answers = |src: &str, dst: &str| {
+            std::collections::BTreeMap::from([
+                (
+                    "operation".to_owned(),
+                    answer("DRAG", &[("DRAG", 0.9), ("DONE", 0.1)]),
+                ),
+                ("drag_source".to_owned(), answer(src, &[(src, 1.0)])),
+                (
+                    "drag_target".to_owned(),
+                    answer(
+                        dst,
+                        &[
+                            ("n2", if dst == "n2" { 0.8 } else { 0.2 }),
+                            ("n3", if dst == "n3" { 0.8 } else { 0.2 }),
+                        ],
+                    ),
+                ),
+            ])
+        };
+        let compose = |a: &std::collections::BTreeMap<String, ChoiceAnswer>| {
+            compose_reply(&built.criteria_keys, |head| {
+                a.get(head).ok_or_else(|| format!("missing {head}"))
+            })
+        };
+        assert_eq!(
+            compose(&answers("n1", "n2")).unwrap(),
+            r#"{"choice":{"id":"DRAG:n1>n2","kind":"DRAG"}}"#
+        );
+        // The only source, and a destination it offers.
+        assert_eq!(
+            compose(&answers("n1", "n3")).unwrap(),
+            r#"{"choice":{"id":"DRAG:n1>n3","kind":"DRAG"}}"#
+        );
     }
 
     #[test]

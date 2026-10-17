@@ -192,3 +192,50 @@ proptest! {
         prop_assert_eq!(browser.input_log().len(), inputs_after_first);
     }
 }
+
+#[test]
+fn a_drag_ticket_releases_only_at_its_own_destination() {
+    use aui_agent::{execute_ticketed, ExecError, Input, MockBrowser};
+    use aui_guard::TicketLedger;
+    use aui_protocol::TicketInvalid;
+    let m = aui_core::parse_fixture(
+        "viewport w=1200 h=900\n\
+         region id=card role=generic label=\"Card\" x=10 y=10 w=60 h=40 actions=drag sources=dom\n\
+         region id=bin role=generic label=\"Bin\" x=500 y=600 w=120 h=80 sources=dom\n\
+         region id=other role=generic label=\"Other\" x=900 y=600 w=120 h=80 sources=dom\n",
+    )
+    .unwrap();
+    let card = aui_core::RegionId::try_new("card").unwrap();
+    let bin = aui_core::RegionId::try_new("bin").unwrap();
+    let other = aui_core::RegionId::try_new("other").unwrap();
+    let ticket = aui_guard::gate_drag(&m, &card, &bin, None, 0).unwrap();
+    let mut browser = MockBrowser::new(m.clone());
+    let mut ledger = TicketLedger::default();
+    // Swapping the release point is a mismatch, never a drag elsewhere.
+    let swapped = execute_ticketed(
+        &mut browser,
+        &mut ledger,
+        &ticket,
+        &Input::Drag { to: other },
+    );
+    assert!(matches!(
+        swapped,
+        Err(ExecError::Ticket(TicketInvalid::TicketMismatch))
+    ));
+    // A drag ticket never drives a click.
+    let click = execute_ticketed(&mut browser, &mut ledger, &ticket, &Input::Click);
+    assert!(matches!(
+        click,
+        Err(ExecError::Ticket(TicketInvalid::TicketMismatch))
+    ));
+    assert!(browser.input_log().is_empty());
+    // The right destination runs once.
+    execute_ticketed(
+        &mut browser,
+        &mut ledger,
+        &ticket,
+        &Input::Drag { to: bin.clone() },
+    )
+    .unwrap();
+    assert_eq!(browser.input_log(), &[(card, Input::Drag { to: bin })]);
+}

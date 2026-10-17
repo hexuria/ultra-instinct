@@ -19,7 +19,7 @@ mod region;
 mod text;
 mod vocab;
 
-pub use action_space::{ActionId, ActionKind, ActionSpace, ObservedAction};
+pub use action_space::{ActionId, ActionKind, ActionSpace, DragDest, ObservedAction};
 pub use element_state::ElementState;
 pub use error::{CoreError, FixtureError};
 pub use fixture::{parse_fixture, write_fixture};

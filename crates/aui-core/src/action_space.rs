@@ -41,6 +41,8 @@ pub enum ActionKind {
     Hover,
     /// Scroll a scrollable region's own content down by one view.
     ScrollIn,
+    /// Drag a draggable region onto another observed region.
+    Drag,
 }
 
 impl ActionKind {
@@ -61,6 +63,7 @@ impl ActionKind {
             Self::Blocked => "BLOCKED",
             Self::Hover => "HOVER",
             Self::ScrollIn => "SCROLL_IN",
+            Self::Drag => "DRAG",
         }
     }
 
@@ -76,6 +79,7 @@ impl ActionKind {
             "BLOCKED" | "blocked" => Self::Blocked,
             "HOVER" | "hover" => Self::Hover,
             "SCROLL_IN" | "scroll_in" => Self::ScrollIn,
+            "DRAG" | "drag" => Self::Drag,
             _ => return None,
         })
     }
@@ -157,6 +161,17 @@ pub struct ObservedAction {
     /// For an unnamed target: the observed text that sits by it. Evidence
     /// only; [`Self::label`] stays the region label.
     near_text: Option<String>,
+    /// DRAG only: where the dragged region is released.
+    dest: Option<DragDest>,
+}
+
+/// The release region of an offered DRAG.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DragDest {
+    pub id: RegionId,
+    pub label: String,
+    pub fingerprint: u64,
+    pub bounds: [i32; 4],
 }
 
 impl ObservedAction {
@@ -182,6 +197,7 @@ impl ObservedAction {
             state,
             bounds: None,
             near_text: None,
+            dest: None,
         }
     }
 
@@ -211,6 +227,9 @@ impl ObservedAction {
     }
     pub fn near_text(&self) -> Option<&str> {
         self.near_text.as_deref()
+    }
+    pub fn dest(&self) -> Option<&DragDest> {
+        self.dest.as_ref()
     }
 }
 
@@ -255,6 +274,10 @@ impl ActionSpace {
                 }
                 actions.insert(observed.id.clone(), observed);
             }
+        }
+
+        for observed in drag_actions(manifold) {
+            actions.insert(observed.id.clone(), observed);
         }
 
         for kind in [
@@ -375,7 +398,8 @@ const fn map_region_claim(claim: Action) -> Option<ActionKind> {
         // content scrolls. Page scroll stays the SCROLL_UP / SCROLL_DOWN controls.
         Action::Hover => Some(ActionKind::Hover),
         Action::Scroll => Some(ActionKind::ScrollIn),
-        Action::Focus => None,
+        // A drag needs a destination: offered as source / destination pairs.
+        Action::Focus | Action::Drag => None,
     }
 }
 
@@ -390,7 +414,55 @@ fn target_action(kind: ActionKind, region: &InteractionRegion) -> ObservedAction
         state: region.state().clone(),
         bounds: Some(pixel_box(region.rect())),
         near_text: None,
+        dest: None,
     }
+}
+
+/// Most drag sources offered per observation.
+const MAX_DRAG_SOURCES: usize = 8;
+/// Most destinations offered per drag source, nearest first.
+const MAX_DROPS_PER_SOURCE: usize = 16;
+
+/// DRAG offers: each viable region claiming Drag, paired with the nearest
+/// other viable regions as release points. The menu stays finite and every
+/// pair is an explicit offered id `DRAG:<src>><dst>`.
+fn drag_actions(manifold: &InteractionManifold) -> Vec<ObservedAction> {
+    let viable: Vec<&InteractionRegion> = manifold
+        .regions()
+        .filter(|r| region_is_viable_target(r))
+        .collect();
+    let mut out = Vec::new();
+    let sources = viable
+        .iter()
+        .filter(|r| r.actions().contains(&Action::Drag))
+        .filter(|r| !r.id().as_str().contains('>'))
+        .take(MAX_DRAG_SOURCES);
+    for src in sources {
+        let c = src.rect().center();
+        let mut drops: Vec<&&InteractionRegion> = viable
+            .iter()
+            .filter(|d| d.id() != src.id() && !d.id().as_str().contains('>'))
+            .collect();
+        drops.sort_by(|a, b| {
+            a.rect()
+                .center()
+                .distance(c)
+                .total_cmp(&b.rect().center().distance(c))
+                .then_with(|| a.id().cmp(b.id()))
+        });
+        for dst in drops.into_iter().take(MAX_DROPS_PER_SOURCE) {
+            let mut action = target_action(ActionKind::Drag, src);
+            action.id = ActionId(format!("DRAG:{}>{}", src.id(), dst.id()));
+            action.dest = Some(DragDest {
+                id: dst.id().clone(),
+                label: dst.label().to_owned(),
+                fingerprint: dst.fingerprint().bits(),
+                bounds: pixel_box(dst.rect()),
+            });
+            out.push(action);
+        }
+    }
+    out
 }
 
 fn pixel_box(rect: Rect) -> [i32; 4] {
@@ -472,6 +544,7 @@ fn control_action(kind: ActionKind) -> ObservedAction {
         state: ElementState::default(),
         bounds: None,
         near_text: None,
+        dest: None,
     }
 }
 
@@ -514,6 +587,7 @@ mod tests {
             ActionKind::Blocked,
             ActionKind::Hover,
             ActionKind::ScrollIn,
+            ActionKind::Drag,
         ] {
             assert_eq!(ActionKind::parse(kind.as_str()), Some(kind));
         }
@@ -653,6 +727,41 @@ mod tests {
         assert!(
             space.get_str("CLICK:list").is_none(),
             "scrolling is not clicking"
+        );
+    }
+
+    #[test]
+    fn drag_sources_pair_with_their_nearest_viable_regions() {
+        let mut src = String::from(
+            "viewport w=1200 h=900\n\
+             region id=card role=generic label=\"Card\" x=0 y=0 w=20 h=20 actions=drag sources=dom\n\
+             region id=gone role=generic label=\"Gone\" x=30 y=0 w=20 h=20 sources=dom flags=hidden\n",
+        );
+        for i in 0..20 {
+            src.push_str(&format!(
+                "region id=slot{i:02} role=generic label=\"Slot {i}\" x={} y=0 w=20 h=20 sources=dom\n",
+                40 + i * 30
+            ));
+        }
+        let space = ActionSpace::from_manifold(&parse_fixture(&src).unwrap());
+        let drags: Vec<_> = space.targets_of(ActionKind::Drag).collect();
+        assert_eq!(drags.len(), MAX_DROPS_PER_SOURCE, "capped, nearest first");
+        let first = space
+            .get_str("DRAG:card>slot00")
+            .expect("nearest slot offered");
+        assert_eq!(first.dest().map(|d| d.label.as_str()), Some("Slot 0"));
+        assert!(
+            space.get_str("DRAG:card>gone").is_none(),
+            "hidden is not a destination"
+        );
+        assert!(
+            space.get_str("DRAG:card>card").is_none(),
+            "never onto itself"
+        );
+        assert!(space.get_str("DRAG:card>slot19").is_none(), "past the cap");
+        assert!(
+            space.get_str("CLICK:card").is_none(),
+            "dragging is not clicking"
         );
     }
 

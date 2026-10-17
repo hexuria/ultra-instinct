@@ -408,6 +408,9 @@ fn element_from(node: &Value) -> Option<DomElement> {
     if opens_on_hover(&attributes, role) && !actions.contains(&Action::Hover) {
         actions.push(Action::Hover);
     }
+    if attribute_drag_hint(&attributes, role) {
+        add_drag(&mut actions);
+    }
     let needs_hint = hint_box && !marked_clickable;
     Some(DomElement {
         node_id,
@@ -505,6 +508,36 @@ fn opens_on_hover(attributes: &std::collections::BTreeMap<String, String>, role:
         .is_some_and(|v| !v.eq_ignore_ascii_case("false"))
         || attributes.contains_key("aria-expanded")
         || role == Role::MenuItem
+}
+
+/// The element is marked draggable: HTML `draggable="true"`, ARIA
+/// `aria-grabbed`, a slider (its thumb drags), or the marker classes a common
+/// widget library puts on draggable, sortable, slider, and resize handles.
+fn attribute_drag_hint(
+    attributes: &std::collections::BTreeMap<String, String>,
+    role: Role,
+) -> bool {
+    const LIBRARY_MARKERS: [&str; 4] = [
+        "ui-draggable",
+        "ui-sortable-handle",
+        "ui-slider-handle",
+        "ui-resizable-handle",
+    ];
+    attributes
+        .get("draggable")
+        .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+        || attributes.contains_key("aria-grabbed")
+        || role == Role::Slider
+        || attributes
+            .get("class")
+            .is_some_and(|c| c.split_whitespace().any(|t| LIBRARY_MARKERS.contains(&t)))
+}
+
+/// Offer DRAG on an element marked draggable by markup or cursor.
+pub(crate) fn add_drag(actions: &mut Vec<Action>) {
+    if !actions.contains(&Action::Drag) {
+        actions.push(Action::Drag);
+    }
 }
 
 /// Offer CLICK on an element the page made clickable by markup or script.

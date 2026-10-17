@@ -96,11 +96,27 @@ pub fn execute_ticketed<B: BrowserRuntime + ?Sized>(
         .clone();
     let before_page = browser.page().cloned();
     let focused = browser.focused();
+    // A drag releases exactly where its ticket says; a ticket without a
+    // destination never drives a drag, and a destination never rides a
+    // non-drag input.
+    match (input, &ticket.dest) {
+        (Input::Drag { to }, Some(dest)) if *to == dest.id => {}
+        (Input::Drag { .. }, _) | (_, Some(_)) => {
+            return Err(ExecError::Ticket(TicketInvalid::TicketMismatch))
+        }
+        _ => {}
+    }
     revalidate(ticket, &fresh, focused).map_err(ExecError::Ticket)?;
     let region = fresh
         .get(&ticket.target_id)
         .ok_or(ExecError::Ticket(TicketInvalid::TargetGone))?;
     gate_check(&fresh, region, ticket.action).map_err(ExecError::Gate)?;
+    if let Some(dest) = &ticket.dest {
+        let drop = fresh
+            .get(&dest.id)
+            .ok_or(ExecError::Ticket(TicketInvalid::TargetGone))?;
+        aui_guard::check_drop_target(&fresh, drop).map_err(ExecError::Gate)?;
+    }
 
     ledger
         .mark_consumed(ticket.ticket_id)

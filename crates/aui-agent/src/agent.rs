@@ -468,6 +468,7 @@ pub fn region_action(kind: ActionKind) -> Option<Action> {
         ActionKind::Select => Some(Action::Select),
         ActionKind::Hover => Some(Action::Hover),
         ActionKind::ScrollIn => Some(Action::Scroll),
+        ActionKind::Drag => Some(Action::Drag),
         _ => None,
     }
 }
@@ -1048,13 +1049,23 @@ where
             .cloned()
             .ok_or_else(|| AgentError::Guard("target-bound action missing region id".into()))?;
 
-        let ticket = gate(
-            &predicted.manifold,
-            &target,
-            action,
-            predicted.focused.clone(),
-            predicted.space_captured_at_ms,
-        )
+        let dest = offered.dest().map(|d| d.id.clone());
+        let ticket = match &dest {
+            Some(dest) => aui_guard::gate_drag(
+                &predicted.manifold,
+                &target,
+                dest,
+                predicted.focused.clone(),
+                predicted.space_captured_at_ms,
+            ),
+            None => gate(
+                &predicted.manifold,
+                &target,
+                action,
+                predicted.focused.clone(),
+                predicted.space_captured_at_ms,
+            ),
+        }
         .map_err(|reason| AgentError::Guard(format!("refuse: {reason}")))?;
 
         let input = match kind {
@@ -1091,6 +1102,9 @@ where
             ),
             ActionKind::Hover => Input::Hover,
             ActionKind::ScrollIn => Input::ScrollIn,
+            ActionKind::Drag => Input::Drag {
+                to: dest.ok_or_else(|| AgentError::Guard("DRAG without a destination".into()))?,
+            },
             _ => unreachable!("region_action filtered kinds"),
         };
 
@@ -1099,6 +1113,7 @@ where
             Input::ScriptClick => "script-click",
             Input::Hover => "hover",
             Input::ScrollIn => "scroll-in",
+            Input::Drag { .. } => "drag",
             Input::Type(_) => "type",
             Input::Select(_) => "select",
         };

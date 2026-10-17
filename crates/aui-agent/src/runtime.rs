@@ -40,6 +40,8 @@ pub enum Input {
     Hover,
     /// Scroll the target's own content down (a wheel at its center).
     ScrollIn,
+    /// Press on the target, move to `to`'s center, release there.
+    Drag { to: RegionId },
 }
 
 impl Input {
@@ -51,13 +53,16 @@ impl Input {
             Self::Select(_) => Action::Select,
             Self::Hover => Action::Hover,
             Self::ScrollIn => Action::Scroll,
+            Self::Drag { .. } => Action::Drag,
         }
     }
 
     /// Text payload, if any.
     pub fn payload(&self) -> Option<&str> {
         match self {
-            Self::Click | Self::ScriptClick | Self::Hover | Self::ScrollIn => None,
+            Self::Click | Self::ScriptClick | Self::Hover | Self::ScrollIn | Self::Drag { .. } => {
+                None
+            }
             Self::Type(text) | Self::Select(text) => Some(text),
         }
     }
@@ -195,6 +200,7 @@ impl<T: CdpTransport> BrowserRuntime for BrowserSession<T> {
             }
             Input::Hover => BrowserSession::hover(self, target),
             Input::ScrollIn => BrowserSession::scroll_region(self, target),
+            Input::Drag { to } => BrowserSession::drag(self, target, to),
         }
         .map_err(browser_err)
     }

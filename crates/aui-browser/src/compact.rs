@@ -191,6 +191,8 @@ function visit(el,doc,off){
       rec.h=hitAt(document,r[0]+r[2]/2,r[1]+r[3]/2);
       if(clickHint(el))rec.ck=1;
       if(scrollable(el))rec.sc=1;
+      var cur=el.ownerDocument.defaultView.getComputedStyle(el).cursor;
+      if(cur==='move'||cur==='grab'||cur==='grabbing')rec.dg=1;
       var name=el.nodeName.toUpperCase();
       var inputType=(el.getAttribute('type')||'text').toLowerCase();
       if(name==='INPUT')rec.it=inputType;
@@ -269,6 +271,8 @@ pub(crate) struct CompactNode {
     /// The element's own content scrolls (overflow-y auto / scroll, taller
     /// than its box).
     pub scrollable: bool,
+    /// The element shows a move / grab cursor: it can be dragged.
+    pub drag_hint: bool,
 }
 
 /// Compact hit-test evidence for one element.
@@ -361,6 +365,7 @@ pub(crate) fn parse(eval_result_json: &str) -> Result<CompactSnapshot, BrowserEr
         let state = parse_element_state(record);
         let click_hint = record.get("ck").is_some_and(|ck| ck.as_i64() == Some(1));
         let scrollable = record.get("sc").is_some_and(|sc| sc.as_i64() == Some(1));
+        let drag_hint = record.get("dg").is_some_and(|dg| dg.as_i64() == Some(1));
         out.nodes.insert(
             k,
             CompactNode {
@@ -370,6 +375,7 @@ pub(crate) fn parse(eval_result_json: &str) -> Result<CompactSnapshot, BrowserEr
                 state,
                 click_hint,
                 scrollable,
+                drag_hint,
             },
         );
     }

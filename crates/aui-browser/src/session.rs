@@ -51,6 +51,9 @@ use crate::verify::{self, Expectation};
 
 pub const DOM_CLICK_FUNCTION: &str = "function(){this.click()}";
 
+/// Pointer moves between press and release in [`BrowserSession::drag`].
+pub const DRAG_STEPS: u32 = 5;
+
 /// JPEG quality of [`BrowserSession::screenshot_jpeg`]: small page text stays
 /// legible to a vision model at a fraction of the PNG size.
 pub const SCREENSHOT_JPEG_QUALITY: u8 = 80;
@@ -220,6 +223,9 @@ impl<T: CdpTransport> BrowserSession<T> {
                 // A box whose own content scrolls can be scrolled in place.
                 if node.is_some_and(|n| n.scrollable) && !raw.actions.contains(&Action::Scroll) {
                     raw.actions.push(Action::Scroll);
+                }
+                if node.is_some_and(|n| n.drag_hint) {
+                    extract::add_drag(&mut raw.actions);
                 }
                 dom_raw.push(raw);
             }
@@ -789,11 +795,22 @@ impl<T: CdpTransport> BrowserSession<T> {
             &json!({"type": "mousePressed", "x": a.center_x, "y": a.center_y, "button": "left", "clickCount": 1})
                 .to_string(),
         )?;
-        self.call(
-            "Input.dispatchMouseEvent",
-            &json!({"type": "mouseMoved", "x": b.center_x, "y": b.center_y, "button": "left"})
+        // Intermediate moves: pointer and HTML5 drag libraries start a drag
+        // only after the pointer travels with the button held.
+        for step in 1..=DRAG_STEPS {
+            let t = f64::from(step) / f64::from(DRAG_STEPS);
+            self.call(
+                "Input.dispatchMouseEvent",
+                &json!({
+                    "type": "mouseMoved",
+                    "x": a.center_x + (b.center_x - a.center_x) * t,
+                    "y": a.center_y + (b.center_y - a.center_y) * t,
+                    "button": "left",
+                    "buttons": 1
+                })
                 .to_string(),
-        )?;
+            )?;
+        }
         self.call(
             "Input.dispatchMouseEvent",
             &json!({"type": "mouseReleased", "x": b.center_x, "y": b.center_y, "button": "left", "clickCount": 1})
