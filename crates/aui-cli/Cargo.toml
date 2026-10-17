@@ -49,8 +49,8 @@ clef = ["jev", "typesafe-sdk/clef"]
 # Experimental HGRA matcher (wires into aui-mcp / mcp locate+guard).
 hgra = ["aui-mcp/hgra"]
 # Model-backed TYPE_TEXT / SELECT payloads via `run --text-model-cmd <program>`;
-# without the flag, jev-ultrafast's TEXT_MODEL_* env drives an OpenAI-compatible
-# HTTP model.
+# without the flag, jev-ultrafast's TEXT_MODEL_* env drives an HTTP model (OpenAI-compatible,
+# Anthropic, or Gemini wire; TEXT_MODEL_API or the base URL host picks it).
 model-text = ["aui-agent/model-text", "aui-policy/model-text", "dep:reqwest", "dep:serde_json"]
 
 [dependencies.typesafe-sdk]

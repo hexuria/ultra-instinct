@@ -157,6 +157,14 @@ stdin and prints `{"text":"…","context_fingerprint":<same number>}` or
 `{"declined":"reason"}`. Library: `AgentBuilder::model_text(model)` with any
 `TextModel`, or `.text_resolver(ModelTextResolver::new(m).without_fallback())`
 to abstain instead of falling back.
+
+Without the flag, `TEXT_MODEL_API_KEY` enables the built-in HTTP model
+(`crates/aui-cli/src/http_text.rs`): OpenAI-compatible chat completions,
+Anthropic Messages, or Gemini `generateContent`, chosen by `TEXT_MODEL_API` or
+the `TEXT_MODEL_BASE_URL` host. Every wire shape is reduced to the same
+`{"text","context_fingerprint"}` / `{"declined"}` reply before vetting. Wire
+contracts are tested against a local server only
+(`crates/aui-cli/tests/text_model_http.rs`); no live provider numbers are claimed.
 - Harder page types (ADR 0007): same-origin iframe + open shadow pierced;
   autocomplete TYPE→option CLICK; virtualized visible window only.
   Still out: cross-origin iframe, closed shadow, off-window inventory.
