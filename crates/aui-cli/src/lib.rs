@@ -448,7 +448,7 @@ pub(crate) mod session_cmd;
 #[cfg(feature = "clef")]
 pub mod clef;
 #[cfg(feature = "model-text")]
-pub mod openai_text;
+pub mod http_text;
 #[cfg(feature = "jev")]
 pub mod typesafe;
 

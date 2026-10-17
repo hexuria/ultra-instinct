@@ -1,5 +1,22 @@
 # Decisions
 
+## Text model: OpenAI, Anthropic, and Gemini wire shapes (2026-10-17)
+
+Status: proposed on `feat/text-model-providers`. Asia/Manila.
+
+**Decision.** The env-driven HTTP text model (`http_text.rs`, was
+`openai_text.rs`) speaks three wire shapes: OpenAI-compatible chat
+completions (default, jev-ultrafast parity), Anthropic Messages, and Gemini
+`generateContent`. `TEXT_MODEL_API` picks one; unset, the exact
+`TEXT_MODEL_BASE_URL` host does. Keys ride headers only (Bearer, `x-api-key`,
+`x-goog-api-key`), cleartext stays localhost-only, and each provider reply is
+reduced to the `parse_command_reply` contract, so fingerprint echo, shape,
+and goal grounding are unchanged. Provider refusals and truncation map to
+Declined / Malformed (fallback, else abstain).
+
+**Discarded.** Provider SDKs; keys in URLs; per-provider reasoning knobs
+beyond Anthropic `effort: low` (Gemini's differ per model generation).
+
 ## Model-text TextResolver behind `model-text` (2026-10-06)
 
 Status: accepted on `feat/model-text-resolver`. Asia/Manila.

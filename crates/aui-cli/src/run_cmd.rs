@@ -41,7 +41,8 @@
 //! grounded in the goal; refused replies fall back to the deterministic
 //! resolver, then abstain. The program owns any API keys. Without the flag,
 //! jev-ultrafast's `TEXT_MODEL_API_KEY`/`TEXT_MODEL_BASE_URL`/`TEXT_MODEL`
-//! env drives an OpenAI-compatible HTTP model ([`crate::openai_text`]).
+//! env drives an HTTP model — OpenAI-compatible, Anthropic, or Gemini wire,
+//! picked by `TEXT_MODEL_API` or the base URL host ([`crate::http_text`]).
 
 use aui_agent::{Agent, AgentBuilder, AgentOutcome, BrowserRuntime, MockBrowser};
 use aui_browser::{open_tab, BrowserSession, CdpTransport, ReplayTransport, WebSocketTransport};
@@ -432,12 +433,12 @@ fn drive_with<T: CdpTransport, P: BrowserPolicy>(
         return drive_model_text_cmd(builder, program, args);
     }
     // jev-ultrafast parity: no flag but TEXT_MODEL_API_KEY set means the
-    // OpenAI-compatible HTTP model fills payloads. The flag always wins.
+    // HTTP model (OpenAI-compatible, Anthropic, or Gemini wire) fills
+    // payloads. The flag always wins.
     #[cfg(feature = "model-text")]
-    if let Some(model) =
-        crate::openai_text::OpenAiTextModel::from_env().map_err(CliError::Config)?
-    {
-        return drive_model_text(builder, "openai", Box::new(model), args);
+    if let Some(model) = crate::http_text::HttpTextModel::from_env().map_err(CliError::Config)? {
+        let source = model.api().label();
+        return drive_model_text(builder, source, Box::new(model), args);
     }
     let mut agent = builder.build(args.goal.clone());
     let outcome = agent.run();
