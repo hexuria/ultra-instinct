@@ -367,14 +367,26 @@ fn element_from(node: &Value) -> Option<DomElement> {
         aria.unwrap_or_else(|| direct_text(node))
     };
     let role_attr = attributes.get("role").cloned();
+    // Marked draggable in markup: kept even when its text sits in children
+    // (a list row whose label is an inner element), named by that text.
+    let drag_marked = !svg_shape && !surface && drag_markup(&attributes);
+    if drag_marked && label.is_empty() {
+        label = subtree_text(node);
+    }
     // A text-less box the page made clickable (a colored square, a card, a
     // board cell) is a region only when a click hint confirms it.
     let hint_box = !svg_shape
         && !surface
+        && !drag_marked
         && !keep_element(name, role_attr.as_deref(), &label)
         && is_textual(name)
         && label.is_empty();
-    if !svg_shape && !surface && !hint_box && !keep_element(name, role_attr.as_deref(), &label) {
+    if !svg_shape
+        && !surface
+        && !drag_marked
+        && !hint_box
+        && !keep_element(name, role_attr.as_deref(), &label)
+    {
         return None;
     }
     if hint_box {
@@ -544,6 +556,13 @@ fn attribute_drag_hint(
     attributes: &std::collections::BTreeMap<String, String>,
     role: Role,
 ) -> bool {
+    role == Role::Slider || drag_markup(attributes)
+}
+
+/// Draggable in markup alone (no role): `draggable="true"`, `aria-grabbed`,
+/// or a common widget library's drag / sort / slider / resize handle class.
+/// Mirrored by `dragMarked` in the compact walk.
+fn drag_markup(attributes: &std::collections::BTreeMap<String, String>) -> bool {
     const LIBRARY_MARKERS: [&str; 4] = [
         "ui-draggable",
         "ui-sortable-handle",
@@ -554,10 +573,36 @@ fn attribute_drag_hint(
         .get("draggable")
         .is_some_and(|v| v.eq_ignore_ascii_case("true"))
         || attributes.contains_key("aria-grabbed")
-        || role == Role::Slider
         || attributes
             .get("class")
             .is_some_and(|c| c.split_whitespace().any(|t| LIBRARY_MARKERS.contains(&t)))
+}
+
+/// Longest label taken from an element's descendants.
+const SUBTREE_TEXT_MAX_CHARS: usize = 80;
+
+/// All text under `node`, in document order, whitespace folded and capped.
+fn subtree_text(node: &Value) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    let mut stack: Vec<&Value> = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.get("nodeType").and_then(Value::as_i64) == Some(3) {
+            if let Some(t) = n.get("nodeValue").and_then(Value::as_str) {
+                parts.push(t);
+            }
+        }
+        if let Some(children) = n.get("children").and_then(Value::as_array) {
+            stack.extend(children.iter().rev());
+        }
+    }
+    parts
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(SUBTREE_TEXT_MAX_CHARS)
+        .collect()
 }
 
 /// Offer DRAG on an element marked draggable by markup or cursor.
@@ -867,6 +912,21 @@ mod pierce_tests {
             .map(|e| (e.label.as_str(), e.actions.contains(&Action::Drag)))
             .collect();
         assert_eq!(items, [("Ana", true), ("Bo", false)]);
+
+        // A marked row whose text lives in a child element is still a source.
+        let json = r##"{"root": {"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
+          "children": [{"nodeId": 10, "backendNodeId": 10, "nodeType": 1, "nodeName": "LI", "attributes": ["class", "ui-sortable-handle"],
+            "children": [{"nodeId": 11, "backendNodeId": 11, "nodeType": 1, "nodeName": "SPAN", "attributes": []},
+                         {"nodeId": 12, "backendNodeId": 12, "nodeType": 1, "nodeName": "DIV", "attributes": [],
+                          "children": [{"nodeId": 13, "backendNodeId": 13, "nodeType": 3, "nodeName": "#text", "nodeValue": " Charla "}]}]}]}}"##;
+        let doc = dom_document(json).unwrap();
+        let row = doc
+            .elements
+            .iter()
+            .find(|e| e.node_id == 10)
+            .expect("marked row kept");
+        assert_eq!(row.label, "Charla");
+        assert!(row.actions.contains(&Action::Drag));
     }
 
     #[test]

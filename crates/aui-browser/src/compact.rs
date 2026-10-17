@@ -160,6 +160,15 @@ function clickHint(el){
   return !p||view.getComputedStyle(p).cursor!=='pointer';
 }
 var SVG_NS='http://www.w3.org/2000/svg';
+// Mirrors `extract::drag_markup`.
+var DRAG_MARKERS=['ui-draggable','ui-sortable-handle','ui-slider-handle','ui-resizable-handle'];
+function dragMarked(el){
+  if((el.getAttribute('draggable')||'').toLowerCase()==='true')return true;
+  if(el.hasAttribute('aria-grabbed'))return true;
+  var cl=el.classList;
+  if(cl)for(var i=0;i<DRAG_MARKERS.length;i++)if(cl.contains(DRAG_MARKERS[i]))return true;
+  return false;
+}
 var SHAPES={circle:1,ellipse:1,rect:1,polygon:1,polyline:1,path:1,text:1};
 // A box whose own content scrolls: overflow-y auto / scroll with more
 // content than room.
@@ -172,6 +181,7 @@ function candidate(el){
   if(name==='SCRIPT'||name==='STYLE'||name==='HEAD'||name==='HTML'||name==='BODY')return false;
   if(el.namespaceURI===SVG_NS&&SHAPES[el.localName])return true;
   if(name==='CANVAS'||(el.namespaceURI===SVG_NS&&el.localName==='svg'))return true;
+  if(dragMarked(el))return true;
   if(el.hasAttribute('role'))return true;
   if(KEEP[name])return true;
   if(!TEXTUAL[name])return false;
