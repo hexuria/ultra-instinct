@@ -257,7 +257,7 @@ fn scroll_and_wait_are_page_primitives_without_tickets() {
     assert_eq!(p.decision.kind, ActionKind::ScrollDown);
     let rec = agent.act().unwrap();
     assert_eq!(rec.kind, ActionKind::ScrollDown);
-    assert_eq!(rec.verification, VerificationKind::NoEffect);
+    assert_eq!(rec.verification, VerificationKind::NoVisibleChange);
     assert_eq!(agent.browser_mut().scroll_log(), &[ScrollDirection::Down]);
     assert!(agent.browser_mut().press_log().is_empty());
 

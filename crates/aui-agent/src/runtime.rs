@@ -14,6 +14,8 @@ use aui_browser::{
 };
 use aui_core::{Action, InteractionManifold, RegionId, Role};
 
+use aui_policy::{PageView, Screenshot};
+
 use crate::error::AgentError;
 
 const AUTOCOMPLETE_MAX_POLLS: u32 = 10;
@@ -22,11 +24,14 @@ const AUTOCOMPLETE_POLL_MS: u64 = 25;
 /// One input the executor may send to an exact observed target.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Input {
+    /// A trusted pointer click at the target's center, as a user clicks:
+    /// `HTMLElement.click()` neither moves focus nor fires `pointerdown` /
+    /// `mousedown`, which many widgets listen for.
     Click,
-    /// A click sent as a trusted pointer event at the target's center. Same
-    /// ticket capability as [`Input::Click`]; used after a semantic click on
-    /// the same target had no effect.
-    PointerClick,
+    /// A script click (`HTMLElement.click()` on the observed node). Same
+    /// ticket capability as [`Input::Click`]; used after a pointer click on
+    /// the same target showed no visible change.
+    ScriptClick,
     /// Replace the field value with this text.
     Type(String),
     /// Choose the one option whose value / label / text matches.
@@ -37,7 +42,7 @@ impl Input {
     /// Region capability this input needs (and the ticket must carry).
     pub fn action(&self) -> Action {
         match self {
-            Self::Click | Self::PointerClick => Action::Click,
+            Self::Click | Self::ScriptClick => Action::Click,
             Self::Type(_) => Action::Type,
             Self::Select(_) => Action::Select,
         }
@@ -46,7 +51,7 @@ impl Input {
     /// Text payload, if any.
     pub fn payload(&self) -> Option<&str> {
         match self {
-            Self::Click | Self::PointerClick => None,
+            Self::Click | Self::ScriptClick => None,
             Self::Type(text) | Self::Select(text) => Some(text),
         }
     }
@@ -110,6 +115,31 @@ pub trait BrowserRuntime {
     fn page_delta_between(&self, before: &PageState, after: &PageState) -> PageDelta {
         page_delta(before, after)
     }
+
+    /// Viewport screenshot for a policy that reads pixels. Read only, never
+    /// page input. `None` when the runtime cannot capture one; the decision
+    /// then runs without it. Default: none.
+    fn screenshot(&mut self) -> Option<Screenshot> {
+        None
+    }
+
+    /// Visible page text with URL and title, for a policy that reads it.
+    /// Read only. `None` when the runtime cannot read it. Default: none.
+    fn page_view(&mut self) -> Option<PageView> {
+        None
+    }
+}
+
+/// Longest page text handed to a policy, in characters (jev-ultrafast's
+/// page-text budget).
+pub const PAGE_TEXT_MAX_CHARS: usize = 6000;
+
+fn page_view_of(text: &str, page: Option<&PageState>) -> PageView {
+    PageView {
+        url: page.and_then(|p| p.url()).map(str::to_owned),
+        title: page.and_then(|p| p.title()).map(str::to_owned),
+        text: text.chars().take(PAGE_TEXT_MAX_CHARS).collect(),
+    }
 }
 
 fn browser_err(e: BrowserError) -> AgentError {
@@ -132,14 +162,27 @@ impl<T: CdpTransport> BrowserRuntime for BrowserSession<T> {
         BrowserSession::manifold(self)
     }
 
+    fn screenshot(&mut self) -> Option<Screenshot> {
+        let shot = Screenshot::from_base64(BrowserSession::screenshot_jpeg(self).ok().flatten()?);
+        Some(match BrowserSession::manifold(self).map(|m| m.viewport()) {
+            Some(v) => shot.with_css_size(v.width().round() as i32, v.height().round() as i32),
+            None => shot,
+        })
+    }
+
+    fn page_view(&mut self) -> Option<PageView> {
+        let text = BrowserSession::page_text(self).ok()?;
+        Some(page_view_of(&text, BrowserSession::page(self)))
+    }
+
     fn page(&self) -> Option<&PageState> {
         BrowserSession::page(self)
     }
 
     fn dispatch(&mut self, target: &RegionId, input: &Input) -> Result<(), AgentError> {
         match input {
-            Input::Click => BrowserSession::press(self, target, Action::Click).map(|_| ()),
-            Input::PointerClick => BrowserSession::pointer_click(self, target).map(|_| ()),
+            Input::Click => BrowserSession::pointer_click(self, target).map(|_| ()),
+            Input::ScriptClick => BrowserSession::press(self, target, Action::Click).map(|_| ()),
             Input::Type(text) => BrowserSession::type_text(self, target, text).map(|_| ()),
             Input::Select(option) => {
                 BrowserSession::select_option(self, target, option).map(|_| ())
@@ -262,6 +305,9 @@ pub struct MockBrowser {
     value_override: Option<String>,
     observe_count: u32,
     pauses: u32,
+    screenshot: Option<Screenshot>,
+    screenshots_taken: u32,
+    page_text: Option<String>,
 }
 
 impl MockBrowser {
@@ -283,7 +329,27 @@ impl MockBrowser {
             value_override: None,
             observe_count: 0,
             pauses: 0,
+            screenshot: None,
+            screenshots_taken: 0,
+            page_text: None,
         }
+    }
+
+    /// The page reads this visible text on request.
+    pub fn with_page_text(mut self, text: impl Into<String>) -> Self {
+        self.page_text = Some(text.into());
+        self
+    }
+
+    /// The page captures this screenshot on request.
+    pub fn with_screenshot(mut self, screenshot: Screenshot) -> Self {
+        self.screenshot = Some(screenshot);
+        self
+    }
+
+    /// Screenshots requested so far.
+    pub fn screenshots_taken(&self) -> u32 {
+        self.screenshots_taken
     }
 
     pub fn with_page(mut self, page: PageState) -> Self {
@@ -411,6 +477,16 @@ impl BrowserRuntime for MockBrowser {
 
     fn read_value(&mut self, target: &RegionId) -> Option<FieldValue> {
         self.values.get(target).cloned()
+    }
+
+    fn screenshot(&mut self) -> Option<Screenshot> {
+        self.screenshots_taken += 1;
+        self.screenshot.clone()
+    }
+
+    fn page_view(&mut self) -> Option<PageView> {
+        let text = self.page_text.clone()?;
+        Some(page_view_of(&text, Some(&self.page)))
     }
 }
 

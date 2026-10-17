@@ -320,6 +320,7 @@ fn ask() -> TextModelRequest {
         field_role: "text_field".into(),
         context_fingerprint: 42,
         max_chars: 60,
+        page_text: None,
     }
 }
 

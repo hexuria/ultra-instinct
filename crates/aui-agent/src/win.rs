@@ -64,7 +64,7 @@ mod tests {
         assert!(!step_is_win("press send", &unlabeled));
 
         // Named target without verified effect is not a win.
-        let no_effect = record(ActionKind::Click, "Send", VerificationKind::NoEffect);
+        let no_effect = record(ActionKind::Click, "Send", VerificationKind::NoVisibleChange);
         assert!(!step_is_win("press send", &no_effect));
     }
 

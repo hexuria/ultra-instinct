@@ -371,12 +371,16 @@ fn element_from(node: &Value) -> Option<DomElement> {
     let hu_k = attributes
         .get(crate::compact::HU_K_ATTR)
         .and_then(|raw| raw.parse::<u32>().ok());
+    let mut actions = dom_actions(name, role);
+    if attribute_click_hint(&attributes) {
+        add_click(&mut actions);
+    }
     Some(DomElement {
         node_id,
         backend_node_id,
         role,
         label,
-        actions: dom_actions(name, role),
+        actions,
         disabled,
         hidden,
         readonly,
@@ -384,6 +388,24 @@ fn element_from(node: &Value) -> Option<DomElement> {
         ancestors: Vec::new(),
         hu_k,
     })
+}
+
+/// The page marked a plain element clickable in markup: an `onclick`
+/// attribute, or a `tabindex` of 0 or more (a keyboard stop, which a page
+/// gives a custom control).
+fn attribute_click_hint(attributes: &std::collections::BTreeMap<String, String>) -> bool {
+    attributes.contains_key("onclick")
+        || attributes
+            .get("tabindex")
+            .and_then(|t| t.trim().parse::<i32>().ok())
+            .is_some_and(|t| t >= 0)
+}
+
+/// Offer CLICK on an element the page made clickable by markup or script.
+pub(crate) fn add_click(actions: &mut Vec<Action>) {
+    if !actions.contains(&Action::Click) {
+        actions.push(Action::Click);
+    }
 }
 
 /// Unlabeled generic containers are not regions. A control tag, an explicit
@@ -622,6 +644,43 @@ mod pierce_tests {
         assert_eq!(
             (vp.x(), vp.y(), vp.width(), vp.height()),
             (0.0, 0.0, 900.0, 1042.0)
+        );
+    }
+
+    #[test]
+    fn onclick_or_nonnegative_tabindex_makes_text_clickable() {
+        let span = |id: i64, attrs: &str| {
+            format!(
+                r##"{{"nodeId": {id}, "backendNodeId": {id}, "nodeType": 1, "nodeName": "SPAN",
+                    "attributes": [{attrs}],
+                    "children": [{{"nodeId": {t}, "backendNodeId": {t}, "nodeType": 3, "nodeName": "#text", "nodeValue": "word"}}]}}"##,
+                t = id + 1000
+            )
+        };
+        let json = format!(
+            r##"{{"root": {{"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
+                "children": [{}, {}, {}, {}, {}]}}}}"##,
+            span(10, r#""onclick", "go()""#),
+            span(20, r#""tabindex", "0""#),
+            span(30, r#""tabindex", "-1""#),
+            span(40, r#""tabindex", "x""#),
+            span(50, ""),
+        );
+        let doc = dom_document(&json).unwrap();
+        let clickable: Vec<(i64, bool)> = doc
+            .elements
+            .iter()
+            .map(|e| (e.node_id, e.actions.contains(&Action::Click)))
+            .collect();
+        assert_eq!(
+            clickable,
+            [
+                (10, true),
+                (20, true),
+                (30, false),
+                (40, false),
+                (50, false)
+            ]
         );
     }
 

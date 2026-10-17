@@ -654,7 +654,22 @@ where
             front_layer,
             roles: roles.iter().map(|r| (*r).to_owned()).collect(),
         });
-        let outcome = match self.policy.decide(&space, &self.goal, &self.policy_history) {
+        // Pixels and page text are decision evidence only: the executor
+        // still observes fresh and revalidates the ticket before dispatch.
+        let wants = self.policy.wants_evidence();
+        let evidence = aui_policy::DecisionEvidence {
+            screenshot: wants
+                .screenshot
+                .then(|| self.browser.screenshot())
+                .flatten(),
+            page: wants.page_text.then(|| self.browser.page_view()).flatten(),
+        };
+        let outcome = match self.policy.decide_with_evidence(
+            &space,
+            &self.goal,
+            &self.policy_history,
+            &evidence,
+        ) {
             Ok(outcome) => outcome,
             Err(e) => {
                 // Journal the attempted decision too — a policy error
@@ -730,6 +745,8 @@ where
                 field_role: "select".to_owned(),
                 typed: self.typed_text_history(),
                 context_fingerprint: offered.target_fingerprint(),
+                page_text: None,
+                input_type: offered.state().input_type.clone(),
             };
             let resolved = match self.text.resolve(&ctx) {
                 Ok(resolution) => {
@@ -778,6 +795,13 @@ where
                 },
                 typed: self.typed_text_history(),
                 context_fingerprint: offered.target_fingerprint(),
+                // Read only; the executor still observes fresh before input.
+                page_text: if self.text.wants_page_text() {
+                    self.browser.page_view().map(|page| page.text)
+                } else {
+                    None
+                },
+                input_type: offered.state().input_type.clone(),
             };
             let resolution = self.text.resolve(&ctx).map_err(|e| match e {
                 // A resolver that declines (model refused, no fallback value)
@@ -870,9 +894,11 @@ where
             label: record.label.clone(),
             verification: record.verification.as_str().to_owned(),
         });
+        // No visible change is not a failure, but repeating it is how a loop
+        // looks: it counts toward the bound like a wrong effect.
         if matches!(
             record.verification,
-            VerificationKind::NoEffect | VerificationKind::WrongEffect
+            VerificationKind::NoVisibleChange | VerificationKind::WrongEffect
         ) {
             self.consecutive_no_effect += 1;
             if self.consecutive_no_effect >= self.max_consecutive_no_effect {
@@ -958,28 +984,23 @@ where
         .map_err(|reason| AgentError::Guard(format!("refuse: {reason}")))?;
 
         let input = match kind {
-            // A semantic click on this same label just had no effect (the
-            // page ignored a script click): retry as a trusted pointer click.
-            // `… while M` clauses act on time-critical overlay controls (an
-            // ad's skip button) that ignore script clicks: go trusted first.
+            // A pointer click on this same label just showed no visible
+            // change: retry as a script click on the observed node. `… while
+            // M` clauses act on time-critical overlay controls (an ad's skip
+            // button) that ignore script clicks: they stay trusted.
             ActionKind::Click
-                if matches!(
+                if !matches!(
                     self.mode,
                     ClauseMode::Optional {
                         while_marker: Some(_)
                     }
-                ) =>
-            {
-                Input::PointerClick
-            }
-            ActionKind::Click
-                if self.history.last().is_some_and(|step| {
+                ) && self.history.last().is_some_and(|step| {
                     step.kind == ActionKind::Click
                         && step.label == predicted.decision.target_label
-                        && step.verification == VerificationKind::NoEffect
+                        && step.verification == VerificationKind::NoVisibleChange
                 }) =>
             {
-                Input::PointerClick
+                Input::ScriptClick
             }
             ActionKind::Click => Input::Click,
             ActionKind::TypeText => Input::Type(
@@ -999,7 +1020,7 @@ where
 
         let input_name = match &input {
             Input::Click => "click",
-            Input::PointerClick => "pointer",
+            Input::ScriptClick => "script-click",
             Input::Type(_) => "type",
             Input::Select(_) => "select",
         };
