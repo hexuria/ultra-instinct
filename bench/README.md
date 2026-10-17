@@ -65,6 +65,32 @@ bench/bench report                                           # RESULTS.md files
 listening on `127.0.0.1:8080`. Useful flags: `--arms`, `--tasks`, `--scenarios`,
 `--max-tries`, `--reps`, `--resume <run-id>`.
 
+## MiniWoB++ race (third-party tasks)
+
+`run_miniwob.py` races A3m (jev-ultrafast) against A10m (`aui run --policy jev`) on
+[MiniWoB++](https://github.com/Farama-Foundation/miniwob-plusplus), pinned in
+`race-miniwob.toml` and `miniwob.py` (clone into `vendor/miniwob-plusplus`, gitignored).
+The task list is that checkout's `miniwob/registration.py`, all of it; `--tasks` filters
+for smoke runs. `miniwob.py` serves `miniwob/html` and injects one script after MiniWoB's
+`core.js`: `Math.seedrandom(seed)` from the URL (MiniWoB's own seeding call), episode time
+limit raised to the wall cap, auto-start via `core.startEpisodeReal()`, and a wrapped
+`core.endEpisode` that POSTs the first episode's reward. Success = that reward > 0. The goal
+is the task's own `#query` utterance, read once per task × seed in a probe Chrome (two loads;
+a seed that gives two utterances excludes the task) and checked again on every attempt.
+
+Both arms type with Claude Haiku 5.5 through the counting proxy's `/text` route
+(`text_proxy.py`: OpenAI chat completions in, native Anthropic Messages out). JEV decides on
+both. Same caps as `race.toml`; JEV and text calls share the 40-call cap.
+
+```sh
+cargo build --release -p aui-cli --features jev,model-text
+eval "$(secret load TYPESAFE_API_KEY ANTHROPIC_API_KEY)"
+bench/bench miniwob --probe-only                                   # task list + determinism, no models
+bench/bench miniwob --arms mock-wob-solve,mock-wob-noop --tasks click-button,enter-text,click-checkboxes
+bench/bench miniwob --config bench/race-miniwob.toml               # the race (--resume <run-id>)
+bench/bench miniwob-report <run-id> [--publish]
+```
+
 ## Mock arms
 
 `mock-oracle` replays each task's `oracle` steps with trusted CDP input (passes all 23),

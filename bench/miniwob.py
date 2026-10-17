@@ -104,7 +104,10 @@ HARNESS_JS = r"""
       Math.seedrandom(seed);
       core.startEpisodeReal();
       W.started = true;
-      post('/_wob/start', {utterance: core.getUtterance(), max_ms: core.EPISODE_MAX_TIME});
+      // #query text, normalized like core.getUtterance (some tasks override that to return an object)
+      var query = document.getElementById('query');
+      post('/_wob/start', {utterance: query ? query.textContent.replace(/\s+/g, ' ').trim() : '',
+                           max_ms: core.EPISODE_MAX_TIME});
       new MutationObserver(function (records) {
         for (var i = 0; i < records.length; i++) { if (!hud(records[i].target)) { bump(); return; } }
       }).observe(document.body, {subtree: true, childList: true, attributes: true, characterData: true});
@@ -244,7 +247,7 @@ def probe(tasks: list[dict], seeds: list[int], server: WobServer, chrome_port: i
 
     Returns ``{task: {"seeds": {seed: {...}}, "excluded": reason | None}}``. Mechanical
     exclusion only: the page never started an episode, the utterance is empty, or the same
-    seed gave two different utterances.
+    seed gave two different utterances. A load that does not start is retried once.
     """
     from chrome import Cdp, Chrome
 
@@ -256,6 +259,7 @@ def probe(tasks: list[dict], seeds: list[int], server: WobServer, chrome_port: i
         browser = Cdp(chrome.browser_ws())
         target = browser.call("Target.createTarget", url=url)["targetId"]
         try:
+            browser.call("Target.activateTarget", targetId=target)
             started = None
             deadline = time.time() + 10
             while time.time() < deadline and not started:
@@ -282,14 +286,19 @@ def probe(tasks: list[dict], seeds: list[int], server: WobServer, chrome_port: i
             for seed in seeds:
                 reads = []
                 for k in range(2):
-                    attempt = f"probe-{task['task']}-{seed}-{k}-{time.time_ns()}"
-                    try:
-                        reads.append(load(server.url(task, seed, attempt, max_ms), attempt))
-                    except Exception as error:  # noqa: BLE001 - a page that breaks CDP is excluded, not fatal
-                        log(f"probe {task['task']} seed {seed}: {type(error).__name__}: {error}")
-                        reads.append(None)
+                    read = None
+                    for _try in range(2):  # a page is dead only if it fails twice
+                        attempt = f"probe-{task['task']}-{seed}-{k}-{time.time_ns()}"
+                        try:
+                            read = load(server.url(task, seed, attempt, max_ms), attempt)
+                        except Exception as error:  # noqa: BLE001 - a page that breaks CDP is excluded, not fatal
+                            log(f"probe {task['task']} seed {seed}: {type(error).__name__}: {error}")
+                        if read:
+                            break
+                        log(f"probe {task['task']} seed {seed}: no episode start, retrying once")
+                    reads.append(read)
                 if None in reads:
-                    info["excluded"] = "page did not start an episode within 10 s"
+                    info["excluded"] = "page did not start an episode within 10 s (two tries)"
                 elif not (reads[0]["utterance"] or "").strip():
                     info["excluded"] = "empty utterance (#query)"
                 elif reads[0]["utterance"] != reads[1]["utterance"]:
