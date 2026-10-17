@@ -48,7 +48,7 @@ use aui_core::{ActionKind, ActionSpace};
 use crate::goal::AgentGoal;
 use crate::types::{
     BrowserPolicy, DecisionEvidence, EvidenceWants, HistoryEntry, PageView, PolicyDecision,
-    PolicyError, PolicyOutcome, Screenshot,
+    PolicyError, PolicyOutcome, Progress, Screenshot,
 };
 
 /// Carries one request to a remote model and returns its raw reply.
@@ -120,6 +120,17 @@ pub fn request_json_with_page(
     history: &[HistoryEntry],
     page: Option<&PageView>,
 ) -> String {
+    request_json_with_evidence(space, goal, history, page, None)
+}
+
+/// [`request_json_with_page`] plus the run's `progress`.
+pub fn request_json_with_evidence(
+    space: &ActionSpace,
+    goal: &AgentGoal,
+    history: &[HistoryEntry],
+    page: Option<&PageView>,
+    progress: Option<&Progress>,
+) -> String {
     let actions: Vec<Value> = space
         .actions()
         .map(|a| {
@@ -172,6 +183,19 @@ pub fn request_json_with_page(
     let mut request = json!({"goal": goal.as_str(), "actions": actions, "history": history});
     if let Some(page) = page {
         request["page"] = json!({"url": page.url, "title": page.title, "text": page.text});
+    }
+    if let Some(p) = progress {
+        let typed: Vec<Value> = p
+            .typed
+            .iter()
+            .map(|(id, value)| json!({"id": id, "value": value}))
+            .collect();
+        request["progress"] = json!({
+            "clauses": p.clauses,
+            "current": p.current,
+            "satisfied": p.satisfied,
+            "typed": typed,
+        });
     }
     request.to_string()
 }
@@ -255,7 +279,13 @@ impl<T: RemoteTransport> BrowserPolicy for RemotePolicy<T> {
         let reply = self
             .transport
             .call_with_screenshot(
-                &request_json_with_page(space, goal, history, evidence.page.as_ref()),
+                &request_json_with_evidence(
+                    space,
+                    goal,
+                    history,
+                    evidence.page.as_ref(),
+                    evidence.progress.as_ref(),
+                ),
                 evidence.screenshot.as_ref(),
             )
             .map_err(|e| PolicyError::Internal(format!("remote transport: {e}")))?;
@@ -444,6 +474,7 @@ mod tests {
     struct SeeingRemote {
         seen: Vec<Option<String>>,
         pages: Vec<Value>,
+        progress: Vec<Value>,
     }
 
     impl RemoteTransport for SeeingRemote {
@@ -466,6 +497,7 @@ mod tests {
             self.seen.push(screenshot.map(|s| s.base64().to_owned()));
             let request: Value = serde_json::from_str(request_json).unwrap();
             self.pages.push(request["page"].clone());
+            self.progress.push(request["progress"].clone());
             Ok(r#"{"choice":{"id":"CLICK:a","kind":"CLICK"}}"#.to_owned())
         }
     }
@@ -477,6 +509,7 @@ mod tests {
             Some(RemotePolicy::new(SeeingRemote {
                 seen: Vec::new(),
                 pages: Vec::new(),
+                progress: Vec::new(),
             })),
         );
         assert_eq!(
@@ -493,6 +526,12 @@ mod tests {
                 title: None,
                 text: "3 + 9 = ?".to_owned(),
             }),
+            progress: Some(Progress {
+                clauses: vec!["Type 12".into(), "Click Submit".into()],
+                current: 1,
+                satisfied: vec![true, false],
+                typed: vec![("TYPE_TEXT:n1".into(), "12".into())],
+            }),
         };
         let out = p
             .decide_with_evidence(&twins(), &AgentGoal::new("Delete"), &[], &evidence)
@@ -506,6 +545,12 @@ mod tests {
             json!({"url": "https://x.test/", "title": null, "text": "3 + 9 = ?"})
         );
         assert!(remote.pages[1].is_null(), "no page without evidence");
+        assert_eq!(
+            remote.progress[0],
+            json!({"clauses": ["Type 12", "Click Submit"], "current": 1,
+                   "satisfied": [true, false], "typed": [{"id": "TYPE_TEXT:n1", "value": "12"}]})
+        );
+        assert!(remote.progress[1].is_null());
     }
 
     #[test]

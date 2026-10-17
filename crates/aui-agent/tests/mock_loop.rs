@@ -1266,3 +1266,119 @@ fn checkbox_click_that_only_flips_checked_is_state_changed() {
     let record = agent.act().unwrap();
     assert_eq!(record.verification, VerificationKind::StateChanged);
 }
+
+/// Types whenever TYPE_TEXT is offered, else DONE: the shape of a remote
+/// model that keeps re-entering a field.
+struct TypesWhileOffered;
+
+impl BrowserPolicy for TypesWhileOffered {
+    fn decide(
+        &mut self,
+        space: &ActionSpace,
+        _goal: &AgentGoal,
+        _history: &[HistoryEntry],
+    ) -> Result<PolicyOutcome, PolicyError> {
+        let action = space
+            .targets_of(ActionKind::TypeText)
+            .next()
+            .or_else(|| space.get_str(ActionKind::Done.as_str()))
+            .expect("DONE offered");
+        Ok(PolicyOutcome::Choice(PolicyDecision {
+            action_id: action.id().clone(),
+            kind: action.kind(),
+            target_label: action.label().to_owned(),
+            confidence_millis: 1_000,
+            operation_ranked: Vec::new(),
+            target_ranked: Vec::new(),
+        }))
+    }
+}
+
+fn name_field(value: Option<&str>) -> InteractionManifold {
+    let mut page = manifold(
+        r#"
+        viewport w=800 h=600
+        region id=name role=text_field label="Name" x=10 y=10 w=200 h=24 actions=type sources=dom
+        "#,
+    );
+    let region = page
+        .get_str("name")
+        .unwrap()
+        .clone()
+        .with_state(ElementState {
+            value: value.map(str::to_owned),
+            ..ElementState::default()
+        });
+    page.replace(region);
+    page
+}
+
+#[test]
+fn a_field_already_holding_the_typed_value_is_not_offered_again() {
+    let mut browser = MockBrowser::new(name_field(None));
+    browser.set_on_press(name_field(Some("Ana")));
+    let mut agent = AgentBuilder::new(browser, TypesWhileOffered)
+        .max_steps(5)
+        .build(r#"Type "Ana" into Name"#);
+    let outcome = agent.run();
+    assert!(matches!(outcome, AgentOutcome::Done { .. }), "{outcome:?}");
+    let typed: Vec<_> = outcome
+        .steps()
+        .iter()
+        .filter(|s| s.kind == ActionKind::TypeText)
+        .collect();
+    assert_eq!(typed.len(), 1, "typed once, then moved on: {outcome:?}");
+}
+
+/// Clicks the first offered click target once, then DONE.
+struct ClickOnceThenDone;
+
+impl BrowserPolicy for ClickOnceThenDone {
+    fn decide(
+        &mut self,
+        space: &ActionSpace,
+        _goal: &AgentGoal,
+        history: &[HistoryEntry],
+    ) -> Result<PolicyOutcome, PolicyError> {
+        let action = if history.is_empty() {
+            space.targets_of(ActionKind::Click).next()
+        } else {
+            space.get_str(ActionKind::Done.as_str())
+        }
+        .expect("offered");
+        Ok(PolicyOutcome::Choice(PolicyDecision {
+            action_id: action.id().clone(),
+            kind: action.kind(),
+            target_label: action.label().to_owned(),
+            confidence_millis: 1_000,
+            operation_ranked: Vec::new(),
+            target_ranked: Vec::new(),
+        }))
+    }
+}
+
+#[test]
+fn a_popup_that_renders_late_still_counts_as_the_clicks_effect() {
+    let picker = manifold(
+        r#"
+        viewport w=800 h=600
+        region id=date role=button label="Pick a date" x=10 y=10 w=120 h=24 actions=click sources=dom,accessibility
+        "#,
+    );
+    let open = manifold(
+        r#"
+        viewport w=800 h=600
+        region id=date role=button label="Pick a date" x=10 y=10 w=120 h=24 actions=click sources=dom,accessibility
+        region id=d12 role=button label="12" x=10 y=40 w=20 h=20 actions=click sources=dom,accessibility
+        "#,
+    );
+    let mut browser = MockBrowser::new(picker);
+    // Observes: decide, executor's fresh look, after the click, the late look.
+    browser.schedule_swap(3, open);
+    let mut agent = AgentBuilder::new(browser, ClickOnceThenDone)
+        .max_steps(3)
+        .build("Pick a date");
+    let outcome = agent.run();
+    let first = outcome.steps().first().expect("one click").verification;
+    assert_eq!(first, VerificationKind::StateChanged, "{outcome:?}");
+}

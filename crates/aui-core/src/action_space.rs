@@ -321,6 +321,19 @@ impl ActionSpace {
     }
 
     /// This space minus every action of `kind` (same capture time).
+    /// The same space without the actions `drop` names.
+    pub fn without_ids(&self, drop: &[ActionId]) -> Self {
+        Self {
+            captured_at_ms: self.captured_at_ms,
+            actions: self
+                .actions
+                .iter()
+                .filter(|(id, _)| !drop.contains(id))
+                .map(|(id, a)| (id.clone(), a.clone()))
+                .collect(),
+        }
+    }
+
     pub fn without_kind(&self, kind: ActionKind) -> Self {
         Self {
             captured_at_ms: self.captured_at_ms,

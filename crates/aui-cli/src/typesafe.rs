@@ -50,7 +50,8 @@ Submit populated search fields before opening a result; a populated field alone 
 WAIT only when the needed control is absent/disabled, or submitted results are still loading. \
 If Search/Submit is visible and the required fields are ready, CLICK it immediately. \
 Recent WAIT actions are not evidence of loading. Prefer a useful visible control over WAIT. \
-DONE requires visible evidence that ALL requirements are satisfied. If asked to open a result, \
+DONE requires visible evidence that ALL requirements are satisfied. \
+state.progress lists the goal's clauses, which are already satisfied, and values already typed. If asked to open a result, \
 a matching link is not enough. BLOCKED means no supported operation can make progress.";
 
 /// Target question rules (jev-ultrafast `TARGET`).
@@ -290,11 +291,62 @@ pub(crate) fn build_questions(request: &Value) -> Result<BuiltQuestions, String>
     if let Some(page) = request.get("page").filter(|p| p.is_object()) {
         state["page"] = page.clone();
     }
+    // The run's own record: which goal clauses are done, what was typed.
+    if let Some(progress) = request.get("progress").filter(|p| p.is_object()) {
+        state["progress"] = progress.clone();
+    }
     Ok(BuiltQuestions {
         state,
         questions,
         criteria_keys,
     })
+}
+
+/// Yes / no head asked beside the operation whenever DONE is offered.
+const DONE_CHECK_HEAD: &str = "goal_satisfied";
+
+const DONE_CHECK: &str =
+    "Is every requirement of the user's entire goal already visibly satisfied \
+on the CURRENT page? Use the screenshot, page text, field values, progress, and recent actions. \
+Answer no if any requested field, choice, selection, or submit is still missing or unconfirmed.";
+
+/// Add the DONE self-check head when DONE is on the menu.
+fn add_done_check(built: &mut BuiltQuestions, request: &Value) {
+    let offers_done = built
+        .criteria_keys
+        .iter()
+        .any(|(head, keys)| head == "operation" && keys.iter().any(|k| k == "DONE"));
+    if !offers_done {
+        return;
+    }
+    let goal = request["goal"].as_str().unwrap_or_default();
+    built.questions.push((
+        DONE_CHECK_HEAD.to_owned(),
+        Question::noul(JsonContent::from(
+            json!({"goal": goal, "rules": DONE_CHECK})
+                .as_object()
+                .expect("object literal")
+                .clone(),
+        )),
+    ));
+}
+
+/// DONE is refused when the model's own self-check says the goal is unmet
+/// (yes-probability below one half). A missing check never refuses.
+fn done_vetoed(reply: &str, satisfied: Option<f64>) -> bool {
+    let is_done = serde_json::from_str::<Value>(reply)
+        .ok()
+        .is_some_and(|v| v["choice"]["kind"] == "DONE");
+    is_done && satisfied.is_some_and(|p| p < 0.5)
+}
+
+/// The same request with DONE taken off the menu.
+fn without_done(request: &Value) -> Value {
+    let mut request = request.clone();
+    if let Some(actions) = request["actions"].as_array_mut() {
+        actions.retain(|a| a["id"] != "DONE");
+    }
+    request
 }
 
 /// jev's `validate_choice`: the choice must be an offered criteria key, the
@@ -356,7 +408,34 @@ impl RemoteTransport for TypesafeTransport {
     ) -> Result<String, String> {
         let request: Value =
             serde_json::from_str(request_json).map_err(|err| format!("typesafe request: {err}"))?;
-        let built = build_questions(&request)?;
+        let (reply, satisfied) = self.decide_once(&request, screenshot, true)?;
+        if !done_vetoed(&reply, satisfied) {
+            return Ok(reply);
+        }
+        // JEV chose DONE but judged the goal unmet: ask once more without
+        // DONE on the menu. The reply is still an offered id, or an abstain.
+        match self.decide_once(&without_done(&request), screenshot, false) {
+            Ok((reply, _)) => Ok(reply),
+            Err(err) => {
+                Ok(json!({"abstain": format!("done self-check refused DONE; {err}")}).to_string())
+            }
+        }
+    }
+}
+
+impl TypesafeTransport {
+    /// One System One call: the reply, and when `check_done` the model's
+    /// probability that the whole goal is already satisfied.
+    fn decide_once(
+        &mut self,
+        request: &Value,
+        screenshot: Option<&Screenshot>,
+        check_done: bool,
+    ) -> Result<(String, Option<f64>), String> {
+        let mut built = build_questions(request)?;
+        if check_done {
+            add_done_check(&mut built, request);
+        }
         let image = match screenshot.filter(|_| self.screenshots) {
             Some(shot) => Some(
                 Image::from_base64(shot.base64())
@@ -378,11 +457,16 @@ impl RemoteTransport for TypesafeTransport {
         }
         .map_err(|err| format!("typesafe call: {err}"))?;
 
-        compose_reply(&built.criteria_keys, |head| {
+        let reply = compose_reply(&built.criteria_keys, |head| {
             response
                 .choice(head)
                 .map_err(|err| format!("typesafe answer {head}: {err}"))
-        })
+        })?;
+        let satisfied = check_done
+            .then(|| response.noul(DONE_CHECK_HEAD).ok().map(|a| a.noul))
+            .flatten()
+            .filter(|p| p.is_finite());
+        Ok((reply, satisfied))
     }
 }
 
@@ -529,8 +613,44 @@ mod tests {
             .get("page")
             .is_none());
         request["page"] = json!({"url": "https://x.test/", "title": "T", "text": "3 + 9 = ?"});
+        request["progress"] =
+            json!({"clauses": ["a"], "current": 0, "satisfied": [false], "typed": []});
         let state = build_questions(&request).unwrap().state;
         assert_eq!(state["page"]["text"], "3 + 9 = ?");
+        assert_eq!(state["progress"]["current"], 0);
+    }
+
+    #[test]
+    fn done_is_vetoed_only_when_the_self_check_says_unmet() {
+        let done = r#"{"choice":{"id":"DONE","kind":"DONE"}}"#;
+        let click = r#"{"choice":{"id":"CLICK:n12","kind":"CLICK"}}"#;
+        assert!(done_vetoed(done, Some(0.2)));
+        assert!(!done_vetoed(done, Some(0.5)), "one half keeps DONE");
+        assert!(!done_vetoed(done, None), "a missing check never refuses");
+        assert!(!done_vetoed(click, Some(0.0)), "only DONE is checked");
+    }
+
+    #[test]
+    fn re_ask_drops_only_done_and_the_check_needs_done_offered() {
+        let request = request();
+        let again = without_done(&request);
+        let ids: Vec<&str> = again["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|a| a["id"].as_str())
+            .collect();
+        assert!(
+            !ids.contains(&"DONE") && ids.contains(&"CLICK:n12"),
+            "{ids:?}"
+        );
+
+        let mut built = build_questions(&request).unwrap();
+        add_done_check(&mut built, &request);
+        assert!(built.questions.iter().any(|(n, _)| n == DONE_CHECK_HEAD));
+        let mut built = build_questions(&again).unwrap();
+        add_done_check(&mut built, &again);
+        assert!(!built.questions.iter().any(|(n, _)| n == DONE_CHECK_HEAD));
     }
 
     #[test]
