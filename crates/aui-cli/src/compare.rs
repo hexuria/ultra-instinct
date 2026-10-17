@@ -20,6 +20,8 @@ use aui_resonance::{Match, RegionMatcher, WeightedMatcher};
 
 #[cfg(any(test, feature = "jev"))]
 use aui_core::InteractionRegion;
+#[cfg(feature = "jev")]
+use aui_remote::typesafe_sdk;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
