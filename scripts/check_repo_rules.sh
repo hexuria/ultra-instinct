@@ -40,5 +40,11 @@ if grep -rnE '\+nightly( |$)' .github/workflows scripts | grep -v 'NIGHTLY'; the
   echo "workflows: use \$NIGHTLY (a dated nightly), not bare +nightly"; fail=1
 fi
 
+# Product code stays benchmark-neutral: no benchmark names, task names, or
+# page classes under crates/ (fixes must be justified by general web behavior).
+if grep -rniE 'miniwob|mind2web|webarena|\balink\b|subbtn' crates --include='*.rs' --include='*.toml' --include='*.json'; then
+  echo "benchmark-neutral: benchmark-specific names found in crates/ above"; fail=1
+fi
+
 if (( fail )); then exit 1; fi
 echo "repo rules: ok"

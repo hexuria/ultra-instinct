@@ -50,7 +50,8 @@ Submit populated search fields before opening a result; a populated field alone 
 WAIT only when the needed control is absent/disabled, or submitted results are still loading. \
 If Search/Submit is visible and the required fields are ready, CLICK it immediately. \
 Recent WAIT actions are not evidence of loading. Prefer a useful visible control over WAIT. \
-DONE requires visible evidence that ALL requirements are satisfied. If asked to open a result, \
+DONE requires visible evidence that ALL requirements are satisfied. \
+state.progress lists the goal's clauses, which are already satisfied, and values already typed. If asked to open a result, \
 a matching link is not enough. BLOCKED means no supported operation can make progress.";
 
 /// Target question rules (jev-ultrafast `TARGET`).
@@ -60,19 +61,26 @@ a target for that operation; another question decides which operation to execute
 a field that already contains the requested value. Choose only an offered element index.";
 
 /// Element-bearing kinds that get a `<kind>_target` head, in jev naming.
-const ELEMENT_HEADS: [(&str, &str); 3] = [
+const ELEMENT_HEADS: [(&str, &str); 5] = [
     ("CLICK", "click_target"),
     ("TYPE_TEXT", "type_text_target"),
     ("SELECT", "select_target"),
+    ("HOVER", "hover_target"),
+    ("SCROLL_IN", "scroll_in_target"),
 ];
 
-const ELEMENT_LABELS: [(&str, &str); 3] = [
+const ELEMENT_LABELS: [(&str, &str); 5] = [
     ("CLICK", "Click an element, button, menu option, autocomplete suggestion, or calendar day."),
     (
         "TYPE_TEXT",
         "Enter or replace text in an editable field. A small LLM will supply the value from the goal.",
     ),
     ("SELECT", "Select an observed dropdown value."),
+    ("HOVER", "Move the mouse over an element that opens a menu or popup on hover."),
+    (
+        "SCROLL_IN",
+        "Scroll inside a scrollable box (a list, a pane) to show more of its content.",
+    ),
 ];
 
 /// Controls offered every step (`for_control` ids carry no region part).
@@ -235,6 +243,14 @@ pub(crate) fn build_questions(request: &Value) -> Result<BuiltQuestions, String>
         operation_criteria.push((kind.to_owned(), Some(JsonContent::from(*label))));
         target_heads.push((head.to_owned(), targets));
     }
+    let drag = drag_heads(actions);
+    let mut drag_rules = false;
+    if let Some((sources, destinations, _)) = &drag {
+        operation_criteria.push(("DRAG".to_owned(), Some(JsonContent::from(DRAG_LABEL))));
+        target_heads.push((DRAG_SOURCE_HEAD.to_owned(), sources.clone()));
+        target_heads.push((DRAG_TARGET_HEAD.to_owned(), destinations.clone()));
+        drag_rules = true;
+    }
     for (kind, label) in CONTROL_LABELS {
         if actions.iter().any(|a| a["id"].as_str() == Some(kind)) {
             operation_criteria.push((kind.to_owned(), Some(JsonContent::from(label))));
@@ -267,11 +283,16 @@ pub(crate) fn build_questions(request: &Value) -> Result<BuiltQuestions, String>
             head.clone(),
             criteria.iter().map(|(k, _)| k.clone()).collect(),
         ));
+        let rules = if drag_rules && head == DRAG_TARGET_HEAD {
+            json!([NEXT_ACTION, TARGET, DRAG_TARGET_RULE])
+        } else {
+            json!([NEXT_ACTION, TARGET])
+        };
         questions.push((
             head,
             Question::choice(
                 JsonContent::from(
-                    json!({"goal": goal, "rules": [NEXT_ACTION, TARGET]})
+                    json!({"goal": goal, "rules": rules})
                         .as_object()
                         .expect("object literal")
                         .clone(),
@@ -279,6 +300,10 @@ pub(crate) fn build_questions(request: &Value) -> Result<BuiltQuestions, String>
                 criteria,
             ),
         ));
+    }
+
+    if let Some((_, _, pairs)) = drag {
+        criteria_keys.push((DRAG_PAIRS.to_owned(), pairs));
     }
 
     let mut state = json!({
@@ -290,11 +315,107 @@ pub(crate) fn build_questions(request: &Value) -> Result<BuiltQuestions, String>
     if let Some(page) = request.get("page").filter(|p| p.is_object()) {
         state["page"] = page.clone();
     }
+    // The run's own record: which goal clauses are done, what was typed.
+    if let Some(progress) = request.get("progress").filter(|p| p.is_object()) {
+        state["progress"] = progress.clone();
+    }
     Ok(BuiltQuestions {
         state,
         questions,
         criteria_keys,
     })
+}
+
+const DRAG_LABEL: &str =
+    "Drag an element onto another: reorder a list, move a piece, slide a handle, resize.";
+const DRAG_SOURCE_HEAD: &str = "drag_source";
+/// Release point rule: never the dragged element itself.
+const DRAG_TARGET_RULE: &str = "This chooses where to RELEASE the dragged element: a different \
+element from the one being dragged (the drag_source), at the place the goal names.";
+const DRAG_TARGET_HEAD: &str = "drag_target";
+/// Not a question: the offered `src>dst` pairs, kept for answer validation.
+const DRAG_PAIRS: &str = "__drag_pairs";
+
+/// Source and destination criteria for the offered DRAG pairs, plus the
+/// pairs themselves. `None` when no DRAG is offered.
+fn drag_heads(actions: &[Value]) -> Option<(Criteria, Criteria, Vec<String>)> {
+    let mut sources: Criteria = Vec::new();
+    let mut destinations: Criteria = Vec::new();
+    let mut pairs = Vec::new();
+    for a in actions.iter().filter(|a| a["kind"] == "DRAG") {
+        let id = a["id"].as_str()?;
+        let pair = id.strip_prefix("DRAG:")?;
+        let (src, dst) = pair.split_once('>')?;
+        pairs.push(pair.to_owned());
+        if !sources.iter().any(|(k, _)| k == src) {
+            let mut element = Map::new();
+            let label = a["label"].as_str().unwrap_or("");
+            element.insert("element".to_owned(), json!(format!("[{src}] {label}")));
+            for key in ["role", "near_text", "box"] {
+                if let Some(value) = a.get(key) {
+                    element.insert(key.to_owned(), value.clone());
+                }
+            }
+            sources.push((src.to_owned(), Some(JsonContent::from(element))));
+        }
+        if !destinations.iter().any(|(k, _)| k == dst) {
+            let mut element = Map::new();
+            let label = a["dest"]["label"].as_str().unwrap_or("");
+            element.insert("element".to_owned(), json!(format!("[{dst}] {label}")));
+            if let Some(b) = a["dest"].get("box") {
+                element.insert("box".to_owned(), b.clone());
+            }
+            destinations.push((dst.to_owned(), Some(JsonContent::from(element))));
+        }
+    }
+    (!pairs.is_empty()).then_some((sources, destinations, pairs))
+}
+
+/// Yes / no head asked beside the operation whenever DONE is offered.
+const DONE_CHECK_HEAD: &str = "goal_satisfied";
+
+const DONE_CHECK: &str =
+    "Is every requirement of the user's entire goal already visibly satisfied \
+on the CURRENT page? Use the screenshot, page text, field values, progress, and recent actions. \
+Answer no if any requested field, choice, selection, or submit is still missing or unconfirmed.";
+
+/// Add the DONE self-check head when DONE is on the menu.
+fn add_done_check(built: &mut BuiltQuestions, request: &Value) {
+    let offers_done = built
+        .criteria_keys
+        .iter()
+        .any(|(head, keys)| head == "operation" && keys.iter().any(|k| k == "DONE"));
+    if !offers_done {
+        return;
+    }
+    let goal = request["goal"].as_str().unwrap_or_default();
+    built.questions.push((
+        DONE_CHECK_HEAD.to_owned(),
+        Question::noul(JsonContent::from(
+            json!({"goal": goal, "rules": DONE_CHECK})
+                .as_object()
+                .expect("object literal")
+                .clone(),
+        )),
+    ));
+}
+
+/// DONE is refused when the model's own self-check says the goal is unmet
+/// (yes-probability below one half). A missing check never refuses.
+fn done_vetoed(reply: &str, satisfied: Option<f64>) -> bool {
+    let is_done = serde_json::from_str::<Value>(reply)
+        .ok()
+        .is_some_and(|v| v["choice"]["kind"] == "DONE");
+    is_done && satisfied.is_some_and(|p| p < 0.5)
+}
+
+/// The same request with DONE taken off the menu.
+fn without_done(request: &Value) -> Value {
+    let mut request = request.clone();
+    if let Some(actions) = request["actions"].as_array_mut() {
+        actions.retain(|a| a["id"] != "DONE");
+    }
+    request
 }
 
 /// jev's `validate_choice`: the choice must be an offered criteria key, the
@@ -356,7 +477,34 @@ impl RemoteTransport for TypesafeTransport {
     ) -> Result<String, String> {
         let request: Value =
             serde_json::from_str(request_json).map_err(|err| format!("typesafe request: {err}"))?;
-        let built = build_questions(&request)?;
+        let (reply, satisfied) = self.decide_once(&request, screenshot, true)?;
+        if !done_vetoed(&reply, satisfied) {
+            return Ok(reply);
+        }
+        // JEV chose DONE but judged the goal unmet: ask once more without
+        // DONE on the menu. The reply is still an offered id, or an abstain.
+        match self.decide_once(&without_done(&request), screenshot, false) {
+            Ok((reply, _)) => Ok(reply),
+            Err(err) => {
+                Ok(json!({"abstain": format!("done self-check refused DONE; {err}")}).to_string())
+            }
+        }
+    }
+}
+
+impl TypesafeTransport {
+    /// One System One call: the reply, and when `check_done` the model's
+    /// probability that the whole goal is already satisfied.
+    fn decide_once(
+        &mut self,
+        request: &Value,
+        screenshot: Option<&Screenshot>,
+        check_done: bool,
+    ) -> Result<(String, Option<f64>), String> {
+        let mut built = build_questions(request)?;
+        if check_done {
+            add_done_check(&mut built, request);
+        }
         let image = match screenshot.filter(|_| self.screenshots) {
             Some(shot) => Some(
                 Image::from_base64(shot.base64())
@@ -378,11 +526,16 @@ impl RemoteTransport for TypesafeTransport {
         }
         .map_err(|err| format!("typesafe call: {err}"))?;
 
-        compose_reply(&built.criteria_keys, |head| {
+        let reply = compose_reply(&built.criteria_keys, |head| {
             response
                 .choice(head)
                 .map_err(|err| format!("typesafe answer {head}: {err}"))
-        })
+        })?;
+        let satisfied = check_done
+            .then(|| response.noul(DONE_CHECK_HEAD).ok().map(|a| a.noul))
+            .flatten()
+            .filter(|p| p.is_finite());
+        Ok((reply, satisfied))
     }
 }
 
@@ -398,6 +551,23 @@ pub(crate) fn compose_reply<'a>(
         answer_for("operation")?,
         keys_for(criteria_keys, "operation")?,
     )?;
+    if operation == "DRAG" {
+        let source = validate_choice(
+            answer_for(DRAG_SOURCE_HEAD)?,
+            keys_for(criteria_keys, DRAG_SOURCE_HEAD)?,
+        )?;
+        let dest = validate_choice(
+            answer_for(DRAG_TARGET_HEAD)?,
+            keys_for(criteria_keys, DRAG_TARGET_HEAD)?,
+        )?;
+        let pair = format!("{source}>{dest}");
+        // Two valid heads can still name a pair the menu does not offer (or
+        // the same region twice): that is an abstain, never a new action.
+        if !keys_for(criteria_keys, DRAG_PAIRS)?.contains(&pair) {
+            return Ok(json!({"abstain": format!("drag {pair} was not offered")}).to_string());
+        }
+        return Ok(json!({"choice": {"id": format!("DRAG:{pair}"), "kind": "DRAG"}}).to_string());
+    }
     let target = match ELEMENT_HEADS.iter().find(|(kind, _)| *kind == operation) {
         Some((_, head)) => Some(validate_choice(
             answer_for(head)?,
@@ -529,8 +699,93 @@ mod tests {
             .get("page")
             .is_none());
         request["page"] = json!({"url": "https://x.test/", "title": "T", "text": "3 + 9 = ?"});
+        request["progress"] =
+            json!({"clauses": ["a"], "current": 0, "satisfied": [false], "typed": []});
         let state = build_questions(&request).unwrap().state;
         assert_eq!(state["page"]["text"], "3 + 9 = ?");
+        assert_eq!(state["progress"]["current"], 0);
+    }
+
+    #[test]
+    fn drag_composes_only_offered_pairs() {
+        let request = json!({
+            "goal": "Drag Card into the bin",
+            "actions": [
+                {"id": "DRAG:n1>n2", "kind": "DRAG", "label": "Card", "dest": {"id": "n2", "label": "Bin", "box": [0, 0, 9, 9]}},
+                {"id": "DRAG:n1>n3", "kind": "DRAG", "label": "Card", "dest": {"id": "n3", "label": "Shelf", "box": [0, 0, 9, 9]}},
+                {"id": "DONE", "kind": "DONE", "label": "done"}
+            ],
+            "history": []
+        });
+        let built = build_questions(&request).unwrap();
+        let names: Vec<&str> = built.questions.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["operation", "drag_source", "drag_target"]);
+        let answers = |src: &str, dst: &str| {
+            std::collections::BTreeMap::from([
+                (
+                    "operation".to_owned(),
+                    answer("DRAG", &[("DRAG", 0.9), ("DONE", 0.1)]),
+                ),
+                ("drag_source".to_owned(), answer(src, &[(src, 1.0)])),
+                (
+                    "drag_target".to_owned(),
+                    answer(
+                        dst,
+                        &[
+                            ("n2", if dst == "n2" { 0.8 } else { 0.2 }),
+                            ("n3", if dst == "n3" { 0.8 } else { 0.2 }),
+                        ],
+                    ),
+                ),
+            ])
+        };
+        let compose = |a: &std::collections::BTreeMap<String, ChoiceAnswer>| {
+            compose_reply(&built.criteria_keys, |head| {
+                a.get(head).ok_or_else(|| format!("missing {head}"))
+            })
+        };
+        assert_eq!(
+            compose(&answers("n1", "n2")).unwrap(),
+            r#"{"choice":{"id":"DRAG:n1>n2","kind":"DRAG"}}"#
+        );
+        // The only source, and a destination it offers.
+        assert_eq!(
+            compose(&answers("n1", "n3")).unwrap(),
+            r#"{"choice":{"id":"DRAG:n1>n3","kind":"DRAG"}}"#
+        );
+    }
+
+    #[test]
+    fn done_is_vetoed_only_when_the_self_check_says_unmet() {
+        let done = r#"{"choice":{"id":"DONE","kind":"DONE"}}"#;
+        let click = r#"{"choice":{"id":"CLICK:n12","kind":"CLICK"}}"#;
+        assert!(done_vetoed(done, Some(0.2)));
+        assert!(!done_vetoed(done, Some(0.5)), "one half keeps DONE");
+        assert!(!done_vetoed(done, None), "a missing check never refuses");
+        assert!(!done_vetoed(click, Some(0.0)), "only DONE is checked");
+    }
+
+    #[test]
+    fn re_ask_drops_only_done_and_the_check_needs_done_offered() {
+        let request = request();
+        let again = without_done(&request);
+        let ids: Vec<&str> = again["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|a| a["id"].as_str())
+            .collect();
+        assert!(
+            !ids.contains(&"DONE") && ids.contains(&"CLICK:n12"),
+            "{ids:?}"
+        );
+
+        let mut built = build_questions(&request).unwrap();
+        add_done_check(&mut built, &request);
+        assert!(built.questions.iter().any(|(n, _)| n == DONE_CHECK_HEAD));
+        let mut built = build_questions(&again).unwrap();
+        add_done_check(&mut built, &again);
+        assert!(!built.questions.iter().any(|(n, _)| n == DONE_CHECK_HEAD));
     }
 
     #[test]
@@ -683,6 +938,8 @@ mod tests {
                 region id=n12 role=button label="Send" x=10 y=10 w=80 h=24 actions=click sources=dom,accessibility
                 region id=n44 role=text_field label="Message" x=10 y=60 w=200 h=24 actions=type,focus sources=dom,accessibility
                 region id=n50 role=combobox label="Plan" x=10 y=110 w=200 h=24 actions=click,select,focus sources=dom,accessibility
+                region id=n60 role=menu_item label="File" x=10 y=160 w=60 h=24 actions=click,hover sources=dom,accessibility
+                region id=n70 role=generic label="Inbox" x=300 y=10 w=300 h=400 actions=scroll sources=dom
                 "#,
             )
             .unwrap(),
@@ -691,6 +948,8 @@ mod tests {
             ("CLICK", Some("n12"), "CLICK:n12"),
             ("TYPE_TEXT", Some("n44"), "TYPE_TEXT:n44"),
             ("SELECT", Some("n50"), "SELECT:n50"),
+            ("HOVER", Some("n60"), "HOVER:n60"),
+            ("SCROLL_IN", Some("n70"), "SCROLL_IN:n70"),
             ("SCROLL_DOWN", None, "SCROLL_DOWN"),
             ("DONE", None, "DONE"),
         ] {

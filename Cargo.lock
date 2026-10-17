@@ -82,10 +82,9 @@ dependencies = [
  "aui-observe",
  "aui-policy",
  "aui-protocol",
+ "aui-remote",
  "aui-resonance",
- "reqwest",
  "serde_json",
- "typesafe-sdk",
 ]
 
 [[package]]
@@ -167,6 +166,17 @@ name = "aui-protocol"
 version = "0.1.0"
 dependencies = [
  "aui-core",
+]
+
+[[package]]
+name = "aui-remote"
+version = "0.1.0"
+dependencies = [
+ "aui-core",
+ "aui-policy",
+ "reqwest",
+ "serde_json",
+ "typesafe-sdk",
 ]
 
 [[package]]

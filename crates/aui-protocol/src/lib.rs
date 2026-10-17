@@ -16,7 +16,7 @@ mod values;
 pub use guard::{
     FirewallPhase, GuardCandidate, GuardDecision, GuardEvidence, GuardReason, FIREWALL_ORDER,
 };
-pub use ticket::{ActionTicket, TicketInvalid};
+pub use ticket::{ActionTicket, TicketDest, TicketInvalid};
 pub use values::{MatcherConfidence, ProtocolError, StateDelta};
 
 /// Legacy six-phase loop. Prefer [`FirewallPhase`] / [`FIREWALL_ORDER`].

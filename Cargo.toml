@@ -12,6 +12,7 @@ members = [
     "crates/aui-policy",
     "crates/aui-agent",
     "crates/aui-mcp",
+    "crates/aui-remote",
     "crates/aui-cli",
     "crates/aui-dojo",
     # Experimental. Not on the product path. Build with -p aui-hyper --features unused

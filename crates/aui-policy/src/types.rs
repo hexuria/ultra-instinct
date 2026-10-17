@@ -135,12 +135,27 @@ pub struct PageView {
     pub text: String,
 }
 
+/// Where the run stands on its goal: the clauses, which one is active,
+/// which are done, and the values already typed. Built by the agent from its
+/// own history; no page reads.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Progress {
+    pub clauses: Vec<String>,
+    pub current: usize,
+    /// One per clause: finished, or (the active one) an effect matched it.
+    pub satisfied: Vec<bool>,
+    /// `(TYPE_TEXT action id, value)` for each successful typing; a value
+    /// typed into a secret field reads `"••••"`.
+    pub typed: Vec<(String, String)>,
+}
+
 /// What a decision may see beyond the action menu. Evidence only: it never
 /// names a target, and the reply stays an offered id.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DecisionEvidence {
     pub screenshot: Option<Screenshot>,
     pub page: Option<PageView>,
+    pub progress: Option<Progress>,
 }
 
 /// Which [`DecisionEvidence`] a policy reads. The agent captures nothing

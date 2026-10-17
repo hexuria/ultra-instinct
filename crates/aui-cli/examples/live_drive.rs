@@ -39,8 +39,8 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use aui_browser::{CdpTransport, WebSocketTransport};
+use aui_remote::typesafe_sdk::{self, JsonContent, Question};
 use serde_json::{json, Value};
-use typesafe_sdk::{JsonContent, Question};
 
 const MAX_STEPS: usize = 14;
 

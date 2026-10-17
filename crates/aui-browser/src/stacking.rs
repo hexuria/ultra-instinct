@@ -167,6 +167,17 @@ pub fn apply_stacking_occlusion(
 /// own hit test at their center landed on them, which beats this
 /// approximation (an unkept fixed ancestor can lift a static field above
 /// positioned page content).
+/// Regions a pointer must reach: CLICK, DRAG, HOVER, and SCROLL_IN
+/// targets. Their centers are the ones occlusion checks.
+pub(crate) fn pointer_target(region: &InteractionRegion) -> bool {
+    region.actions().iter().any(|a| {
+        matches!(
+            a,
+            Action::Click | Action::Drag | Action::Hover | Action::Scroll
+        )
+    })
+}
+
 pub fn apply_stacking_occlusion_except(
     manifold: &mut InteractionManifold,
     styles: &BTreeMap<RegionId, (StackingStyle, u32)>,
@@ -175,10 +186,7 @@ pub fn apply_stacking_occlusion_except(
     let regions: Vec<InteractionRegion> = manifold.regions().cloned().collect();
     let mut buried: Vec<RegionId> = Vec::new();
     for victim in &regions {
-        if !victim.actions().contains(&Action::Click)
-            || victim.flags().occluded()
-            || hit_owned.contains(victim.id())
-        {
+        if !pointer_target(victim) || victim.flags().occluded() || hit_owned.contains(victim.id()) {
             continue;
         }
         let Some((victim_style, victim_order)) = styles.get(victim.id()) else {

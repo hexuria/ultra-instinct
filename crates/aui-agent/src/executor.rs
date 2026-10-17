@@ -4,13 +4,16 @@
 //! input in the agent loop. In order, immediately before input:
 //!
 //! 1. the ticket must not be consumed (one-shot ledger);
-//! 2. the requested [`Input`] must be the ticket's action (no operation swap);
+//! 2. the requested [`Input`] must be the ticket's action (no operation swap),
+//!    a DRAG must release on the ticket's destination, and a surface-cell
+//!    click must name the ticket's cell (neither rides any other input);
 //! 3. the browser is observed **now** (after any text-resolution latency);
 //! 4. the ticket is revalidated against that observation: same world
 //!    fingerprint (focus, front layer, clickable set, occluded set), target
 //!    still present with the same role / label / fingerprint;
 //! 5. the hard gate re-runs on the fresh region (disabled, hidden, occluded,
-//!    front-layer, offscreen, action claim);
+//!    front-layer, offscreen, action claim), and on a DRAG's fresh drop
+//!    target;
 //! 6. the ticket is marked consumed **before** dispatch, so a failed or
 //!    partial dispatch can never be retried with the same lease;
 //! 7. input goes to `ticket.target_id` — never a caller-supplied id.
@@ -90,6 +93,24 @@ pub fn execute_ticketed<B: BrowserRuntime + ?Sized>(
     if input.action() != ticket.action {
         return Err(ExecError::Ticket(TicketInvalid::TicketMismatch));
     }
+    // A drag releases exactly where its ticket says; a ticket without a
+    // destination never drives a drag, and a destination never rides a
+    // non-drag input.
+    match (input, &ticket.dest) {
+        (Input::Drag { to }, Some(dest)) if *to == dest.id => {}
+        (Input::Drag { .. }, _) | (_, Some(_)) => {
+            return Err(ExecError::Ticket(TicketInvalid::TicketMismatch))
+        }
+        _ => {}
+    }
+    // A cell ticket clicks exactly its cell; a plain ticket never clicks a cell.
+    let cell = match input {
+        Input::ClickAt { cell } => Some(*cell),
+        _ => None,
+    };
+    if cell != ticket.cell {
+        return Err(ExecError::Ticket(TicketInvalid::TicketMismatch));
+    }
     let fresh = browser
         .observe()
         .map_err(|e| ExecError::Observe(e.to_string()))?
@@ -101,6 +122,12 @@ pub fn execute_ticketed<B: BrowserRuntime + ?Sized>(
         .get(&ticket.target_id)
         .ok_or(ExecError::Ticket(TicketInvalid::TargetGone))?;
     gate_check(&fresh, region, ticket.action).map_err(ExecError::Gate)?;
+    if let Some(dest) = &ticket.dest {
+        let drop = fresh
+            .get(&dest.id)
+            .ok_or(ExecError::Ticket(TicketInvalid::TargetGone))?;
+        aui_guard::check_drop_target(&fresh, drop).map_err(ExecError::Gate)?;
+    }
 
     ledger
         .mark_consumed(ticket.ticket_id)

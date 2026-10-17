@@ -744,6 +744,9 @@ fn parse_ticket(value: &Value) -> Result<aui_protocol::ActionTicket, ToolError> 
         target_label,
         target_fingerprint: parse_hex("target_fingerprint")?,
         world_fingerprint: parse_hex("world_fingerprint")?,
+        // MCP tickets are single-target: the host never drags through them.
+        dest: None,
+        cell: None,
     })
 }
 

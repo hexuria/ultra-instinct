@@ -67,6 +67,8 @@ pub fn issue_ticket(
         target_label: target.label.clone(),
         target_fingerprint: region.fingerprint().bits(),
         world_fingerprint: world_fingerprint(world),
+        dest: None,
+        cell: None,
     }
 }
 
@@ -92,6 +94,21 @@ pub fn revalidate(
         || region.fingerprint().bits() != ticket.target_fingerprint
     {
         return Err(TicketInvalid::TargetChanged);
+    }
+    if let Some(dest) = &ticket.dest {
+        let now = WorldSnapshot::of_target(manifold, None, &dest.id);
+        if world_fingerprint(&now) != dest.world_fingerprint {
+            return Err(TicketInvalid::WorldChanged);
+        }
+        let Some(region) = manifold.get(&dest.id) else {
+            return Err(TicketInvalid::TargetGone);
+        };
+        if region.role() != dest.role
+            || region.label() != dest.label
+            || region.fingerprint().bits() != dest.fingerprint
+        {
+            return Err(TicketInvalid::TargetChanged);
+        }
     }
     Ok(())
 }

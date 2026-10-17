@@ -77,6 +77,22 @@ pub trait TextResolver {
     }
 }
 
+/// Label words that mark a secret field.
+const SECRET_LABEL_WORDS: [&str; 10] = [
+    "password", "passcode", "pin", "cvv", "cvc", "otp", "ssn", "card", "security", "one-time",
+];
+
+/// Whether a field holds a secret: a password / hidden / file input, or a
+/// label naming a password, PIN, CVV, card, or one-time code. A derived value
+/// never goes into one, and a value typed into one is masked in progress.
+pub fn is_secret_field(input_type: Option<&str>, label: &str) -> bool {
+    matches!(input_type, Some("password" | "hidden" | "file"))
+        || label
+            .to_lowercase()
+            .split(|c: char| !c.is_alphanumeric() && c != '-')
+            .any(|word| SECRET_LABEL_WORDS.contains(&word))
+}
+
 /// Ground a SELECT payload in the observed enabled options.
 pub fn ground_select(
     goal: &str,
@@ -333,6 +349,17 @@ fn fill_with_pattern(goal: &str, field: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn secret_fields_by_type_or_label_word() {
+        use super::is_secret_field;
+        assert!(is_secret_field(Some("password"), "Anything"));
+        assert!(is_secret_field(Some("text"), "Card number"));
+        assert!(is_secret_field(None, "One-time code"));
+        assert!(is_secret_field(None, "PIN"));
+        assert!(!is_secret_field(Some("text"), "Username"));
+        assert!(!is_secret_field(None, "Spinner"), "whole words only");
+    }
+
     use super::*;
 
     #[test]

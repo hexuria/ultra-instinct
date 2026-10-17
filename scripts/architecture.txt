@@ -11,9 +11,9 @@
 #
 # The product path is blocking and single-threaded by design (AGENTS.md anti-drift #10):
 # no async runtime, HTTP client, or model SDK below aui-cli. typesafe-sdk and reqwest
-# are allowed only in aui-cli's closure (the optional `jev`, `clef`, and `model-text`
-# legs), so tokio / reqwest / hyper reach the workspace exclusively through those
-# gated edges.
+# live only in aui-remote, a leaf only aui-cli depends on (the optional `jev`, `clef`,
+# and `model-text` legs), so tokio / reqwest / hyper reach the workspace exclusively
+# through those gated edges.
 aui-core:
     | tokio axum sqlx reqwest hyper typesafe-sdk
 aui-geometry: aui-core
@@ -36,7 +36,9 @@ aui-agent: aui-core aui-browser aui-guard aui-observe aui-policy aui-protocol
     | tokio axum sqlx reqwest hyper typesafe-sdk
 aui-mcp: aui-protocol aui-core aui-resonance aui-browser aui-guard aui-observe aui-agent aui-cdp
     | tokio axum sqlx reqwest hyper typesafe-sdk
-aui-cli: aui-core aui-resonance aui-browser aui-guard aui-observe aui-mcp aui-protocol aui-agent aui-policy aui-dojo
+aui-remote: aui-policy
+    | axum sqlx
+aui-cli: aui-core aui-resonance aui-browser aui-guard aui-observe aui-mcp aui-protocol aui-agent aui-policy aui-dojo aui-remote
     | axum sqlx
 aui-dojo: aui-core
     | tokio axum sqlx reqwest hyper typesafe-sdk
