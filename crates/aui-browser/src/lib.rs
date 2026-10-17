@@ -940,6 +940,28 @@ mod compact_observe {
     }
 
     #[test]
+    fn a_scrollable_box_claims_scroll_but_not_click() {
+        let page = PageSpec::new(
+            vec![DomSpec::button(10, 100, "", (10.0, 60.0, 140.0, 120.0))
+                .with_tag("DIV")
+                .with_compact_state(serde_json::json!({"sc": 1}))],
+            vec![],
+            "https://example.test/",
+            "List",
+        );
+        let script = ScriptBuilder::new().observe_compact(&page).to_json();
+        let mut session = BrowserSession::new(ReplayTransport::parse(&script).unwrap());
+        let region = session
+            .observe()
+            .unwrap()
+            .get_str("n100")
+            .expect("scroll box kept")
+            .clone();
+        assert!(region.actions().contains(&aui_core::Action::Scroll));
+        assert!(!region.actions().contains(&aui_core::Action::Click));
+    }
+
+    #[test]
     fn a_text_less_box_becomes_a_region_only_with_its_hint() {
         let boxed = |node, backend, x, hint: bool| {
             let spec = DomSpec::button(node, backend, "", (x, 100.0, 30.0, 30.0))

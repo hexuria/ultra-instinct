@@ -193,7 +193,7 @@ impl<T: CdpTransport> BrowserSession<T> {
             element
                 .hu_k
                 .and_then(|k| compact.as_ref().and_then(|c| c.node(k)))
-                .is_some_and(|n| n.click_hint)
+                .is_some_and(|n| n.click_hint || n.scrollable)
         });
         for element in dom.elements.iter().chain(hinted_boxes) {
             let node = element
@@ -216,6 +216,10 @@ impl<T: CdpTransport> BrowserSession<T> {
                 // a pointer cursor) are offered like links.
                 if node.is_some_and(|n| n.click_hint) {
                     extract::add_click(&mut raw.actions);
+                }
+                // A box whose own content scrolls can be scrolled in place.
+                if node.is_some_and(|n| n.scrollable) && !raw.actions.contains(&Action::Scroll) {
+                    raw.actions.push(Action::Scroll);
                 }
                 dom_raw.push(raw);
             }
@@ -530,6 +534,31 @@ impl<T: CdpTransport> BrowserSession<T> {
     /// Scroll the page by [`SCROLL_VIEWPORT_FRACTION`] of the viewport with a
     /// trusted wheel event at the viewport center. Page-level primitive: no
     /// target, no model-supplied coordinates.
+    /// Scroll the observed region `id`'s own content down by most of its
+    /// height: a trusted wheel at its center, which scrolls the innermost
+    /// scrollable box under the pointer.
+    #[doc(hidden)]
+    pub fn scroll_region(&mut self, id: &RegionId) -> Result<(), BrowserError> {
+        let height = self
+            .manifold
+            .as_ref()
+            .and_then(|m| m.get(id))
+            .map(|region| region.rect().height())
+            .ok_or(BrowserError::TargetUnresolved)?;
+        let binding = self.binding_for(id)?;
+        self.stale = true;
+        let params = json!({
+            "type": "mouseWheel",
+            "x": binding.center_x,
+            "y": binding.center_y,
+            "deltaX": 0,
+            "deltaY": (height * SCROLL_VIEWPORT_FRACTION).round().max(40.0)
+        })
+        .to_string();
+        self.call("Input.dispatchMouseEvent", &params)?;
+        Ok(())
+    }
+
     pub fn scroll(&mut self, direction: ScrollDirection) -> Result<(), BrowserError> {
         let viewport = self
             .manifold

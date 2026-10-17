@@ -437,11 +437,7 @@ fn gated_input(
         "select" => Input::Select(req_str(arguments, "text")?.to_owned()),
         other => return Err(ToolError::UnknownTool(other.to_owned())),
     };
-    let action = match input {
-        Input::Click | Input::ScriptClick => Action::Click,
-        Input::Type(_) => Action::Type,
-        Input::Select(_) => Action::Select,
-    };
+    let action = input.action();
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
     let outcome = (|| {

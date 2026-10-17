@@ -161,6 +161,12 @@ function clickHint(el){
 }
 var SVG_NS='http://www.w3.org/2000/svg';
 var SHAPES={circle:1,ellipse:1,rect:1,polygon:1,polyline:1,path:1,text:1};
+// A box whose own content scrolls: overflow-y auto / scroll with more
+// content than room.
+function scrollable(el){
+  var oy=el.ownerDocument.defaultView.getComputedStyle(el).overflowY;
+  return (oy==='auto'||oy==='scroll')&&el.scrollHeight>el.clientHeight+4;
+}
 function candidate(el){
   var name=el.nodeName.toUpperCase();
   if(name==='SCRIPT'||name==='STYLE'||name==='HEAD'||name==='HTML'||name==='BODY')return false;
@@ -170,7 +176,7 @@ function candidate(el){
   if(!TEXTUAL[name])return false;
   var aria=el.getAttribute('aria-label');
   // A text-less box counts only with a click hint (extract::needs_hint).
-  return (aria!==null&&aria.trim()!=='')||directText(el)||clickHint(el);
+  return (aria!==null&&aria.trim()!=='')||directText(el)||clickHint(el)||scrollable(el);
 }
 function visit(el,doc,off){
   if(el.nodeType!==1)return;
@@ -184,6 +190,7 @@ function visit(el,doc,off){
       rec.s=stylePairs(el);
       rec.h=hitAt(document,r[0]+r[2]/2,r[1]+r[3]/2);
       if(clickHint(el))rec.ck=1;
+      if(scrollable(el))rec.sc=1;
       var name=el.nodeName.toUpperCase();
       var inputType=(el.getAttribute('type')||'text').toLowerCase();
       if(name==='INPUT')rec.it=inputType;
@@ -259,6 +266,9 @@ pub(crate) struct CompactNode {
     /// The page made this element clickable by script: an `onclick`
     /// property, or a pointer cursor it sets itself.
     pub click_hint: bool,
+    /// The element's own content scrolls (overflow-y auto / scroll, taller
+    /// than its box).
+    pub scrollable: bool,
 }
 
 /// Compact hit-test evidence for one element.
@@ -350,6 +360,7 @@ pub(crate) fn parse(eval_result_json: &str) -> Result<CompactSnapshot, BrowserEr
         };
         let state = parse_element_state(record);
         let click_hint = record.get("ck").is_some_and(|ck| ck.as_i64() == Some(1));
+        let scrollable = record.get("sc").is_some_and(|sc| sc.as_i64() == Some(1));
         out.nodes.insert(
             k,
             CompactNode {
@@ -358,6 +369,7 @@ pub(crate) fn parse(eval_result_json: &str) -> Result<CompactSnapshot, BrowserEr
                 hit,
                 state,
                 click_hint,
+                scrollable,
             },
         );
     }

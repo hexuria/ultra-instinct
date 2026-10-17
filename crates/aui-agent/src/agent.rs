@@ -466,6 +466,8 @@ pub fn region_action(kind: ActionKind) -> Option<Action> {
         ActionKind::Click => Some(Action::Click),
         ActionKind::TypeText => Some(Action::Type),
         ActionKind::Select => Some(Action::Select),
+        ActionKind::Hover => Some(Action::Hover),
+        ActionKind::ScrollIn => Some(Action::Scroll),
         _ => None,
     }
 }
@@ -1087,12 +1089,16 @@ where
                     .clone()
                     .ok_or_else(|| AgentError::Text("SELECT without resolved option".into()))?,
             ),
+            ActionKind::Hover => Input::Hover,
+            ActionKind::ScrollIn => Input::ScrollIn,
             _ => unreachable!("region_action filtered kinds"),
         };
 
         let input_name = match &input {
             Input::Click => "click",
             Input::ScriptClick => "script-click",
+            Input::Hover => "hover",
+            Input::ScrollIn => "scroll-in",
             Input::Type(_) => "type",
             Input::Select(_) => "select",
         };

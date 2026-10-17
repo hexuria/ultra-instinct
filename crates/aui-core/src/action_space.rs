@@ -37,6 +37,10 @@ pub enum ActionKind {
     Wait,
     Done,
     Blocked,
+    /// Move the pointer over a region that opens something on hover.
+    Hover,
+    /// Scroll a scrollable region's own content down by one view.
+    ScrollIn,
 }
 
 impl ActionKind {
@@ -55,6 +59,8 @@ impl ActionKind {
             Self::Wait => "WAIT",
             Self::Done => "DONE",
             Self::Blocked => "BLOCKED",
+            Self::Hover => "HOVER",
+            Self::ScrollIn => "SCROLL_IN",
         }
     }
 
@@ -68,6 +74,8 @@ impl ActionKind {
             "WAIT" | "wait" => Self::Wait,
             "DONE" | "done" => Self::Done,
             "BLOCKED" | "blocked" => Self::Blocked,
+            "HOVER" | "hover" => Self::Hover,
+            "SCROLL_IN" | "scroll_in" => Self::ScrollIn,
             _ => return None,
         })
     }
@@ -363,9 +371,11 @@ const fn map_region_claim(claim: Action) -> Option<ActionKind> {
         Action::Click | Action::Toggle => Some(ActionKind::Click),
         Action::Type => Some(ActionKind::TypeText),
         Action::Select => Some(ActionKind::Select),
-        // Focus/Hover/Scroll on a region are not agent operations; page scroll
-        // is offered as SCROLL_UP / SCROLL_DOWN controls.
-        Action::Focus | Action::Hover | Action::Scroll => None,
+        // A region that opens something on hover, and a region whose own
+        // content scrolls. Page scroll stays the SCROLL_UP / SCROLL_DOWN controls.
+        Action::Hover => Some(ActionKind::Hover),
+        Action::Scroll => Some(ActionKind::ScrollIn),
+        Action::Focus => None,
     }
 }
 
@@ -502,6 +512,8 @@ mod tests {
             ActionKind::Wait,
             ActionKind::Done,
             ActionKind::Blocked,
+            ActionKind::Hover,
+            ActionKind::ScrollIn,
         ] {
             assert_eq!(ActionKind::parse(kind.as_str()), Some(kind));
         }
@@ -620,6 +632,28 @@ mod tests {
         // Directly above (x overlap) at the above limit and one pixel past it.
         assert_eq!(at(-100.0, NEAR_TEXT_ABOVE_GAP_PX).as_deref(), Some("Name"));
         assert_eq!(at(-100.0, NEAR_TEXT_ABOVE_GAP_PX + 1.0), None);
+    }
+
+    #[test]
+    fn hover_and_scroll_claims_offer_target_bound_hover_and_scroll_in() {
+        let m = parse_fixture(
+            r#"
+            viewport w=800 h=600
+            region id=menu role=menu_item label="File" x=10 y=10 w=60 h=24 actions=click,hover sources=dom
+            region id=list role=generic label="" x=10 y=50 w=200 h=300 actions=scroll sources=dom
+            "#,
+        )
+        .unwrap();
+        let space = ActionSpace::from_manifold(&m);
+        let hover = space.get_str("HOVER:menu").expect("hover offered");
+        assert_eq!(hover.kind(), ActionKind::Hover);
+        assert!(!hover.kind().is_control());
+        let scroll = space.get_str("SCROLL_IN:list").expect("scroll-in offered");
+        assert_eq!(scroll.target().map(RegionId::as_str), Some("list"));
+        assert!(
+            space.get_str("CLICK:list").is_none(),
+            "scrolling is not clicking"
+        );
     }
 
     #[test]

@@ -405,6 +405,9 @@ fn element_from(node: &Value) -> Option<DomElement> {
     if svg_shape || marked_clickable {
         add_click(&mut actions);
     }
+    if opens_on_hover(&attributes, role) && !actions.contains(&Action::Hover) {
+        actions.push(Action::Hover);
+    }
     let needs_hint = hint_box && !marked_clickable;
     Some(DomElement {
         node_id,
@@ -492,6 +495,16 @@ fn attribute_click_hint(attributes: &std::collections::BTreeMap<String, String>)
             .get("tabindex")
             .and_then(|t| t.trim().parse::<i32>().ok())
             .is_some_and(|t| t >= 0)
+}
+
+/// The element says it opens something: `aria-haspopup` (not "false"),
+/// `aria-expanded`, or a menu item, whose submenus commonly open on hover.
+fn opens_on_hover(attributes: &std::collections::BTreeMap<String, String>, role: Role) -> bool {
+    attributes
+        .get("aria-haspopup")
+        .is_some_and(|v| !v.eq_ignore_ascii_case("false"))
+        || attributes.contains_key("aria-expanded")
+        || role == Role::MenuItem
 }
 
 /// Offer CLICK on an element the page made clickable by markup or script.
@@ -775,6 +788,26 @@ mod pierce_tests {
                 (50, false)
             ]
         );
+    }
+
+    #[test]
+    fn popup_owners_claim_hover() {
+        let json = r##"{"root": {"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
+          "children": [
+            {"nodeId": 10, "backendNodeId": 10, "nodeType": 1, "nodeName": "BUTTON", "attributes": ["aria-haspopup", "menu"],
+             "children": [{"nodeId": 11, "backendNodeId": 11, "nodeType": 3, "nodeName": "#text", "nodeValue": "More"}]},
+            {"nodeId": 20, "backendNodeId": 20, "nodeType": 1, "nodeName": "BUTTON", "attributes": ["aria-haspopup", "false"],
+             "children": [{"nodeId": 21, "backendNodeId": 21, "nodeType": 3, "nodeName": "#text", "nodeValue": "Plain"}]},
+            {"nodeId": 30, "backendNodeId": 30, "nodeType": 1, "nodeName": "LI", "attributes": ["role", "menuitem"],
+             "children": [{"nodeId": 31, "backendNodeId": 31, "nodeType": 3, "nodeName": "#text", "nodeValue": "Edit"}]}
+          ]}}"##;
+        let doc = dom_document(json).unwrap();
+        let hover: Vec<(i64, bool)> = doc
+            .elements
+            .iter()
+            .map(|e| (e.node_id, e.actions.contains(&Action::Hover)))
+            .collect();
+        assert_eq!(hover, [(10, true), (20, false), (30, true)]);
     }
 
     #[test]

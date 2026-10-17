@@ -36,6 +36,10 @@ pub enum Input {
     Type(String),
     /// Choose the one option whose value / label / text matches.
     Select(String),
+    /// Move the trusted pointer over the target (no press).
+    Hover,
+    /// Scroll the target's own content down (a wheel at its center).
+    ScrollIn,
 }
 
 impl Input {
@@ -45,13 +49,15 @@ impl Input {
             Self::Click | Self::ScriptClick => Action::Click,
             Self::Type(_) => Action::Type,
             Self::Select(_) => Action::Select,
+            Self::Hover => Action::Hover,
+            Self::ScrollIn => Action::Scroll,
         }
     }
 
     /// Text payload, if any.
     pub fn payload(&self) -> Option<&str> {
         match self {
-            Self::Click | Self::ScriptClick => None,
+            Self::Click | Self::ScriptClick | Self::Hover | Self::ScrollIn => None,
             Self::Type(text) | Self::Select(text) => Some(text),
         }
     }
@@ -187,6 +193,8 @@ impl<T: CdpTransport> BrowserRuntime for BrowserSession<T> {
             Input::Select(option) => {
                 BrowserSession::select_option(self, target, option).map(|_| ())
             }
+            Input::Hover => BrowserSession::hover(self, target),
+            Input::ScrollIn => BrowserSession::scroll_region(self, target),
         }
         .map_err(browser_err)
     }

@@ -1382,3 +1382,52 @@ fn a_popup_that_renders_late_still_counts_as_the_clicks_effect() {
     let first = outcome.steps().first().expect("one click").verification;
     assert_eq!(first, VerificationKind::StateChanged, "{outcome:?}");
 }
+
+/// Picks the given kind's first target once, then DONE.
+struct OnceThenDone(ActionKind);
+
+impl BrowserPolicy for OnceThenDone {
+    fn decide(
+        &mut self,
+        space: &ActionSpace,
+        _goal: &AgentGoal,
+        history: &[HistoryEntry],
+    ) -> Result<PolicyOutcome, PolicyError> {
+        let action = if history.is_empty() {
+            space.targets_of(self.0).next()
+        } else {
+            space.get_str(ActionKind::Done.as_str())
+        }
+        .expect("offered");
+        Ok(PolicyOutcome::Choice(PolicyDecision {
+            action_id: action.id().clone(),
+            kind: action.kind(),
+            target_label: action.label().to_owned(),
+            confidence_millis: 1_000,
+            operation_ranked: Vec::new(),
+            target_ranked: Vec::new(),
+        }))
+    }
+}
+
+#[test]
+fn hover_and_scroll_in_run_through_the_ticketed_executor() {
+    let page = r#"
+        viewport w=800 h=600
+        region id=menu role=menu_item label="File" x=10 y=10 w=60 h=24 actions=click,hover sources=dom,accessibility
+        region id=list role=generic label="Inbox" x=10 y=50 w=200 h=300 actions=scroll sources=dom
+        "#;
+    for (kind, input, target) in [
+        (ActionKind::Hover, aui_agent::Input::Hover, "menu"),
+        (ActionKind::ScrollIn, aui_agent::Input::ScrollIn, "list"),
+    ] {
+        let mut agent = AgentBuilder::new(MockBrowser::new(manifold(page)), OnceThenDone(kind))
+            .max_steps(3)
+            .build("Open the menu");
+        let _ = agent.run();
+        let browser = agent.into_browser();
+        let log = browser.input_log();
+        assert_eq!(log.len(), 1, "{kind:?}: {log:?}");
+        assert_eq!((log[0].0.as_str(), &log[0].1), (target, &input));
+    }
+}

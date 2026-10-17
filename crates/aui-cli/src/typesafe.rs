@@ -61,19 +61,26 @@ a target for that operation; another question decides which operation to execute
 a field that already contains the requested value. Choose only an offered element index.";
 
 /// Element-bearing kinds that get a `<kind>_target` head, in jev naming.
-const ELEMENT_HEADS: [(&str, &str); 3] = [
+const ELEMENT_HEADS: [(&str, &str); 5] = [
     ("CLICK", "click_target"),
     ("TYPE_TEXT", "type_text_target"),
     ("SELECT", "select_target"),
+    ("HOVER", "hover_target"),
+    ("SCROLL_IN", "scroll_in_target"),
 ];
 
-const ELEMENT_LABELS: [(&str, &str); 3] = [
+const ELEMENT_LABELS: [(&str, &str); 5] = [
     ("CLICK", "Click an element, button, menu option, autocomplete suggestion, or calendar day."),
     (
         "TYPE_TEXT",
         "Enter or replace text in an editable field. A small LLM will supply the value from the goal.",
     ),
     ("SELECT", "Select an observed dropdown value."),
+    ("HOVER", "Move the mouse over an element that opens a menu or popup on hover."),
+    (
+        "SCROLL_IN",
+        "Scroll inside a scrollable box (a list, a pane) to show more of its content.",
+    ),
 ];
 
 /// Controls offered every step (`for_control` ids carry no region part).
@@ -803,6 +810,8 @@ mod tests {
                 region id=n12 role=button label="Send" x=10 y=10 w=80 h=24 actions=click sources=dom,accessibility
                 region id=n44 role=text_field label="Message" x=10 y=60 w=200 h=24 actions=type,focus sources=dom,accessibility
                 region id=n50 role=combobox label="Plan" x=10 y=110 w=200 h=24 actions=click,select,focus sources=dom,accessibility
+                region id=n60 role=menu_item label="File" x=10 y=160 w=60 h=24 actions=click,hover sources=dom,accessibility
+                region id=n70 role=generic label="Inbox" x=300 y=10 w=300 h=400 actions=scroll sources=dom
                 "#,
             )
             .unwrap(),
@@ -811,6 +820,8 @@ mod tests {
             ("CLICK", Some("n12"), "CLICK:n12"),
             ("TYPE_TEXT", Some("n44"), "TYPE_TEXT:n44"),
             ("SELECT", Some("n50"), "SELECT:n50"),
+            ("HOVER", Some("n60"), "HOVER:n60"),
+            ("SCROLL_IN", Some("n70"), "SCROLL_IN:n70"),
             ("SCROLL_DOWN", None, "SCROLL_DOWN"),
             ("DONE", None, "DONE"),
         ] {
