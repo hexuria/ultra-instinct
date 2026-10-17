@@ -28,7 +28,7 @@ pub use fusion::{MAX_CENTROID_PX, MIN_IOU, MIN_LABEL_JACCARD};
 pub use page::{page_delta, PageDelta, PageState};
 pub use session::{
     BrowserSession, ScrollDirection, DOM_CLICK_FUNCTION, DOM_READ_VALUE_FUNCTION,
-    DOM_SELECT_FUNCTION, DOM_TYPE_FUNCTION, DRAG_STEPS, SCROLL_VIEWPORT_FRACTION,
+    DOM_SELECT_FUNCTION, DOM_TYPE_FUNCTION, DRAG_STEPS, DROP_PAST_CENTER, SCROLL_VIEWPORT_FRACTION,
 };
 pub use verify::{verify, verify_delta, Expectation, VerifyError};
 
