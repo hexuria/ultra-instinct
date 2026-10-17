@@ -244,10 +244,12 @@ pub(crate) fn build_questions(request: &Value) -> Result<BuiltQuestions, String>
         target_heads.push((head.to_owned(), targets));
     }
     let drag = drag_heads(actions);
+    let mut drag_rules = false;
     if let Some((sources, destinations, _)) = &drag {
         operation_criteria.push(("DRAG".to_owned(), Some(JsonContent::from(DRAG_LABEL))));
         target_heads.push((DRAG_SOURCE_HEAD.to_owned(), sources.clone()));
         target_heads.push((DRAG_TARGET_HEAD.to_owned(), destinations.clone()));
+        drag_rules = true;
     }
     for (kind, label) in CONTROL_LABELS {
         if actions.iter().any(|a| a["id"].as_str() == Some(kind)) {
@@ -281,11 +283,16 @@ pub(crate) fn build_questions(request: &Value) -> Result<BuiltQuestions, String>
             head.clone(),
             criteria.iter().map(|(k, _)| k.clone()).collect(),
         ));
+        let rules = if drag_rules && head == DRAG_TARGET_HEAD {
+            json!([NEXT_ACTION, TARGET, DRAG_TARGET_RULE])
+        } else {
+            json!([NEXT_ACTION, TARGET])
+        };
         questions.push((
             head,
             Question::choice(
                 JsonContent::from(
-                    json!({"goal": goal, "rules": [NEXT_ACTION, TARGET]})
+                    json!({"goal": goal, "rules": rules})
                         .as_object()
                         .expect("object literal")
                         .clone(),
@@ -322,6 +329,9 @@ pub(crate) fn build_questions(request: &Value) -> Result<BuiltQuestions, String>
 const DRAG_LABEL: &str =
     "Drag an element onto another: reorder a list, move a piece, slide a handle, resize.";
 const DRAG_SOURCE_HEAD: &str = "drag_source";
+/// Release point rule: never the dragged element itself.
+const DRAG_TARGET_RULE: &str = "This chooses where to RELEASE the dragged element: a different \
+element from the one being dragged (the drag_source), at the place the goal names.";
 const DRAG_TARGET_HEAD: &str = "drag_target";
 /// Not a question: the offered `src>dst` pairs, kept for answer validation.
 const DRAG_PAIRS: &str = "__drag_pairs";

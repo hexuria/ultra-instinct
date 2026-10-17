@@ -468,7 +468,7 @@ fn surface_label(node: &Value, name: &str, aria: Option<String>) -> String {
 fn is_textual(name: &str) -> bool {
     matches!(
         name.to_ascii_uppercase().as_str(),
-        "LABEL" | "SPAN" | "P" | "DIV"
+        "LABEL" | "SPAN" | "P" | "DIV" | "LI"
     )
 }
 
@@ -601,7 +601,7 @@ fn keep_element(name: &str, role_attr: Option<&str>, label: &str) -> bool {
     ) {
         return true;
     }
-    !label.is_empty() && matches!(upper.as_str(), "LABEL" | "SPAN" | "P" | "DIV")
+    !label.is_empty() && matches!(upper.as_str(), "LABEL" | "SPAN" | "P" | "DIV" | "LI")
 }
 
 fn dom_role(name: &str, role_attr: Option<&str>, input_type: Option<&str>) -> Role {
@@ -848,6 +848,25 @@ mod pierce_tests {
                 (50, false)
             ]
         );
+    }
+
+    #[test]
+    fn list_items_with_text_are_regions_and_carry_drag_markers() {
+        let json = r##"{"root": {"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
+          "children": [{"nodeId": 2, "backendNodeId": 2, "nodeType": 1, "nodeName": "UL", "attributes": [],
+            "children": [
+              {"nodeId": 10, "backendNodeId": 10, "nodeType": 1, "nodeName": "LI", "attributes": ["class", "item ui-sortable-handle"],
+               "children": [{"nodeId": 11, "backendNodeId": 11, "nodeType": 3, "nodeName": "#text", "nodeValue": "Ana"}]},
+              {"nodeId": 20, "backendNodeId": 20, "nodeType": 1, "nodeName": "LI", "attributes": [],
+               "children": [{"nodeId": 21, "backendNodeId": 21, "nodeType": 3, "nodeName": "#text", "nodeValue": "Bo"}]}
+            ]}]}}"##;
+        let doc = dom_document(json).unwrap();
+        let items: Vec<(&str, bool)> = doc
+            .elements
+            .iter()
+            .map(|e| (e.label.as_str(), e.actions.contains(&Action::Drag)))
+            .collect();
+        assert_eq!(items, [("Ana", true), ("Bo", false)]);
     }
 
     #[test]

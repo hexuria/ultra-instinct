@@ -142,7 +142,7 @@ function hitAt(doc,tx,ty){
 // get style and hit evidence. Everything else carries a rect only; a region
 // whose element lacks evidence takes the per-node fallback.
 var KEEP={BUTTON:1,A:1,INPUT:1,TEXTAREA:1,SELECT:1,OPTION:1,NAV:1,IMG:1,H1:1,H2:1,H3:1,H4:1,H5:1,H6:1,DIALOG:1};
-var TEXTUAL={LABEL:1,SPAN:1,P:1,DIV:1};
+var TEXTUAL={LABEL:1,SPAN:1,P:1,DIV:1,LI:1};
 function directText(el){
   for(var c=el.firstChild;c;c=c.nextSibling){
     if(c.nodeType===3&&c.nodeValue&&c.nodeValue.trim()!=='')return true;
