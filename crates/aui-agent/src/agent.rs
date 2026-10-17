@@ -26,9 +26,9 @@ use aui_core::{
 };
 use aui_guard::{blocker, gate, neighborhood_of, with_front_layer, TicketLedger};
 use aui_policy::{
-    ground_select, label_covers_target, label_names_target, split_sequential_clauses, AgentGoal,
-    BrowserPolicy, DeterministicTextResolver, HistoryEntry, PolicyDecision, PolicyOutcome,
-    TextContext, TextError, TextResolver, TARGET_AMBIGUOUS,
+    ground_select, is_secret_field, label_covers_target, label_names_target,
+    split_sequential_clauses, AgentGoal, BrowserPolicy, DeterministicTextResolver, HistoryEntry,
+    PolicyDecision, PolicyOutcome, TextContext, TextError, TextResolver, TARGET_AMBIGUOUS,
 };
 #[cfg(feature = "model-text")]
 use aui_policy::{ModelTextResolver, TextModel};
@@ -315,6 +315,18 @@ pub struct Agent<B, P, T = DeterministicTextResolver> {
     /// discard, clause advance, and outcome. Drained once by the host via
     /// [`Self::take_journal`]; `aui-cli` maps it to the `aui-dojo` diary.
     journal: Vec<JournalEvent>,
+    /// Per successful TYPE_TEXT step: the clause it ran in and whether its
+    /// field was secret, read from the space the step was decided in.
+    typed_steps: std::collections::BTreeMap<u32, TypedStep>,
+    /// The last step's effect was seen only on the late second look.
+    late_effect: bool,
+}
+
+/// Where and into what a successful TYPE_TEXT step typed.
+#[derive(Clone, Copy, Debug)]
+struct TypedStep {
+    clause: usize,
+    secret: bool,
 }
 
 pub struct AgentBuilder<B, P, T = DeterministicTextResolver> {
@@ -450,6 +462,8 @@ impl<B, P, T> AgentBuilder<B, P, T> {
             consecutive_stale: 0,
             stale_total: 0,
             journal: Vec::new(),
+            typed_steps: std::collections::BTreeMap::new(),
+            late_effect: false,
         };
         agent.journal.push(JournalEvent::Run {
             goal: goal_text,
@@ -500,7 +514,7 @@ where
 
     /// The run's progress for a remote policy: clauses, the active one,
     /// which are satisfied, and values typed so far (secret fields masked).
-    fn progress(&self, space: &ActionSpace) -> aui_policy::Progress {
+    fn progress(&self) -> aui_policy::Progress {
         let satisfied = (0..self.clauses.len())
             .map(|i| i < self.clause_index || (i == self.clause_index && self.clause_effect))
             .collect();
@@ -512,13 +526,8 @@ where
             })
             .filter_map(|r| {
                 let value = r.payload.clone()?;
-                // A field no longer on the page is masked too: its type is unknown.
-                let secret = space.get(&r.action_id).is_none_or(|a| {
-                    matches!(
-                        a.state().input_type.as_deref(),
-                        Some("password" | "hidden" | "file")
-                    )
-                });
+                // Unknown counts as secret: mask rather than leak.
+                let secret = self.typed_steps.get(&r.step).is_none_or(|t| t.secret);
                 Some((
                     r.action_id.as_str().to_owned(),
                     if secret {
@@ -537,14 +546,19 @@ where
         }
     }
 
-    /// TYPE_TEXT actions whose field still holds the value this run
-    /// successfully typed into it.
+    /// TYPE_TEXT actions whose field still holds the value the active
+    /// clause successfully typed into it. A later clause may type another
+    /// value into the same field.
     fn already_typed(&self, space: &ActionSpace) -> Vec<ActionId> {
         self.history
             .iter()
             .filter(|record| {
                 record.kind == ActionKind::TypeText
                     && record.verification == VerificationKind::Success
+                    && self
+                        .typed_steps
+                        .get(&record.step)
+                        .is_some_and(|t| t.clause == self.clause_index)
             })
             .filter_map(|record| {
                 let offered = space.get(&record.action_id)?;
@@ -736,8 +750,9 @@ where
                 .then(|| self.browser.screenshot())
                 .flatten(),
             page: wants.page_text.then(|| self.browser.page_view()).flatten(),
-            // Built from the run's own history: no page reads.
-            progress: wants.page_text.then(|| self.progress(&space)),
+            // Built from the run's own history: no page reads, so it rides
+            // with any evidence, not only page text.
+            progress: (wants.page_text || wants.screenshot).then(|| self.progress()),
         };
         let outcome = match self.policy.decide_with_evidence(
             &space,
@@ -944,14 +959,31 @@ where
         };
         self.consecutive_stale = 0;
         self.steps_taken += 1;
+        // A change seen only on the late look may be the page's own (a
+        // toast, a ticking widget): it keeps the click out of the
+        // no-effect count but does not satisfy the clause.
         if matches!(
             record.verification,
             VerificationKind::Success
                 | VerificationKind::StateChanged
                 | VerificationKind::Navigation
-        ) && label_covers_target(self.goal.as_str(), &record.label)
+        ) && !self.late_effect
+            && label_covers_target(self.goal.as_str(), &record.label)
         {
             self.clause_effect = true;
+        }
+        if record.kind == ActionKind::TypeText && record.verification == VerificationKind::Success {
+            let secret = predicted
+                .space
+                .get(&record.action_id)
+                .is_none_or(|a| is_secret_field(a.state().input_type.as_deref(), a.label()));
+            self.typed_steps.insert(
+                record.step,
+                TypedStep {
+                    clause: self.clause_index,
+                    secret,
+                },
+            );
         }
         self.abstain_retries = 0;
         self.history.push(record.clone());
@@ -1164,6 +1196,7 @@ where
         };
         // Popups, pickers, and menus often render a beat after the page
         // settles. Look once more before calling a click "no visible change".
+        self.late_effect = false;
         if verification == VerificationKind::NoVisibleChange && input.payload().is_none() {
             self.browser.pause(LATE_RENDER_MS);
             self.browser.observe()?;
@@ -1177,6 +1210,7 @@ where
                 .last_observation()
                 .ok_or_else(|| AgentError::Browser("observe produced no manifold".into()))?;
             verification = classify_delta(&executed.before, later, page_d.as_ref());
+            self.late_effect = verification != VerificationKind::NoVisibleChange;
         }
         Ok((record(verification), input_name))
     }

@@ -38,7 +38,8 @@ pub use remote::{
     RemoteTransport, ScriptedRemote, UnconfiguredRemote,
 };
 pub use text::{
-    ground_select, DeterministicTextResolver, TextContext, TextError, TextResolution, TextResolver,
+    ground_select, is_secret_field, DeterministicTextResolver, TextContext, TextError,
+    TextResolution, TextResolver,
 };
 pub use types::{
     BrowserPolicy, DecisionEvidence, EvidenceWants, HistoryEntry, PageView, PolicyContext,

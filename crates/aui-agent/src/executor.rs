@@ -4,13 +4,16 @@
 //! input in the agent loop. In order, immediately before input:
 //!
 //! 1. the ticket must not be consumed (one-shot ledger);
-//! 2. the requested [`Input`] must be the ticket's action (no operation swap);
+//! 2. the requested [`Input`] must be the ticket's action (no operation swap),
+//!    a DRAG must release on the ticket's destination, and a surface-cell
+//!    click must name the ticket's cell (neither rides any other input);
 //! 3. the browser is observed **now** (after any text-resolution latency);
 //! 4. the ticket is revalidated against that observation: same world
 //!    fingerprint (focus, front layer, clickable set, occluded set), target
 //!    still present with the same role / label / fingerprint;
 //! 5. the hard gate re-runs on the fresh region (disabled, hidden, occluded,
-//!    front-layer, offscreen, action claim);
+//!    front-layer, offscreen, action claim), and on a DRAG's fresh drop
+//!    target;
 //! 6. the ticket is marked consumed **before** dispatch, so a failed or
 //!    partial dispatch can never be retried with the same lease;
 //! 7. input goes to `ticket.target_id` — never a caller-supplied id.
@@ -90,12 +93,6 @@ pub fn execute_ticketed<B: BrowserRuntime + ?Sized>(
     if input.action() != ticket.action {
         return Err(ExecError::Ticket(TicketInvalid::TicketMismatch));
     }
-    let fresh = browser
-        .observe()
-        .map_err(|e| ExecError::Observe(e.to_string()))?
-        .clone();
-    let before_page = browser.page().cloned();
-    let focused = browser.focused();
     // A drag releases exactly where its ticket says; a ticket without a
     // destination never drives a drag, and a destination never rides a
     // non-drag input.
@@ -114,6 +111,12 @@ pub fn execute_ticketed<B: BrowserRuntime + ?Sized>(
     if cell != ticket.cell {
         return Err(ExecError::Ticket(TicketInvalid::TicketMismatch));
     }
+    let fresh = browser
+        .observe()
+        .map_err(|e| ExecError::Observe(e.to_string()))?
+        .clone();
+    let before_page = browser.page().cloned();
+    let focused = browser.focused();
     revalidate(ticket, &fresh, focused).map_err(ExecError::Ticket)?;
     let region = fresh
         .get(&ticket.target_id)

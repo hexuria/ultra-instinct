@@ -1330,6 +1330,99 @@ fn a_field_already_holding_the_typed_value_is_not_offered_again() {
     assert_eq!(typed.len(), 1, "typed once, then moved on: {outcome:?}");
 }
 
+#[test]
+fn a_later_clause_may_type_another_value_into_the_same_field() {
+    let mut browser = MockBrowser::new(name_field(None));
+    browser.set_on_press(name_field(Some("Ana")));
+    let mut agent = AgentBuilder::new(browser, TypesWhileOffered)
+        .max_steps(3)
+        .build(r#"Type "Ana" into Name then type "Bo" into Name"#);
+    let outcome = agent.run();
+    let typed: Vec<_> = outcome
+        .steps()
+        .iter()
+        .filter(|s| s.kind == ActionKind::TypeText)
+        .filter_map(|s| s.payload.as_deref())
+        .collect();
+    assert_eq!(typed.first(), Some(&"Ana"), "{outcome:?}");
+    assert!(
+        typed.contains(&"Bo"),
+        "the second clause still types: {outcome:?}"
+    );
+}
+
+type SeenProgress = std::rc::Rc<std::cell::RefCell<Vec<aui_policy::Progress>>>;
+
+/// Wraps a policy, keeping the progress each call saw.
+struct RecordsProgress<P>(P, SeenProgress);
+
+impl<P: BrowserPolicy> BrowserPolicy for RecordsProgress<P> {
+    fn decide(
+        &mut self,
+        space: &ActionSpace,
+        goal: &AgentGoal,
+        history: &[HistoryEntry],
+    ) -> Result<PolicyOutcome, PolicyError> {
+        self.0.decide(space, goal, history)
+    }
+
+    fn wants_evidence(&self) -> EvidenceWants {
+        EvidenceWants {
+            screenshot: true,
+            page_text: false,
+        }
+    }
+
+    fn decide_with_evidence(
+        &mut self,
+        space: &ActionSpace,
+        goal: &AgentGoal,
+        history: &[HistoryEntry],
+        evidence: &DecisionEvidence,
+    ) -> Result<PolicyOutcome, PolicyError> {
+        self.1.borrow_mut().extend(evidence.progress.clone());
+        self.decide(space, goal, history)
+    }
+}
+
+fn typed_progress(label: &str) -> Vec<(String, String)> {
+    let field = |value: Option<&str>| {
+        let mut page = manifold(&format!(
+            "viewport w=800 h=600\nregion id=f role=text_field label=\"{label}\" x=10 y=10 w=200 h=24 actions=type sources=dom\n"
+        ));
+        let region = page.get_str("f").unwrap().clone().with_state(ElementState {
+            value: value.map(str::to_owned),
+            ..ElementState::default()
+        });
+        page.replace(region);
+        page
+    };
+    let seen = SeenProgress::default();
+    let mut browser = MockBrowser::new(field(None));
+    browser.set_on_press(field(Some("4821")));
+    let mut agent = AgentBuilder::new(browser, RecordsProgress(TypesWhileOffered, seen.clone()))
+        .max_steps(3)
+        .build(format!(r#"Type "4821" into {label}"#));
+    agent.run();
+    let last = seen.borrow().last().cloned().expect("progress sent");
+    last.typed
+}
+
+#[test]
+fn progress_shows_typed_values_and_masks_only_secret_fields() {
+    // The field still holds the value, so its TYPE is no longer offered;
+    // the value is still reported as typed, unmasked.
+    assert_eq!(
+        typed_progress("Zip code"),
+        [("TYPE_TEXT:f".to_owned(), "4821".to_owned())]
+    );
+    // A secret label masks it.
+    assert_eq!(
+        typed_progress("PIN"),
+        [("TYPE_TEXT:f".to_owned(), "••••".to_owned())]
+    );
+}
+
 /// Clicks the first offered click target once, then DONE.
 struct ClickOnceThenDone;
 
@@ -1381,6 +1474,37 @@ fn a_popup_that_renders_late_still_counts_as_the_clicks_effect() {
     let outcome = agent.run();
     let first = outcome.steps().first().expect("one click").verification;
     assert_eq!(first, VerificationKind::StateChanged, "{outcome:?}");
+}
+
+#[test]
+fn a_change_seen_only_on_the_late_look_does_not_satisfy_the_clause() {
+    let page = r#"
+        viewport w=800 h=600
+        region id=send role=button label="Send" x=10 y=10 w=120 h=24 actions=click sources=dom,accessibility
+        "#;
+    let toast = r#"
+        viewport w=800 h=600
+        region id=send role=button label="Send" x=10 y=10 w=120 h=24 actions=click sources=dom,accessibility
+        region id=t role=button label="Dismiss" x=400 y=500 w=80 h=24 actions=click sources=dom,accessibility
+        "#;
+    let seen = SeenProgress::default();
+    let mut browser = MockBrowser::new(manifold(page));
+    // Observes: decide, executor's fresh look, after the click, the late look.
+    browser.schedule_swap(3, manifold(toast));
+    let mut agent = AgentBuilder::new(browser, RecordsProgress(ClickOnceThenDone, seen.clone()))
+        .max_steps(3)
+        .build("Send then click Dismiss");
+    agent.predict().unwrap();
+    let record = agent.act().unwrap();
+    assert_eq!(record.verification, VerificationKind::StateChanged);
+    // Not credited: the next decision still sees the first clause open.
+    agent.predict().unwrap();
+    let progress = seen.borrow().last().cloned().expect("progress sent");
+    assert_eq!(progress.current, 0);
+    assert!(
+        !progress.satisfied[0],
+        "a late-only change keeps the clause open"
+    );
 }
 
 /// Picks the given kind's first target once, then DONE.
