@@ -3,6 +3,8 @@
 Routes:
 - ``/luna/...``     -> OpenCodex (``http://127.0.0.1:8080/...``), GPT 6 Luna
 - ``/typesafe/...`` -> ``https://api.typesafe.ai/...``, JEV
+- ``/text/v1/chat/completions`` -> Claude Haiku 5.5 on the native Anthropic Messages API,
+  translated in-process by ``text_proxy.py`` (the MiniWoB race's shared text model)
 
 The proxy counts calls and tokens per attempt from outside the arm. Once the
 attempt's model-call cap is reached it answers 429 without forwarding and
@@ -23,7 +25,9 @@ import httpx
 UPSTREAMS = {
     "luna": "http://127.0.0.1:8080",
     "typesafe": "https://api.typesafe.ai",
+    "text": "local:text_proxy",  # answered in-process, see _text()
 }
+ROUTES = list(UPSTREAMS)
 HOP = {"host", "content-length", "connection", "accept-encoding", "transfer-encoding", "keep-alive"}
 
 
@@ -51,10 +55,11 @@ class Meter:
     def reset(self, call_cap: int) -> None:
         with self.lock:
             self.call_cap = call_cap
-            self.calls = {"luna": 0, "typesafe": 0}
-            self.tokens_in = {"luna": 0, "typesafe": 0}
-            self.tokens_out = {"luna": 0, "typesafe": 0}
+            self.calls = {r: 0 for r in ROUTES}
+            self.tokens_in = {r: 0 for r in ROUTES}
+            self.tokens_out = {r: 0 for r in ROUTES}
             self.latency_ms: list[float] = []
+            self.latency_by_route: dict[str, list[float]] = {r: [] for r in ROUTES}
             self.errors = 0
             self.cap_hit = False
 
@@ -76,6 +81,7 @@ class Meter:
             self.tokens_in[route] += inp
             self.tokens_out[route] += out
             self.latency_ms.append(ms)
+            self.latency_by_route[route].append(round(ms, 1))
             if not ok:
                 self.errors += 1
 
@@ -89,6 +95,7 @@ class Meter:
                 "tokens_total": sum(self.tokens_in.values()) + sum(self.tokens_out.values()),
                 "model_errors": self.errors,
                 "model_latency_ms": list(self.latency_ms),
+                "latency_ms_by_route": {k: list(v) for k, v in self.latency_by_route.items()},
                 "call_cap_hit": self.cap_hit,
             }
 
@@ -121,6 +128,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
         counted = method == "POST"  # GET /v1/models etc. are not model calls
         if counted and not self.meter.admit(route):
             return self._reply(429, b'{"error":"bench model-call cap reached"}', {"Content-Type": "application/json"})
+        if route == "text":
+            return self._text(rest, body)
         headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
         started = time.perf_counter()
         try:
@@ -139,6 +148,25 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 payload = None
             self.meter.record(route, payload, ms, upstream.status_code < 400)
         self._reply(upstream.status_code, content, dict(upstream.headers))
+
+    def _text(self, rest: str, body: bytes | None) -> None:
+        """OpenAI chat completions -> Anthropic Messages (text_proxy). Already admitted and counted."""
+        import text_proxy
+
+        if rest.rstrip("/") not in ("/v1/chat/completions", "/chat/completions"):
+            return self._reply(404, b'{"error":"text route serves /v1/chat/completions only"}',
+                               {"Content-Type": "application/json"})
+        started = time.perf_counter()
+        try:
+            request = json.loads(body or b"{}")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            request = None
+        if not isinstance(request, dict):
+            code, payload = 400, {"error": {"message": "body is not a JSON object"}}
+        else:
+            code, payload = text_proxy.complete(request)
+        self.meter.record("text", payload, (time.perf_counter() - started) * 1000, code < 400)
+        self._reply(code, json.dumps(payload).encode(), {"Content-Type": "application/json"})
 
     def do_POST(self) -> None:  # noqa: N802
         self._forward("POST")
