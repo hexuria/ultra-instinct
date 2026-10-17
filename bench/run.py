@@ -59,6 +59,14 @@ ARMS["A11"] = {"name": "ultra-instinct aui run (--policy clef-flash)", "python":
                "typesafe": False, "options": {"policy": "clef-flash"}}
 ARMS["A12"] = {"name": "ultra-instinct aui run (--policy clef)", "python": MAIN_PY, "script": "arms/a9_aui.py", "browser": "harness",
                "typesafe": False, "options": {"policy": "clef"}}
+# MiniWoB++ race (bench/race-miniwob.toml, run_miniwob.py): both arms type with Claude Haiku 5.5
+# through the harness text proxy; JEV decides on both.
+ARMS["A3m"] = {**ARMS["A3"], "name": "jev-ultrafast (text: Haiku 5.5 via text proxy)", "options": {"text": "model"}}
+ARMS["A10m"] = {**ARMS["A10"], "name": "ultra-instinct aui run --policy jev (text: Haiku 5.5 via text proxy)",
+                "options": {"policy": "jev", "text": "model"}}
+for mode in ["solve", "noop"]:
+    ARMS[f"mock-wob-{mode}"] = {"name": f"mock MiniWoB {mode}", "python": MAIN_PY, "script": "arms/wob_mock.py",
+                                "browser": "harness", "typesafe": False, "options": {"mode": mode}, "mock": True}
 for mode in ["oracle", "saboteur", "spinner", "wanderer", "sleeper"]:
     ARMS[f"mock-{mode}"] = {"name": f"mock {mode}", "python": MAIN_PY, "script": "arms/mock.py", "browser": "harness",
                             "typesafe": False, "options": {"mode": mode}, "mock": True}

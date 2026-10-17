@@ -1,0 +1,40 @@
+# MiniWoB++ race: jev-ultrafast (A3m) vs ultra-instinct `aui run --policy jev` (A10m).
+# `bench/bench miniwob --config bench/race-miniwob.toml`. Report: `bench/bench miniwob-report <run-id>`.
+# Tasks: every env in the pinned checkout's miniwob/registration.py (see bench/miniwob.py).
+# Both arms: JEV decides every step; TYPE/SELECT text from Claude Haiku 5.5 through the
+# harness text proxy (bench/text_proxy.py), same endpoint, same model name, same knobs.
+[run]
+seed = 42
+seeds_per_task = 3   # the same seed list for every task and both arms
+max_tries = 1        # no retries: every attempt counts
+arms = ["A3m", "A10m"]
+
+[caps]               # same as race.toml, enforced by the harness from outside every arm
+steps = 20
+model_calls = 40     # JEV + text-model calls together
+wall_s = 180         # also the MiniWoB episode time limit (core.EPISODE_MAX_TIME)
+stuck_repeats = 3
+page_acts = 40       # not enforced here: MiniWoB pages have no action journal
+
+[models]
+jev = "jev-latest"
+text = "claude-haiku-5-5"   # the name both arms send; the proxy always calls this model
+text_effort = "low"         # both arms send reasoning.effort=low -> output_config.effort=low
+
+[miniwob]
+pin = "33c3b4ddef8c6eb67c57a29663d844b1eda7e614"
+end_grace_s = 3      # after the episode ends, the arm gets this long to finish before the harness stops it
+
+[aui]
+features = "jev,model-text"   # cargo build --release -p aui-cli --features jev,model-text
+
+[viewport]
+width = 1280
+height = 800
+headless = true
+
+[ports]
+server = 8785
+proxy = 8786
+chrome = 9443
+probe_chrome = 9444

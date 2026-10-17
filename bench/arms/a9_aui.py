@@ -8,11 +8,17 @@
 Drives the first page target, which the harness opened at the task's start URL.
 TYPE / SELECT payloads come from the goal's quoted literals (the deterministic
 resolver); no text model. Needs ``cargo build --release -p aui-cli --features jev``.
+
+A10m (``arm_options.text == "model"``, MiniWoB race): payloads come from the HTTP text
+model in ``--features model-text`` builds, configured exactly like jev-ultrafast
+(``TEXT_MODEL_API=openai``, ``TEXT_MODEL_BASE_URL`` = the harness text proxy, ``TEXT_MODEL``,
+a placeholder ``TEXT_MODEL_API_KEY``). Needs ``--features jev,model-text``.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -40,7 +46,11 @@ def main() -> None:
     goal = spec["task"]["goal"] if spec["arm_options"].get("bare_goal") else goal_text(spec)
     argv = [str(Path(spec["root"]) / "target/release/aui"), "run", "--goal", goal,
             "--cdp", spec["cdp_http"], "--max-steps", str(spec["caps"]["steps"]), "--policy", policy]
-    proc = subprocess.run(argv, cwd=spec["root"], capture_output=True, text=True)
+    env = None
+    if spec["arm_options"].get("text") == "model":
+        env = {**os.environ, "TEXT_MODEL_API": "openai", "TEXT_MODEL_BASE_URL": spec["text_base"],
+               "TEXT_MODEL": spec["text_model"], "TEXT_MODEL_API_KEY": "local"}
+    proc = subprocess.run(argv, cwd=spec["root"], capture_output=True, text=True, env=env)
     sys.stdout.write(proc.stdout + proc.stderr)
     kind, note = None, ""
     for line in (proc.stdout + proc.stderr).splitlines():

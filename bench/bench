@@ -1,5 +1,5 @@
 #!/bin/sh
-# bench/bench run [...] | bench/bench report <run-id>
+# bench/bench run [...] | bench/bench report <run-id> | bench/bench miniwob [...] | bench/bench miniwob-report <run-id>
 set -e
 here="$(cd "$(dirname "$0")" && pwd)"
 cmd="$1"; shift || true
@@ -7,5 +7,7 @@ cmd="$1"; shift || true
 case "$cmd" in
   run) exec "$here/.venv/bin/python" "$here/run.py" "$@" ;;
   report) exec "$here/.venv/bin/python" "$here/report.py" "$@" ;;
-  *) echo "usage: bench/bench run|report [args]" >&2; exit 2 ;;
+  miniwob) exec "$here/.venv/bin/python" "$here/run_miniwob.py" "$@" ;;
+  miniwob-report) exec "$here/.venv/bin/python" "$here/report_miniwob.py" "$@" ;;
+  *) echo "usage: bench/bench run|report|miniwob|miniwob-report [args]" >&2; exit 2 ;;
 esac

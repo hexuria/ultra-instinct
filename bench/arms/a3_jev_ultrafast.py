@@ -8,6 +8,10 @@ Pinned at bench/vendor/jev-ultrafast. Three bench patches, all by monkeypatch, n
 A3q (``arm_options.text == "quoted"``) swaps the text helper for ``quoted_field_text``:
 the goal's quoted literal, no model call. That matches A9 / A10, which type quoted
 literals too, so the race compares decisions and loops, not text models.
+
+A3m (``arm_options.text == "model"``, MiniWoB race) keeps jev-ultrafast's own text helper
+and prompt, pointed at the harness text proxy (``spec["text_base"]``, Claude Haiku 5.5),
+the same endpoint and model name A10m uses.
 """
 
 from __future__ import annotations
@@ -71,6 +75,8 @@ def main() -> None:
         return real_post(url.replace("https://api.typesafe.ai", spec["typesafe_base"]), key, body)
 
     jmodel.post_json = post_json
+    if spec["arm_options"].get("text") == "model":
+        os.environ.update({"TEXT_MODEL_BASE_URL": spec["text_base"], "TEXT_MODEL": spec["text_model"]})
     if spec["arm_options"].get("text") == "quoted":
         jagent.field_text = quoted_field_text
     real_call = jbrowser.Browser.call
