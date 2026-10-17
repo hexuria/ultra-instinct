@@ -169,6 +169,16 @@ function dragMarked(el){
   if(cl)for(var i=0;i<DRAG_MARKERS.length;i++)if(cl.contains(DRAG_MARKERS[i]))return true;
   return false;
 }
+// A move / grab cursor the element sets itself: one inherited from a
+// draggable ancestor belongs to that ancestor (as in `clickHint`).
+function dragCursor(el){
+  var view=el.ownerDocument.defaultView;
+  var grabs=function(c){return c==='move'||c==='grab'||c==='grabbing';};
+  var cur=view.getComputedStyle(el).cursor;
+  if(!grabs(cur))return false;
+  var p=el.parentElement;
+  return !p||view.getComputedStyle(p).cursor!==cur;
+}
 var SHAPES={circle:1,ellipse:1,rect:1,polygon:1,polyline:1,path:1,text:1};
 // A box whose own content scrolls: overflow-y auto / scroll with more
 // content than room.
@@ -202,8 +212,7 @@ function visit(el,doc,off){
       rec.h=hitAt(document,r[0]+r[2]/2,r[1]+r[3]/2);
       if(clickHint(el))rec.ck=1;
       if(scrollable(el))rec.sc=1;
-      var cur=el.ownerDocument.defaultView.getComputedStyle(el).cursor;
-      if(cur==='move'||cur==='grab'||cur==='grabbing')rec.dg=1;
+      if(dragCursor(el))rec.dg=1;
       var name=el.nodeName.toUpperCase();
       var inputType=(el.getAttribute('type')||'text').toLowerCase();
       if(name==='INPUT')rec.it=inputType;
@@ -282,7 +291,8 @@ pub(crate) struct CompactNode {
     /// The element's own content scrolls (overflow-y auto / scroll, taller
     /// than its box).
     pub scrollable: bool,
-    /// The element shows a move / grab cursor: it can be dragged.
+    /// The element sets a move / grab cursor itself (not inherited from its
+    /// parent): it can be dragged.
     pub drag_hint: bool,
 }
 

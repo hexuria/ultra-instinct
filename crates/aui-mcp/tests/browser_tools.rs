@@ -305,6 +305,86 @@ fn drag_dispatches_move_press_move_release() {
 }
 
 #[test]
+fn a_drag_that_fails_mid_gesture_still_releases_the_button() {
+    // Move to A, press, one move, then the second move fails.
+    let script = ScriptBuilder::new()
+        .observe_compact(&page())
+        .call("Input.dispatchMouseEvent", json!({}))
+        .call("Input.dispatchMouseEvent", json!({}))
+        .call("Input.dispatchMouseEvent", json!({}))
+        .call_error("Input.dispatchMouseEvent", "target closed")
+        .call("Input.dispatchMouseEvent", json!({}));
+    let (mut server, log) = server(script);
+    assert!(server
+        .call_tool(
+            "browser_drag",
+            &json!({"cdp": CDP, "from_index": 1, "to_index": 2}),
+        )
+        .is_err());
+    assert_eq!(
+        log.borrow()
+            .iter()
+            .filter(|m| *m == "Input.dispatchMouseEvent")
+            .count(),
+        5,
+        "the release follows the failed move"
+    );
+}
+
+#[test]
+fn drag_onto_its_own_source_is_refused_before_any_press() {
+    let (mut server, log) = server(ScriptBuilder::new().observe_compact(&page()));
+    let err = server
+        .call_tool(
+            "browser_drag",
+            &json!({"cdp": CDP, "from_index": 2, "to_index": 2}),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&err, ToolError::TicketInvalid(m) if m == "unsupported-action"),
+        "{err:?}"
+    );
+    assert!(!log.borrow().iter().any(|m| m == "Input.dispatchMouseEvent"));
+}
+
+#[test]
+fn drag_of_a_drag_only_list_item_binds_both_ends() {
+    // Sortable rows claim drag, not click: the click gate would refuse them.
+    let row = |node_id, backend, label, y| Control {
+        tag: "LI",
+        role: "listitem",
+        ..Control::button(node_id, backend, label, (20.0, y, 120.0, 20.0))
+    };
+    let mut page = PageSpec::of(
+        &[row(10, 100, "Ana", 20.0), row(11, 101, "Bo", 60.0)],
+        "http://127.0.0.1/list",
+        "List",
+    );
+    for node in &mut page.dom {
+        *node = node.clone().with_compact_state(json!({"dg": 1}));
+    }
+    let events = 3 + aui_browser::DRAG_STEPS as usize;
+    let mut script = ScriptBuilder::new().observe_compact(&page);
+    for _ in 0..events {
+        script = script.call("Input.dispatchMouseEvent", json!({}));
+    }
+    let (mut server, log) = server(script);
+    let out = call(
+        &mut server,
+        "browser_drag",
+        json!({"cdp": CDP, "from_index": 2, "to_index": 1}),
+    );
+    assert_eq!(out["dragged"], json!({"from": 2, "to": 1}), "{out}");
+    assert_eq!(
+        log.borrow()
+            .iter()
+            .filter(|m| *m == "Input.dispatchMouseEvent")
+            .count(),
+        events
+    );
+}
+
+#[test]
 fn send_key_dispatches_down_and_up() {
     let (mut server, log) = server(
         ScriptBuilder::new()

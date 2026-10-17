@@ -279,11 +279,14 @@ enum DomWork<'a> {
 
 fn walk_dom(root: &Value, out: &mut DomDocument) {
     let mut kept_ancestors: Vec<i64> = Vec::new();
+    // Parallel to `kept_ancestors`: that kept element is a click control.
+    let mut kept_controls: Vec<bool> = Vec::new();
     let mut stack = vec![DomWork::Visit(root, None)];
     while let Some(work) = stack.pop() {
         let (node, parent_backend) = match work {
             DomWork::Pop => {
                 kept_ancestors.pop();
+                kept_controls.pop();
                 continue;
             }
             DomWork::Visit(node, parent_backend) => (node, parent_backend),
@@ -305,7 +308,14 @@ fn walk_dom(root: &Value, out: &mut DomDocument) {
                     out.backend_of_hu_k.insert(k, backend);
                 }
             }
-            if let Some(mut element) = element_from(node) {
+            let svg_part = node
+                .get("nodeName")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name == "svg" || is_svg_shape(name));
+            // An icon drawn inside a button or link is that control's face,
+            // not a target of its own.
+            let face = svg_part && kept_controls.iter().any(|&control| control);
+            if let Some(mut element) = element_from(node).filter(|_| !face) {
                 element.ancestors = kept_ancestors.iter().rev().copied().collect();
                 if element.needs_hint {
                     // Not a kept element (nor anyone's kept ancestor) until
@@ -313,6 +323,7 @@ fn walk_dom(root: &Value, out: &mut DomDocument) {
                     out.hint_boxes.push(element);
                 } else {
                     kept_ancestors.push(element.backend_node_id);
+                    kept_controls.push(!svg_part && element.actions.contains(&Action::Click));
                     pushed_kept = true;
                     out.elements.push(element);
                 }
@@ -389,8 +400,20 @@ fn element_from(node: &Value) -> Option<DomElement> {
     {
         return None;
     }
+    // Named like a button, from its content (text in child elements); a
+    // box with none falls back to its `title`, then its inline background
+    // colour (a colored square).
     if hint_box {
-        label = inline_style(&attributes, "background-color").unwrap_or_default();
+        label = Some(subtree_text(node))
+            .filter(|text| !text.is_empty())
+            .or_else(|| {
+                attributes
+                    .get("title")
+                    .map(|t| t.trim().to_owned())
+                    .filter(|t| !t.is_empty())
+            })
+            .or_else(|| inline_style(&attributes, "background-color"))
+            .unwrap_or_default();
     }
     let role = if svg_shape || surface {
         Role::Image
@@ -584,12 +607,22 @@ const SUBTREE_TEXT_MAX_CHARS: usize = 80;
 /// All text under `node`, in document order, whitespace folded and capped.
 fn subtree_text(node: &Value) -> String {
     let mut parts: Vec<&str> = Vec::new();
+    let mut seen = 0usize;
     let mut stack: Vec<&Value> = vec![node];
     while let Some(n) = stack.pop() {
         if n.get("nodeType").and_then(Value::as_i64) == Some(3) {
             if let Some(t) = n.get("nodeValue").and_then(Value::as_str) {
                 parts.push(t);
+                seen += t.len();
+                // Enough raw text for the cap even after whitespace folds.
+                if seen > SUBTREE_TEXT_MAX_CHARS * 8 {
+                    break;
+                }
             }
+        }
+        let name = n.get("nodeName").and_then(Value::as_str).unwrap_or("");
+        if name.eq_ignore_ascii_case("SCRIPT") || name.eq_ignore_ascii_case("STYLE") {
+            continue;
         }
         if let Some(children) = n.get("children").and_then(Value::as_array) {
             stack.extend(children.iter().rev());
@@ -950,6 +983,21 @@ mod pierce_tests {
     }
 
     #[test]
+    fn an_icon_inside_a_button_is_the_buttons_face_not_a_target() {
+        let json = r##"{"root": {"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
+          "children": [
+            {"nodeId": 2, "backendNodeId": 2, "nodeType": 1, "nodeName": "BUTTON", "attributes": ["aria-label", "Close"],
+             "children": [{"nodeId": 3, "backendNodeId": 3, "nodeType": 1, "nodeName": "svg", "attributes": [],
+               "children": [{"nodeId": 4, "backendNodeId": 4, "nodeType": 1, "nodeName": "path", "attributes": ["fill", "currentColor"]}]}]},
+            {"nodeId": 5, "backendNodeId": 5, "nodeType": 1, "nodeName": "svg", "attributes": [],
+             "children": [{"nodeId": 6, "backendNodeId": 6, "nodeType": 1, "nodeName": "circle", "attributes": ["fill", "red"]}]}
+          ]}}"##;
+        let doc = dom_document(json).unwrap();
+        let kept: Vec<i64> = doc.elements.iter().map(|e| e.node_id).collect();
+        assert_eq!(kept, [2, 5, 6], "the button's svg and path are not kept");
+    }
+
+    #[test]
     fn svg_shapes_are_clickable_images_named_by_title_text_or_fill() {
         let json = r##"{"root": {"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
           "children": [{"nodeId": 2, "backendNodeId": 2, "nodeType": 1, "nodeName": "svg", "attributes": [],
@@ -995,7 +1043,17 @@ mod pierce_tests {
           "children": [
             {"nodeId": 10, "backendNodeId": 10, "nodeType": 1, "nodeName": "DIV", "attributes": ["onclick", "pick()", "style", "background-color: red;"]},
             {"nodeId": 20, "backendNodeId": 20, "nodeType": 1, "nodeName": "SPAN", "attributes": ["style", "background-color: green"]},
-            {"nodeId": 30, "backendNodeId": 30, "nodeType": 1, "nodeName": "SECTION", "attributes": []}
+            {"nodeId": 30, "backendNodeId": 30, "nodeType": 1, "nodeName": "SECTION", "attributes": []},
+            {"nodeId": 40, "backendNodeId": 40, "nodeType": 1, "nodeName": "DIV", "attributes": [],
+             "children": [
+               {"nodeId": 41, "backendNodeId": 41, "nodeType": 1, "nodeName": "SPAN", "attributes": [],
+                "children": [{"nodeId": 42, "backendNodeId": 42, "nodeType": 3, "nodeName": "#text", "nodeValue": "Alexina"}]},
+               {"nodeId": 43, "backendNodeId": 43, "nodeType": 1, "nodeName": "SPAN", "attributes": [],
+                "children": [{"nodeId": 44, "backendNodeId": 44, "nodeType": 3, "nodeName": "#text", "nodeValue": " Lunch? "}]},
+               {"nodeId": 45, "backendNodeId": 45, "nodeType": 1, "nodeName": "SCRIPT", "attributes": [],
+                "children": [{"nodeId": 46, "backendNodeId": 46, "nodeType": 3, "nodeName": "#text", "nodeValue": "track()"}]}
+             ]},
+            {"nodeId": 50, "backendNodeId": 50, "nodeType": 1, "nodeName": "SPAN", "attributes": ["title", "Search"]}
           ]}}"##;
         let doc = dom_document(json).unwrap();
         let kept: Vec<(i64, &str)> = doc
@@ -1005,7 +1063,7 @@ mod pierce_tests {
             .collect();
         assert_eq!(
             kept,
-            [(10, "red")],
+            [(10, "red"), (41, "Alexina"), (43, "Lunch?")],
             "markup hint keeps it now, named by its color"
         );
         let pending: Vec<(i64, &str)> = doc
@@ -1015,8 +1073,9 @@ mod pierce_tests {
             .collect();
         assert_eq!(
             pending,
-            [(20, "green")],
-            "waits for a compact hint; non-textual tags never"
+            [(20, "green"), (40, "Alexina Lunch?"), (50, "Search")],
+            "waits for a compact hint, named by content, title, or color; \
+             non-textual tags never"
         );
     }
 

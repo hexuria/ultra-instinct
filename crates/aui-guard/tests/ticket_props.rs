@@ -242,6 +242,11 @@ fn drag_needs_a_drag_claim_and_a_visible_destination() {
         GuardReason::UnsupportedAction,
         "a region that does not claim drag is not a source"
     );
+    assert_eq!(
+        aui_guard::gate_drag(&m, &id("card"), &id("card"), None, 0).unwrap_err(),
+        GuardReason::UnsupportedAction,
+        "a region is never its own drop target"
+    );
     let hidden = parse_fixture(
         "viewport w=1200 h=900\n\
          region id=card role=generic label=\"Card\" x=10 y=10 w=60 h=40 actions=drag sources=dom\n\

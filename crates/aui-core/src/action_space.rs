@@ -361,7 +361,6 @@ impl ActionSpace {
         self.actions.values().any(|a| a.kind == kind)
     }
 
-    /// This space minus every action of `kind` (same capture time).
     /// The same space without the actions `drop` names.
     pub fn without_ids(&self, drop: &[ActionId]) -> Self {
         Self {
@@ -375,6 +374,7 @@ impl ActionSpace {
         }
     }
 
+    /// This space minus every action of `kind` (same capture time).
     pub fn without_kind(&self, kind: ActionKind) -> Self {
         Self {
             captured_at_ms: self.captured_at_ms,

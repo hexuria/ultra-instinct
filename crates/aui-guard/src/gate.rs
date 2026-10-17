@@ -63,8 +63,8 @@ pub fn gate(
 /// Gate a DRAG from `source` to `dest` and issue one ticket bound to both.
 ///
 /// The source must claim Drag and pass every [`check`]; the destination must
-/// pass [`check_drop_target`]. Revalidation re-checks both neighborhoods,
-/// so a change at either end makes the ticket stale.
+/// be another region and pass [`check_drop_target`]. Revalidation re-checks
+/// both neighborhoods, so a change at either end makes the ticket stale.
 pub fn gate_drag(
     manifold: &InteractionManifold,
     source: &RegionId,
@@ -72,6 +72,9 @@ pub fn gate_drag(
     focused: Option<RegionId>,
     snapshot_id: u64,
 ) -> Result<ActionTicket, GuardReason> {
+    if source == dest {
+        return Err(GuardReason::UnsupportedAction);
+    }
     let mut ticket = gate(manifold, source, Action::Drag, focused, snapshot_id)?;
     let region = manifold.get(dest).ok_or(GuardReason::MissingTarget)?;
     check_drop_target(manifold, region)?;

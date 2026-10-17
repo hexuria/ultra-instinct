@@ -684,6 +684,12 @@ impl ScriptBuilder {
         self
     }
 
+    /// Append a `method → protocol error` step.
+    pub fn call_error(mut self, method: &str, message: &str) -> Self {
+        self.calls.push(error(method, message));
+        self
+    }
+
     /// Number of scripted CDP calls so far.
     pub fn len(&self) -> usize {
         self.calls.len()
