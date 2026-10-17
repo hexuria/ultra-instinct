@@ -30,6 +30,9 @@ pub(crate) struct DomElement {
     pub ancestors: Vec<i64>,
     /// `data-hu-k` injected by the compact walk, when observe ran it first.
     pub hu_k: Option<u32>,
+    /// A text-less box kept only if the compact walk confirms a click hint;
+    /// otherwise observe drops it (and spends no per-node call on it).
+    pub needs_hint: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -65,6 +68,8 @@ pub(crate) fn parse_viewport(result_json: &str) -> Result<aui_core::Rect, Browse
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DomDocument {
     pub elements: Vec<DomElement>,
+    /// Text-less boxes that become regions only with a compact click hint.
+    pub hint_boxes: Vec<DomElement>,
     /// Every element backend id → its parent element backend id, when known.
     /// Used by hit-test to decide whether the node under a region's center is
     /// inside that region (the region owns the hit) or something else covers it.
@@ -302,9 +307,15 @@ fn walk_dom(root: &Value, out: &mut DomDocument) {
             }
             if let Some(mut element) = element_from(node) {
                 element.ancestors = kept_ancestors.iter().rev().copied().collect();
-                kept_ancestors.push(element.backend_node_id);
-                pushed_kept = true;
-                out.elements.push(element);
+                if element.needs_hint {
+                    // Not a kept element (nor anyone's kept ancestor) until
+                    // observe confirms its click hint.
+                    out.hint_boxes.push(element);
+                } else {
+                    kept_ancestors.push(element.backend_node_id);
+                    pushed_kept = true;
+                    out.elements.push(element);
+                }
             }
         }
         // Traversal order is children, then shadow roots, then the iframe
@@ -342,20 +353,38 @@ fn element_from(node: &Value) -> Option<DomElement> {
         return None;
     }
     let attributes = attr_map(node);
-    let label = attributes
+    let svg_shape = is_svg_shape(name);
+    let aria = attributes
         .get("aria-label")
         .cloned()
-        .filter(|label| !label.trim().is_empty())
-        .unwrap_or_else(|| direct_text(node));
+        .filter(|label| !label.trim().is_empty());
+    let mut label = if svg_shape {
+        shape_label(node, name, &attributes, aria)
+    } else {
+        aria.unwrap_or_else(|| direct_text(node))
+    };
     let role_attr = attributes.get("role").cloned();
-    if !keep_element(name, role_attr.as_deref(), &label) {
+    // A text-less box the page made clickable (a colored square, a card, a
+    // board cell) is a region only when a click hint confirms it.
+    let hint_box = !svg_shape
+        && !keep_element(name, role_attr.as_deref(), &label)
+        && is_textual(name)
+        && label.is_empty();
+    if !svg_shape && !hint_box && !keep_element(name, role_attr.as_deref(), &label) {
         return None;
     }
-    let role = dom_role(
-        name,
-        role_attr.as_deref(),
-        attributes.get("type").map(String::as_str),
-    );
+    if hint_box {
+        label = inline_style(&attributes, "background-color").unwrap_or_default();
+    }
+    let role = if svg_shape {
+        Role::Image
+    } else {
+        dom_role(
+            name,
+            role_attr.as_deref(),
+            attributes.get("type").map(String::as_str),
+        )
+    };
     let node_id = node.get("nodeId").and_then(Value::as_i64)?;
     let backend_node_id = node
         .get("backendNodeId")
@@ -372,9 +401,11 @@ fn element_from(node: &Value) -> Option<DomElement> {
         .get(crate::compact::HU_K_ATTR)
         .and_then(|raw| raw.parse::<u32>().ok());
     let mut actions = dom_actions(name, role);
-    if attribute_click_hint(&attributes) {
+    let marked_clickable = attribute_click_hint(&attributes);
+    if svg_shape || marked_clickable {
         add_click(&mut actions);
     }
+    let needs_hint = hint_box && !marked_clickable;
     Some(DomElement {
         node_id,
         backend_node_id,
@@ -387,6 +418,68 @@ fn element_from(node: &Value) -> Option<DomElement> {
         modal,
         ancestors: Vec::new(),
         hu_k,
+        needs_hint,
+    })
+}
+
+/// SVG shape elements. CDP reports SVG tag names in lower case and HTML ones
+/// in upper case, so the match is case-sensitive on purpose. Shapes inside
+/// `defs` / `mask` / `clipPath` have no layout box and drop out as unboxed.
+fn is_svg_shape(name: &str) -> bool {
+    matches!(
+        name,
+        "circle" | "ellipse" | "rect" | "polygon" | "polyline" | "path" | "text"
+    )
+}
+
+fn is_textual(name: &str) -> bool {
+    matches!(
+        name.to_ascii_uppercase().as_str(),
+        "LABEL" | "SPAN" | "P" | "DIV"
+    )
+}
+
+/// What a shape is called: its `<title>`, `aria-label`, its own text (SVG
+/// `text`), else its fill and kind ("red circle"), else its kind.
+fn shape_label(
+    node: &Value,
+    name: &str,
+    attributes: &std::collections::BTreeMap<String, String>,
+    aria: Option<String>,
+) -> String {
+    let title = node
+        .get("children")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|c| c.get("nodeName").and_then(Value::as_str) == Some("title"))
+        .map(direct_text)
+        .filter(|t| !t.is_empty());
+    if let Some(text) = title.or(aria) {
+        return text;
+    }
+    if name == "text" {
+        return direct_text(node);
+    }
+    let fill = attributes
+        .get("fill")
+        .cloned()
+        .or_else(|| inline_style(attributes, "fill"))
+        .filter(|f| !f.is_empty() && f != "none");
+    match fill {
+        Some(fill) => format!("{fill} {name}"),
+        None => name.to_owned(),
+    }
+}
+
+/// One declaration from the inline `style` attribute, value trimmed.
+fn inline_style(
+    attributes: &std::collections::BTreeMap<String, String>,
+    property: &str,
+) -> Option<String> {
+    attributes.get("style")?.split(';').find_map(|decl| {
+        let (key, value) = decl.split_once(':')?;
+        (key.trim().eq_ignore_ascii_case(property)).then(|| value.trim().to_owned())
     })
 }
 
@@ -681,6 +774,76 @@ mod pierce_tests {
                 (40, false),
                 (50, false)
             ]
+        );
+    }
+
+    #[test]
+    fn svg_shapes_are_clickable_images_named_by_title_text_or_fill() {
+        let json = r##"{"root": {"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
+          "children": [{"nodeId": 2, "backendNodeId": 2, "nodeType": 1, "nodeName": "svg", "attributes": [],
+            "children": [
+              {"nodeId": 10, "backendNodeId": 10, "nodeType": 1, "nodeName": "circle", "attributes": ["fill", "red", "r", "5"]},
+              {"nodeId": 11, "backendNodeId": 11, "nodeType": 1, "nodeName": "rect", "attributes": ["style", "fill: blue; stroke: none"]},
+              {"nodeId": 12, "backendNodeId": 12, "nodeType": 1, "nodeName": "polygon", "attributes": [],
+               "children": [{"nodeId": 13, "backendNodeId": 13, "nodeType": 1, "nodeName": "title", "attributes": [],
+                 "children": [{"nodeId": 14, "backendNodeId": 14, "nodeType": 3, "nodeName": "#text", "nodeValue": "Triangle"}]}]},
+              {"nodeId": 15, "backendNodeId": 15, "nodeType": 1, "nodeName": "text", "attributes": [],
+               "children": [{"nodeId": 16, "backendNodeId": 16, "nodeType": 3, "nodeName": "#text", "nodeValue": "7"}]},
+              {"nodeId": 17, "backendNodeId": 17, "nodeType": 1, "nodeName": "path", "attributes": ["fill", "none"]}
+            ]}]}}"##;
+        let doc = dom_document(json).unwrap();
+        let shapes: Vec<(i64, &str, Role, bool)> = doc
+            .elements
+            .iter()
+            .map(|e| {
+                (
+                    e.node_id,
+                    e.label.as_str(),
+                    e.role,
+                    e.actions.contains(&Action::Click),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shapes,
+            [
+                (10, "red circle", Role::Image, true),
+                (11, "blue rect", Role::Image, true),
+                (12, "Triangle", Role::Image, true),
+                (15, "7", Role::Image, true),
+                (17, "path", Role::Image, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn text_less_boxes_wait_for_a_click_hint_unless_markup_marks_them() {
+        let json = r##"{"root": {"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
+          "children": [
+            {"nodeId": 10, "backendNodeId": 10, "nodeType": 1, "nodeName": "DIV", "attributes": ["onclick", "pick()", "style", "background-color: red;"]},
+            {"nodeId": 20, "backendNodeId": 20, "nodeType": 1, "nodeName": "SPAN", "attributes": ["style", "background-color: green"]},
+            {"nodeId": 30, "backendNodeId": 30, "nodeType": 1, "nodeName": "SECTION", "attributes": []}
+          ]}}"##;
+        let doc = dom_document(json).unwrap();
+        let kept: Vec<(i64, &str)> = doc
+            .elements
+            .iter()
+            .map(|e| (e.node_id, e.label.as_str()))
+            .collect();
+        assert_eq!(
+            kept,
+            [(10, "red")],
+            "markup hint keeps it now, named by its color"
+        );
+        let pending: Vec<(i64, &str)> = doc
+            .hint_boxes
+            .iter()
+            .map(|e| (e.node_id, e.label.as_str()))
+            .collect();
+        assert_eq!(
+            pending,
+            [(20, "green")],
+            "waits for a compact hint; non-textual tags never"
         );
     }
 

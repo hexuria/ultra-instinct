@@ -187,7 +187,15 @@ impl<T: CdpTransport> BrowserSession<T> {
         let ax_nodes = extract::ax_elements(&ax_tree)?;
 
         let mut dom_raw = Vec::new();
-        for element in &dom.elements {
+        // A text-less box is a region only with a confirmed click hint, so
+        // the per-node path never spends a call on one.
+        let hinted_boxes = dom.hint_boxes.iter().filter(|element| {
+            element
+                .hu_k
+                .and_then(|k| compact.as_ref().and_then(|c| c.node(k)))
+                .is_some_and(|n| n.click_hint)
+        });
+        for element in dom.elements.iter().chain(hinted_boxes) {
             let node = element
                 .hu_k
                 .and_then(|k| compact.as_ref().and_then(|c| c.node(k)));

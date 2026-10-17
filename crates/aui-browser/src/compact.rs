@@ -159,14 +159,18 @@ function clickHint(el){
   var p=el.parentElement;
   return !p||view.getComputedStyle(p).cursor!=='pointer';
 }
+var SVG_NS='http://www.w3.org/2000/svg';
+var SHAPES={circle:1,ellipse:1,rect:1,polygon:1,polyline:1,path:1,text:1};
 function candidate(el){
   var name=el.nodeName.toUpperCase();
   if(name==='SCRIPT'||name==='STYLE'||name==='HEAD'||name==='HTML'||name==='BODY')return false;
+  if(el.namespaceURI===SVG_NS&&SHAPES[el.localName])return true;
   if(el.hasAttribute('role'))return true;
   if(KEEP[name])return true;
   if(!TEXTUAL[name])return false;
   var aria=el.getAttribute('aria-label');
-  return (aria!==null&&aria.trim()!=='')||directText(el);
+  // A text-less box counts only with a click hint (extract::needs_hint).
+  return (aria!==null&&aria.trim()!=='')||directText(el)||clickHint(el);
 }
 function visit(el,doc,off){
   if(el.nodeType!==1)return;

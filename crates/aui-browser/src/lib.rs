@@ -940,6 +940,33 @@ mod compact_observe {
     }
 
     #[test]
+    fn a_text_less_box_becomes_a_region_only_with_its_hint() {
+        let boxed = |node, backend, x, hint: bool| {
+            let spec = DomSpec::button(node, backend, "", (x, 100.0, 30.0, 30.0))
+                .with_tag("DIV")
+                .with_attr("style", "background-color: red;");
+            if hint {
+                spec.with_compact_state(serde_json::json!({"ck": 1}))
+            } else {
+                spec
+            }
+        };
+        let page = PageSpec::new(
+            vec![boxed(10, 100, 100.0, true), boxed(20, 200, 200.0, false)],
+            vec![],
+            "https://example.test/",
+            "Boxes",
+        );
+        let script = ScriptBuilder::new().observe_compact(&page).to_json();
+        let mut session = BrowserSession::new(ReplayTransport::parse(&script).unwrap());
+        let manifold = session.observe().unwrap();
+        let hinted = manifold.get_str("n100").expect("hinted box kept");
+        assert_eq!(hinted.label(), "red");
+        assert!(hinted.actions().contains(&aui_core::Action::Click));
+        assert!(manifold.get_str("n200").is_none(), "no hint, no region");
+    }
+
+    #[test]
     fn compact_and_per_node_observe_build_the_same_manifold() {
         let mut legacy = BrowserSession::new(
             ReplayTransport::parse(&ScriptBuilder::new().observe(&page()).to_json()).unwrap(),
