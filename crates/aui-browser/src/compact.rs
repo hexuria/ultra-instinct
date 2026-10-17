@@ -49,7 +49,7 @@ use crate::error::BrowserError;
 /// `[x,y,w,h]` or null, `s` the computed-style name/value pairs
 /// `style_from_computed` consumes, and `h` the `data-hu-k` of the element
 /// under the content center (null when nothing is there). `s`, `h`, and
-/// control state (`v`, `c`, `x`, `sel`, `o`, `it`, `hr`) are collected only for boxed
+/// control state (`v`, `c`, `x`, `sel`, `o`, `it`, `hr`) and the click hint `ck` are collected only for boxed
 /// elements that can become regions (the JS mirror of `extract::keep_element`).
 /// An absent `s` or `h` means "not collected" and the consumer falls back to
 /// the per-node call.
@@ -149,6 +149,16 @@ function directText(el){
   }
   return false;
 }
+// A script-made click target: an `onclick` handler property, or a pointer
+// cursor the element sets itself (not one inherited from a clickable
+// ancestor, which already owns the click).
+function clickHint(el){
+  if(typeof el.onclick==='function')return true;
+  var view=el.ownerDocument.defaultView;
+  if(view.getComputedStyle(el).cursor!=='pointer')return false;
+  var p=el.parentElement;
+  return !p||view.getComputedStyle(p).cursor!=='pointer';
+}
 function candidate(el){
   var name=el.nodeName.toUpperCase();
   if(name==='SCRIPT'||name==='STYLE'||name==='HEAD'||name==='HTML'||name==='BODY')return false;
@@ -169,6 +179,7 @@ function visit(el,doc,off){
     if(candidate(el)){
       rec.s=stylePairs(el);
       rec.h=hitAt(document,r[0]+r[2]/2,r[1]+r[3]/2);
+      if(clickHint(el))rec.ck=1;
       var name=el.nodeName.toUpperCase();
       var inputType=(el.getAttribute('type')||'text').toLowerCase();
       if(name==='INPUT')rec.it=inputType;
@@ -241,6 +252,9 @@ pub(crate) struct CompactNode {
     pub hit: Hit,
     /// Control state captured by the compact walk.
     pub state: ElementState,
+    /// The page made this element clickable by script: an `onclick`
+    /// property, or a pointer cursor it sets itself.
+    pub click_hint: bool,
 }
 
 /// Compact hit-test evidence for one element.
@@ -331,6 +345,7 @@ pub(crate) fn parse(eval_result_json: &str) -> Result<CompactSnapshot, BrowserEr
             }
         };
         let state = parse_element_state(record);
+        let click_hint = record.get("ck").is_some_and(|ck| ck.as_i64() == Some(1));
         out.nodes.insert(
             k,
             CompactNode {
@@ -338,6 +353,7 @@ pub(crate) fn parse(eval_result_json: &str) -> Result<CompactSnapshot, BrowserEr
                 style,
                 hit,
                 state,
+                click_hint,
             },
         );
     }
@@ -386,6 +402,18 @@ mod tests {
     fn parse_state(record: Value) -> Result<ElementState, BrowserError> {
         let input = json!({"result":{"value":{"nodes":{"1":record}}}}).to_string();
         Ok(parse(&input)?.node(1).unwrap().state.clone())
+    }
+
+    #[test]
+    fn click_hint_is_set_only_by_ck_one() {
+        let hint = |record: Value| {
+            let input = json!({"result":{"value":{"nodes":{"1":record}}}}).to_string();
+            parse(&input).unwrap().node(1).unwrap().click_hint
+        };
+        assert!(hint(json!({"r":[0,0,10,10],"ck":1})));
+        assert!(!hint(json!({"r":[0,0,10,10]})));
+        assert!(!hint(json!({"r":[0,0,10,10],"ck":"1"})));
+        assert!(!hint(json!({"r":[0,0,10,10],"ck":0})));
     }
 
     #[test]

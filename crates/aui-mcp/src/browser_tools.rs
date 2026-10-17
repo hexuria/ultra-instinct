@@ -428,8 +428,10 @@ fn gated_input(
     let index = opt_usize(arguments, "index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".into()))?;
     let input = match input_kind {
-        // The host surface keeps its DOM-side click; the agent loop clicks
-        // with a trusted pointer (`Input::Click`).
+        // DOM-side click by default, so existing hosts see no change;
+        // `mouse: true` presses like the agent loop does: a trusted pointer
+        // at the center, which moves focus and fires pointerdown / mousedown.
+        "click" if opt_bool(arguments, "mouse")? == Some(true) => Input::Click,
         "click" => Input::ScriptClick,
         "type" => Input::Type(req_str(arguments, "text")?.to_owned()),
         "select" => Input::Select(req_str(arguments, "text")?.to_owned()),
@@ -1202,8 +1204,9 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
         }
         "browser_click" => {
             props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("mouse".into(), json!({"type": "boolean"}));
             required.push("index");
-            "Left-click the interactive element at a browser_get_state index, through the ticketed executor (re-observes and refuses on drift)."
+            "Left-click the interactive element at a browser_get_state index, through the ticketed executor (re-observes and refuses on drift). Default is a script click; mouse: true presses a real mouse at its center instead (moves focus, fires mousedown) — use it when a script click does nothing."
         }
         "browser_type" => {
             props.insert("index".into(), json!({"type": "integer"}));

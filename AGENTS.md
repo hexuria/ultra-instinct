@@ -50,7 +50,8 @@ crate.
 >    press at the region center (`Input::Click`); the DOM `this.click()` tiers
 >    are its CDP-refusal fallback and the retry (`Input::ScriptClick`) after a
 >    pointer click shows no visible change (ADR 0009). The MCP host's
->    `browser_click` stays DOM-side. The host helper `consume_ticket_once` uses
+>    `browser_click` stays DOM-side unless called with `mouse: true`. The host
+>    helper `consume_ticket_once` uses
 >    the same consume-before-press order. `Predicted` carries no fingerprint of
 >    its own; do not add a "pre-ticket check" that is not wired into a refusal.
 > 5. **Stale ≠ spent.** `WorldChanged` / `TargetChanged` / `TargetGone` are
@@ -92,7 +93,10 @@ crate.
 >    10 polls at 25 ms intervals and reads its `aria-controls` / `aria-owns`
 >    popup when present. The document fallback ends early only after visible
 >    options change from the first poll and stabilize; input is never
->    re-dispatched. Observe also records control state (value, checked,
+>    re-dispatched. A plain element the page made clickable (an `onclick`
+>    attribute or handler property, `tabindex` ≥ 0, or a pointer cursor it
+>    sets itself rather than inherits) is offered CLICK (ADR 0009). Observe
+>    also records control state (value, checked,
 >    expanded, select options) as evidence only: it is not in the region
 >    fingerprint, and password values are never read. Do not claim cross-origin
 >    iframe or closed-shadow coverage.

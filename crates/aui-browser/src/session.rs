@@ -188,10 +188,10 @@ impl<T: CdpTransport> BrowserSession<T> {
 
         let mut dom_raw = Vec::new();
         for element in &dom.elements {
-            let rect = match element
+            let node = element
                 .hu_k
-                .and_then(|k| compact.as_ref().and_then(|c| c.node(k)))
-            {
+                .and_then(|k| compact.as_ref().and_then(|c| c.node(k)));
+            let rect = match node {
                 // Tagged: the blob is authoritative (`None` = omit, like a
                 // getBoxModel protocol error).
                 Some(node) => node.rect,
@@ -203,7 +203,13 @@ impl<T: CdpTransport> BrowserSession<T> {
                 }
             };
             if let Some(rect) = rect {
-                dom_raw.push(RawNode::from_dom(element, rect));
+                let mut raw = RawNode::from_dom(element, rect);
+                // Script-made click targets (a span with a click handler and
+                // a pointer cursor) are offered like links.
+                if node.is_some_and(|n| n.click_hint) {
+                    extract::add_click(&mut raw.actions);
+                }
+                dom_raw.push(raw);
             }
         }
         let mut ax_raw = Vec::new();

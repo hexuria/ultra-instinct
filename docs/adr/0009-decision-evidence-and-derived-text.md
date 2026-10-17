@@ -54,6 +54,16 @@ specific to MiniWoB:
    64 characters. Each derived value is printed as
    `text derived from page: "…"`.
 
+5. **Script-made click targets.** A plain element the page made clickable
+   is offered CLICK: an `onclick` attribute or handler property, a
+   `tabindex` of 0 or more, or a pointer cursor the element sets itself (a
+   cursor inherited from a clickable ancestor does not count; that ancestor
+   owns the click). The compact walk reads the cursor it already computes,
+   so observe makes no extra CDP calls. Handlers bound with
+   `addEventListener` and no pointer cursor stay unseen.
+6. **MCP `browser_click`.** Keeps its DOM-side click by default; `mouse:
+   true` presses the trusted pointer the agent uses.
+
 ## Consequences
 
 - Same ticket / gate / revalidate chain. Replies are still an offered id or
@@ -61,7 +71,10 @@ specific to MiniWoB:
 - Page text and screenshots are untrusted data; the JEV and text-model rules
   say so. A wrong read can now type a wrong derived value; it is opt-in,
   guarded, and printed.
-- Owners: `aui-core` action-space tests (box, near text, gap boundaries),
+- Menus can grow by decorative pointer-cursor text; the gate, ticket, and
+  verification still apply to every offered click.
+- Owners: `aui-browser` extract / compact / observe tests (click hints),
+  `aui-mcp` browser_tools tests (`mouse: true`), `aui-core` action-space tests (box, near text, gap boundaries),
   `aui-policy` remote and model-text tests (evidence reaches transports,
   derived guards), `aui-agent` `verify_map` and `mock_loop` tests (control
   state, evidence capture, page-text cap), `aui-cli` typesafe / run tests.

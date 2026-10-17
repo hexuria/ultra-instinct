@@ -906,6 +906,40 @@ mod compact_observe {
     }
 
     #[test]
+    fn script_clickable_text_is_offered_click_only_with_its_hint() {
+        let span = |node, backend, label: &str, x, hint: bool| {
+            let spec =
+                DomSpec::button(node, backend, label, (x, 100.0, 30.0, 14.0)).with_tag("SPAN");
+            if hint {
+                spec.with_compact_state(serde_json::json!({"ck": 1}))
+            } else {
+                spec
+            }
+        };
+        let page = PageSpec::new(
+            vec![
+                span(10, 100, "sem", 100.0, true),
+                span(20, 200, "tellus", 200.0, false),
+            ],
+            vec![],
+            "https://example.test/",
+            "Links",
+        );
+        let script = ScriptBuilder::new().observe_compact(&page).to_json();
+        let mut session = BrowserSession::new(ReplayTransport::parse(&script).unwrap());
+        let manifold = session.observe().unwrap();
+        let clickable = |id: &str| {
+            manifold
+                .get_str(id)
+                .unwrap_or_else(|| panic!("{id} kept"))
+                .actions()
+                .contains(&aui_core::Action::Click)
+        };
+        assert!(clickable("n100"), "hinted span offers CLICK");
+        assert!(!clickable("n200"), "plain text stays unclickable");
+    }
+
+    #[test]
     fn compact_and_per_node_observe_build_the_same_manifold() {
         let mut legacy = BrowserSession::new(
             ReplayTransport::parse(&ScriptBuilder::new().observe(&page()).to_json()).unwrap(),
