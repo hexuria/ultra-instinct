@@ -100,7 +100,8 @@ crate.
 >    re-dispatched. A plain element the page made clickable (an `onclick`
 >    attribute or handler property, `tabindex` ≥ 0, or a pointer cursor it
 >    sets itself rather than inherits) is offered CLICK (ADR 0009). Also kept
->    (ADR 0010): SVG shapes (named by title / text / fill), `LI` with text,
+>    (ADR 0010): SVG shapes (named by title / text / fill; not an icon inside
+>    a click control), `LI` with text,
 >    text-less boxes only with a click hint, `canvas` / `svg` surfaces (claim
 >    `point`), scrollable boxes (claim `scroll`), popup owners (claim
 >    `hover`), and drag-marked elements (claim `drag`). Observe
