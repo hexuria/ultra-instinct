@@ -786,16 +786,18 @@ dependencies = [
 
 [[package]]
 name = "instinct-core"
-version = "0.0.0"
-source = "git+https://github.com/hexuria/instinct?rev=a42d16b6f5ccc3273939c8e3d3f462d78765bfea#a42d16b6f5ccc3273939c8e3d3f462d78765bfea"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15c64cd105f939dce25d4f9fddf8c76c1e629764a6864852a089353e5e9886ff"
 dependencies = [
  "blake3",
 ]
 
 [[package]]
 name = "instinct-lexicon"
-version = "0.0.0"
-source = "git+https://github.com/hexuria/instinct?rev=a42d16b6f5ccc3273939c8e3d3f462d78765bfea#a42d16b6f5ccc3273939c8e3d3f462d78765bfea"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae78fca0f86eeee26b8f83f1cdf993728d40af7b36cfffeb073778a2d77a3cd2"
 dependencies = [
  "instinct-core",
  "instinct-text",
@@ -803,8 +805,9 @@ dependencies = [
 
 [[package]]
 name = "instinct-text"
-version = "0.0.0"
-source = "git+https://github.com/hexuria/instinct?rev=a42d16b6f5ccc3273939c8e3d3f462d78765bfea#a42d16b6f5ccc3273939c8e3d3f462d78765bfea"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a9422e1e22f9e3a05a758422ab380ac0683eff44c87215f0b81d311b6da136f"
 dependencies = [
  "instinct-core",
  "unicode-normalization",
