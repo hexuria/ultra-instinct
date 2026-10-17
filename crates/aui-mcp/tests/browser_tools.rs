@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use aui_browser::script::{Control, PageSpec, ScriptBuilder};
 use aui_browser::{CdpError, CdpTransport, ReplayTransport};
-use aui_mcp::Server;
+use aui_mcp::{Server, ToolError};
 use serde_json::{json, Value};
 
 const CDP: &str = "http://127.0.0.1:9222";
@@ -451,4 +451,56 @@ fn missing_index_is_an_argument_error_not_a_press() {
         "no press may be dispatched: {:?}",
         log.borrow()
     );
+}
+
+/// `path` writes the decoded artifact, not its base64, for both tools that
+/// return one; the body still carries the base64 and reports what it wrote.
+#[test]
+fn screenshot_and_pdf_write_decoded_bytes_to_path() {
+    let dir = std::env::temp_dir().join(format!("aui-mcp-artifacts-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    // "iVBORw0KGgo=" and "JVBERi0=" decode to the PNG and PDF signatures.
+    let cases = [
+        (
+            "browser_screenshot",
+            "Page.captureScreenshot",
+            "iVBORw0KGgo=",
+            "base64",
+            &b"\x89PNG\r\n\x1a\n"[..],
+            "shot.png",
+        ),
+        (
+            "browser_save_as_pdf",
+            "Page.printToPDF",
+            "JVBERi0=",
+            "data",
+            &b"%PDF-"[..],
+            "page.pdf",
+        ),
+    ];
+    for (tool, method, encoded, field, decoded, file) in cases {
+        let (mut server, _log) =
+            server(ScriptBuilder::new().call(method, json!({"data": encoded})));
+        let path = dir.join(file);
+        let out = call(&mut server, tool, json!({"cdp": CDP, "path": path}));
+        assert_eq!(std::fs::read(&path).expect("written"), decoded, "{tool}");
+        assert_eq!(out[field], encoded, "{tool}: {out}");
+        assert_eq!(out["path"], json!(path), "{tool}: {out}");
+        assert_eq!(out["bytes"], decoded.len(), "{tool}: {out}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn unwritable_artifact_path_is_an_error() {
+    let (mut server, _log) = server(
+        ScriptBuilder::new().call("Page.captureScreenshot", json!({"data": "iVBORw0KGgo="})),
+    );
+    let err = server
+        .call_tool(
+            "browser_screenshot",
+            &json!({"cdp": CDP, "path": "/nonexistent-aui-dir/shot.png"}),
+        )
+        .expect_err("cannot write there");
+    assert!(matches!(err, ToolError::InvalidArguments(_)), "{err:?}");
 }

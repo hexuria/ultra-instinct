@@ -137,6 +137,7 @@ dependencies = [
  "aui-observe",
  "aui-protocol",
  "aui-resonance",
+ "base64 0.22.1",
  "proptest",
  "serde_json",
  "tracing-subscriber",

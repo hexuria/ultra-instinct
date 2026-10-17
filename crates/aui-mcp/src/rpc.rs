@@ -113,8 +113,25 @@ fn tools_call(server: &mut Server, params: &Value) -> Result<Value, ToolError> {
         .ok_or(ToolError::MissingToolName)?;
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
     match server.call_tool(name, &arguments) {
+        Ok(body) if name == "browser_screenshot" => Ok(image_result(body)),
         Ok(body) => Ok(tool_result(body.to_string(), false)),
         Err(err) => Ok(tool_result(err.to_json_string(), true)),
+    }
+}
+
+/// A screenshot goes back as an MCP `image` item the client can show
+/// (browser-use parity), then the rest of the body as text, without the
+/// base64 it would otherwise repeat.
+fn image_result(mut body: Value) -> Value {
+    match body.as_object_mut().and_then(|map| map.remove("base64")) {
+        Some(Value::String(data)) => json!({
+            "content": [
+                {"type": "image", "data": data, "mimeType": "image/png"},
+                {"type": "text", "text": body.to_string()},
+            ],
+            "isError": false,
+        }),
+        _ => tool_result(body.to_string(), false),
     }
 }
 
@@ -341,4 +358,56 @@ fn rpc_error(id: Value, code: i64, message: &str, data: Value) -> String {
         "error": {"code": code, "message": message, "data": data}
     })
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aui_browser::script::ScriptBuilder;
+    use aui_browser::{CdpTransport, ReplayTransport};
+
+    fn server_replaying(script: ScriptBuilder) -> Server {
+        let mut script = Some(script);
+        Server::with_connector(move |_url| {
+            let script = script.take().expect("one connect per test");
+            Ok(Box::new(ReplayTransport::parse(&script.to_json())?) as Box<dyn CdpTransport>)
+        })
+    }
+
+    fn tools_call_line(tool: &str) -> String {
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+               "params": {"name": tool, "arguments": {"cdp": "http://127.0.0.1:9222"}}})
+        .to_string()
+    }
+
+    /// The screenshot reaches an MCP client as an image it can show; the text
+    /// item keeps the metadata but not the base64. Other tools stay text-only.
+    #[test]
+    fn screenshot_is_an_mcp_image_item() {
+        let mut server = server_replaying(
+            ScriptBuilder::new().call("Page.captureScreenshot", json!({"data": "iVBORw0KGgo="})),
+        );
+        let reply: Value = serde_json::from_str(
+            &handle_line_with(&mut server, &tools_call_line("browser_screenshot")).unwrap(),
+        )
+        .unwrap();
+        let content = &reply["result"]["content"];
+        assert_eq!(
+            content[0],
+            json!({"type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png"}),
+            "{reply}"
+        );
+        let meta: Value = serde_json::from_str(content[1]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(meta, json!({"format": "png"}), "{reply}");
+        assert_eq!(reply["result"]["isError"], false);
+
+        let mut server = server_replaying(
+            ScriptBuilder::new().call("Page.printToPDF", json!({"data": "JVBERi0="})),
+        );
+        let reply: Value = serde_json::from_str(
+            &handle_line_with(&mut server, &tools_call_line("browser_save_as_pdf")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(reply["result"]["content"][0]["type"], "text", "{reply}");
+    }
 }

@@ -38,7 +38,7 @@ resolve. Coordinate clicks are deliberately not offered: indices only.
 | `get_page_text` | `browser_get_page_text`, `browser_get_text` | `innerText` via evaluate |
 | `get_html` | `browser_get_html` | `outerHTML` via evaluate |
 | `find` | `browser_find` | label and/or `role` filter over the index |
-| `screenshot` | `browser_screenshot` | `Page.captureScreenshot` → base64 png |
+| `screenshot` | `browser_screenshot` | `Page.captureScreenshot` → MCP `image` content (`image/png`) plus a metadata text item; optional `path` writes the PNG |
 | `scroll` | `browser_scroll` | `Input.dispatchMouseEvent` mouseWheel by `pages` (clamped 0.05–100) |
 | `scroll_to` | `browser_scroll_to` | index → `DOM.scrollIntoViewIfNeeded` on the region's node |
 | `left_click` | `browser_click` | **index only** — gate → ticket → executor reobserve → DOM press |
@@ -63,7 +63,7 @@ resolve. Coordinate clicks are deliberately not offered: indices only.
 | `read_network` | `browser_read_network` | `Network.*` aggregated by requestId; drains per read |
 | `search` (google) | `browser_search` | Google URL nav for `query` |
 | `zoom` | `browser_zoom` | `Emulation.setPageScaleFactor`; `factor` or `direction` in/out/reset |
-| `save_as_pdf` | `browser_save_as_pdf` | `Page.printToPDF` → base64 |
+| `save_as_pdf` | `browser_save_as_pdf` | `Page.printToPDF` → base64; optional `path` writes the PDF |
 | `close` (browser) | `browser_close_tab` on last tab | whole-browser close stays host-managed |
 | `list_sessions` / `close_session` / agent | — | browser-use Cloud surface; not local-browser tools |
 | `Bash` toolset | — | host-side process tool; out of scope by design |
