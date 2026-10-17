@@ -5,7 +5,7 @@
 //! hidden, occluded, …) is filtered **before** Instinct sees candidates — never as
 //! score penalties.
 //!
-//! Pin: `hexuria/instinct` @ `a42d16b6f5ccc3273939c8e3d3f462d78765bfea`.
+//! Pin: `instinct-*` `0.1.0` from crates.io (hexuria/instinct#35).
 
 #![forbid(unsafe_code)]
 
@@ -44,5 +44,5 @@ pub use types::{
     RankedAction,
 };
 
-/// Documented Instinct git rev this crate is pinned to.
-pub const INSTINCT_GIT_REV: &str = "a42d16b6f5ccc3273939c8e3d3f462d78765bfea";
+/// Documented Instinct version requirement this crate is pinned to.
+pub const INSTINCT_VERSION_REQ: &str = "0.1.0";

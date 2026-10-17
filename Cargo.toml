@@ -30,7 +30,9 @@ rust-version = "1.99"
 
 
 [workspace.dependencies]
-# Pinned Exact: hexuria/instinct @ a42d16b (ADR 0008). Bump only with deliberate eval.
-instinct-core = { git = "https://github.com/hexuria/instinct", rev = "a42d16b6f5ccc3273939c8e3d3f462d78765bfea" }
-instinct-text = { git = "https://github.com/hexuria/instinct", rev = "a42d16b6f5ccc3273939c8e3d3f462d78765bfea" }
-instinct-lexicon = { git = "https://github.com/hexuria/instinct", rev = "a42d16b6f5ccc3273939c8e3d3f462d78765bfea" }
+# Instinct 0.1.0 from crates.io (hexuria/instinct#35). Was pinned to git rev
+# a42d16b (ADR 0008); 0.1.0 = that rev + nfc span-mapping fixes. Bump only
+# with deliberate eval.
+instinct-core = "0.1.0"
+instinct-text = "0.1.0"
+instinct-lexicon = "0.1.0"
