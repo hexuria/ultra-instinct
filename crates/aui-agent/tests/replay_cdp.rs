@@ -404,7 +404,7 @@ fn autocomplete_type_then_option_click_over_cdp() {
         "Auto",
     );
     // Post-click page keeps Manila (history → DONE) and adds a marker so
-    // verify sees state-changed rather than no-effect.
+    // verify sees state-changed rather than no visible change.
     let picked = PageSpec::of(
         &[
             Control::combobox(10, 100, "City", (10.0, 10.0, 200.0, 28.0)),
@@ -423,7 +423,7 @@ fn autocomplete_type_then_option_click_over_cdp() {
         .observe(&open) // TYPE clause → DONE
         .observe(&open) // predict CLICK Manila
         .observe(&open) // executor revalidate CLICK
-        .dom_click(11)
+        .pointer_click()
         .observe(&picked) // after CLICK (state-changed)
         .observe(&picked); // CLICK clause → DONE
     let mut agent = AgentBuilder::new(session(script), InstinctPolicy::default())
@@ -457,7 +457,7 @@ fn autocomplete_waits_for_stable_delayed_options_over_cdp() {
         .observe(&open) // TYPE clause → DONE
         .observe(&open) // predict CLICK Manila
         .observe(&open) // executor revalidate CLICK
-        .dom_click(11)
+        .pointer_click()
         .observe(&picked) // after CLICK
         .observe(&picked); // goal → DONE
     let mut agent = AgentBuilder::new(session(script), InstinctPolicy::default())

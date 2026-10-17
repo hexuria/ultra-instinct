@@ -9,14 +9,21 @@
 //!
 //! ```json
 //! {"goal": "...",
-//!  "actions": [{"id": "TYPE_TEXT:n4", "kind": "TYPE_TEXT", "label": "Name",
-//!               "state": {"value": "Ana"}}, ...],
+//!  "actions": [{"id": "TYPE_TEXT:n4", "kind": "TYPE_TEXT", "label": "",
+//!               "role": "text_field", "box": [32, 55, 120, 15],
+//!               "near_text": "Name:", "state": {"value": "Ana"}}, ...],
 //!  "history": [{"step": 1, "id": "TYPE_TEXT:n4", "kind": "TYPE_TEXT",
-//!               "label": "Name", "verification": "success"}]}
+//!               "label": "Name", "verification": "success"}],
+//!  "page": {"url": "...", "title": "...", "text": "visible page text"}}
 //! ```
 //!
-//! Region-bound actions include nonempty observed control state as additive
-//! evidence. The reply remains closed to the offered id and kind.
+//! Region-bound actions include their box `[x, y, w, h]` in viewport pixels,
+//! `near_text` when the region has no label, and nonempty observed control
+//! state, all as additive evidence. `page` is present when the transport
+//! [`RemoteTransport::wants_evidence`] page text; its text is untrusted data.
+//! A transport that wants a screenshot gets the decision's viewport
+//! [`Screenshot`] beside the request. The reply remains closed to the offered
+//! id and kind.
 //!
 //! Reply (exactly one of):
 //!
@@ -39,11 +46,29 @@ use serde_json::{json, Map, Value};
 use aui_core::{ActionKind, ActionSpace};
 
 use crate::goal::AgentGoal;
-use crate::types::{BrowserPolicy, HistoryEntry, PolicyDecision, PolicyError, PolicyOutcome};
+use crate::types::{
+    BrowserPolicy, DecisionEvidence, EvidenceWants, HistoryEntry, PageView, PolicyDecision,
+    PolicyError, PolicyOutcome, Screenshot,
+};
 
 /// Carries one request to a remote model and returns its raw reply.
 pub trait RemoteTransport {
     fn call(&mut self, request_json: &str) -> Result<String, String>;
+
+    /// Which evidence this transport sends. Default: none.
+    fn wants_evidence(&self) -> EvidenceWants {
+        EvidenceWants::default()
+    }
+
+    /// [`Self::call`] with the viewport screenshot as evidence beside the
+    /// request. The reply contract is unchanged. Default: ignores it.
+    fn call_with_screenshot(
+        &mut self,
+        request_json: &str,
+        _screenshot: Option<&Screenshot>,
+    ) -> Result<String, String> {
+        self.call(request_json)
+    }
 }
 
 /// Remote policy over a consumer transport. See the module docs for the wire.
@@ -80,10 +105,21 @@ impl<T: RemoteTransport> RemotePolicy<T> {
 /// Build the request object for `space` / `goal` / `history`.
 ///
 /// Each action carries `id`, `kind`, `label`, and — for region-bound
-/// actions — `role` and nonempty observed `state`. History includes the
+/// actions — `role`, `box`, `near_text` when unnamed, and nonempty observed
+/// `state`. History includes the
 /// executed action's `kind` and `label`. Extra fields are additive for
 /// transports; a consumer may ignore them.
 pub fn request_json(space: &ActionSpace, goal: &AgentGoal, history: &[HistoryEntry]) -> String {
+    request_json_with_page(space, goal, history, None)
+}
+
+/// [`request_json`] plus the page's `url`, `title`, and visible `text`.
+pub fn request_json_with_page(
+    space: &ActionSpace,
+    goal: &AgentGoal,
+    history: &[HistoryEntry],
+    page: Option<&PageView>,
+) -> String {
     let actions: Vec<Value> = space
         .actions()
         .map(|a| {
@@ -91,6 +127,12 @@ pub fn request_json(space: &ActionSpace, goal: &AgentGoal, history: &[HistoryEnt
                 json!({"id": a.id().as_str(), "kind": a.kind().as_str(), "label": a.label()});
             if let Some(role) = a.role() {
                 action["role"] = json!(role.as_str());
+            }
+            if let Some(bounds) = a.bounds() {
+                action["box"] = json!(bounds);
+            }
+            if let Some(near) = a.near_text() {
+                action["near_text"] = json!(near);
             }
             let observed = a.state();
             if !observed.is_empty() {
@@ -127,7 +169,11 @@ pub fn request_json(space: &ActionSpace, goal: &AgentGoal, history: &[HistoryEnt
             })
         })
         .collect();
-    json!({"goal": goal.as_str(), "actions": actions, "history": history}).to_string()
+    let mut request = json!({"goal": goal.as_str(), "actions": actions, "history": history});
+    if let Some(page) = page {
+        request["page"] = json!({"url": page.url, "title": page.title, "text": page.text});
+    }
+    request.to_string()
 }
 
 /// Parse and validate a reply against the offered space.
@@ -188,13 +234,30 @@ impl<T: RemoteTransport> BrowserPolicy for RemotePolicy<T> {
         goal: &AgentGoal,
         history: &[HistoryEntry],
     ) -> Result<PolicyOutcome, PolicyError> {
+        self.decide_with_evidence(space, goal, history, &DecisionEvidence::default())
+    }
+
+    fn wants_evidence(&self) -> EvidenceWants {
+        self.transport.wants_evidence()
+    }
+
+    fn decide_with_evidence(
+        &mut self,
+        space: &ActionSpace,
+        goal: &AgentGoal,
+        history: &[HistoryEntry],
+        evidence: &DecisionEvidence,
+    ) -> Result<PolicyOutcome, PolicyError> {
         if goal.is_empty() {
             return Err(PolicyError::EmptyGoal);
         }
         self.calls += 1;
         let reply = self
             .transport
-            .call(&request_json(space, goal, history))
+            .call_with_screenshot(
+                &request_json_with_page(space, goal, history, evidence.page.as_ref()),
+                evidence.screenshot.as_ref(),
+            )
             .map_err(|e| PolicyError::Internal(format!("remote transport: {e}")))?;
         parse_reply(space, &reply)
     }
@@ -364,13 +427,100 @@ mod tests {
             .find(|action| action["id"] == "CLICK:submit")
             .unwrap();
         assert!(submit.get("state").is_none());
+        assert_eq!(submit["box"], json!([10, 50, 80, 24]));
+        assert!(submit.get("near_text").is_none(), "named target");
         let done = actions
             .iter()
             .find(|action| action["id"] == "DONE")
             .unwrap();
         assert!(done.get("state").is_none());
+        assert!(done.get("box").is_none(), "controls have no box");
         assert_eq!(request["history"][0]["kind"], "TYPE_TEXT");
         assert_eq!(request["history"][0]["label"], "Name");
+    }
+
+    /// Records the screenshot and page each call carried; replies with a
+    /// fixed choice.
+    struct SeeingRemote {
+        seen: Vec<Option<String>>,
+        pages: Vec<Value>,
+    }
+
+    impl RemoteTransport for SeeingRemote {
+        fn call(&mut self, request_json: &str) -> Result<String, String> {
+            self.call_with_screenshot(request_json, None)
+        }
+
+        fn wants_evidence(&self) -> EvidenceWants {
+            EvidenceWants {
+                screenshot: true,
+                page_text: true,
+            }
+        }
+
+        fn call_with_screenshot(
+            &mut self,
+            request_json: &str,
+            screenshot: Option<&Screenshot>,
+        ) -> Result<String, String> {
+            self.seen.push(screenshot.map(|s| s.base64().to_owned()));
+            let request: Value = serde_json::from_str(request_json).unwrap();
+            self.pages.push(request["page"].clone());
+            Ok(r#"{"choice":{"id":"CLICK:a","kind":"CLICK"}}"#.to_owned())
+        }
+    }
+
+    #[test]
+    fn evidence_reaches_a_transport_that_wants_it_and_reply_stays_closed() {
+        let mut p = EscalatingPolicy::new(
+            InstinctPolicy::default(),
+            Some(RemotePolicy::new(SeeingRemote {
+                seen: Vec::new(),
+                pages: Vec::new(),
+            })),
+        );
+        assert_eq!(
+            p.wants_evidence(),
+            EvidenceWants {
+                screenshot: true,
+                page_text: true
+            }
+        );
+        let evidence = DecisionEvidence {
+            screenshot: Some(Screenshot::from_base64("/9j/AA==")),
+            page: Some(PageView {
+                url: Some("https://x.test/".to_owned()),
+                title: None,
+                text: "3 + 9 = ?".to_owned(),
+            }),
+        };
+        let out = p
+            .decide_with_evidence(&twins(), &AgentGoal::new("Delete"), &[], &evidence)
+            .unwrap();
+        assert_eq!(out.as_choice().unwrap().action_id.as_str(), "CLICK:a");
+        p.decide(&twins(), &AgentGoal::new("Delete"), &[]).unwrap();
+        let remote = p.fallback.as_ref().unwrap().transport();
+        assert_eq!(remote.seen, [Some("/9j/AA==".to_owned()), None]);
+        assert_eq!(
+            remote.pages[0],
+            json!({"url": "https://x.test/", "title": null, "text": "3 + 9 = ?"})
+        );
+        assert!(remote.pages[1].is_null(), "no page without evidence");
+    }
+
+    #[test]
+    fn transports_and_instinct_ask_for_no_evidence_by_default() {
+        let none = EvidenceWants::default();
+        assert_eq!(
+            RemotePolicy::new(ScriptedRemote::new(Vec::<String>::new())).wants_evidence(),
+            none
+        );
+        assert_eq!(InstinctPolicy::default().wants_evidence(), none);
+        assert_eq!(
+            EscalatingPolicy::new(InstinctPolicy::default(), Some(UnconfiguredRemote))
+                .wants_evidence(),
+            none
+        );
     }
 
     #[test]

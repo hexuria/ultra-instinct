@@ -49,6 +49,7 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct ClefTransport {
     client: Client,
     model: String,
+    page_text: bool,
 }
 
 impl ClefTransport {
@@ -78,7 +79,11 @@ impl ClefTransport {
         let client = builder
             .build()
             .map_err(|err| format!("clef client: {err}"))?;
-        Ok(Self { client, model })
+        Ok(Self {
+            client,
+            model,
+            page_text: true,
+        })
     }
 
     /// The model slug this transport calls (after `CLEF_MODEL` overrides).
@@ -156,7 +161,22 @@ fn reply_from_answers(
     })
 }
 
+impl ClefTransport {
+    /// Send the page's visible text, URL, and title with each call.
+    pub fn with_page_text(mut self, page_text: bool) -> Self {
+        self.page_text = page_text;
+        self
+    }
+}
+
 impl RemoteTransport for ClefTransport {
+    fn wants_evidence(&self) -> aui_policy::EvidenceWants {
+        aui_policy::EvidenceWants {
+            screenshot: false,
+            page_text: self.page_text,
+        }
+    }
+
     fn call(&mut self, request_json: &str) -> Result<String, String> {
         let request: Value =
             serde_json::from_str(request_json).map_err(|err| format!("clef request: {err}"))?;

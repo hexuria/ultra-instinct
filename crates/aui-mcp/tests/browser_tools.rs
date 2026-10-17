@@ -185,6 +185,31 @@ fn click_gates_tickets_and_presses_dom_side() {
 }
 
 #[test]
+fn click_with_mouse_true_presses_a_trusted_pointer() {
+    let (mut server, log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&page())
+            .pointer_click(),
+    );
+    let out = call(
+        &mut server,
+        "browser_click",
+        json!({"cdp": CDP, "index": 2, "mouse": true}),
+    );
+    assert_eq!(out["acted"], "click", "{out}");
+    let log = log.borrow();
+    assert!(
+        log.iter().any(|m| m == "Input.dispatchMouseEvent"),
+        "pointer press expected: {log:?}"
+    );
+    assert!(
+        !log.iter().any(|m| m == "DOM.resolveNode"),
+        "no DOM tier: {log:?}"
+    );
+}
+
+#[test]
 fn double_click_tickets_then_dispatches_press_release() {
     let (mut server, log) = server(
         ScriptBuilder::new()

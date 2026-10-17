@@ -21,6 +21,7 @@ use crate::element_state::ElementState;
 use crate::error::CoreError;
 use crate::id::RegionId;
 use crate::manifold::InteractionManifold;
+use crate::rect::Rect;
 use crate::region::InteractionRegion;
 use crate::vocab::{Action, Role};
 
@@ -142,6 +143,12 @@ pub struct ObservedAction {
     /// Region fingerprint bits at observation time (0 for controls).
     target_fingerprint: u64,
     state: ElementState,
+    /// Target box `[x, y, width, height]` in whole viewport pixels. Request
+    /// evidence for a policy that reads the screenshot; never executed.
+    bounds: Option<[i32; 4]>,
+    /// For an unnamed target: the observed text that sits by it. Evidence
+    /// only; [`Self::label`] stays the region label.
+    near_text: Option<String>,
 }
 
 impl ObservedAction {
@@ -165,6 +172,8 @@ impl ObservedAction {
             role,
             target_fingerprint,
             state,
+            bounds: None,
+            near_text: None,
         }
     }
 
@@ -189,12 +198,20 @@ impl ObservedAction {
     pub fn state(&self) -> &ElementState {
         &self.state
     }
+    pub fn bounds(&self) -> Option<[i32; 4]> {
+        self.bounds
+    }
+    pub fn near_text(&self) -> Option<&str> {
+        self.near_text.as_deref()
+    }
 }
 
 /// Finite set of operations/targets a policy may choose from for one observation.
 ///
 /// Stored in deterministic `ActionId` order. Construction never invents
-/// selectors or coordinates — only manifold region ids and fixed controls.
+/// selectors — only manifold region ids and fixed controls. Target boxes are
+/// observed geometry carried as request evidence; nothing a policy returns
+/// can carry a coordinate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActionSpace {
     captured_at_ms: u64,
@@ -224,7 +241,10 @@ impl ActionSpace {
                 {
                     continue;
                 }
-                let observed = target_action(kind, region);
+                let mut observed = target_action(kind, region);
+                if observed.label.trim().is_empty() {
+                    observed.near_text = near_text(manifold, region);
+                }
                 actions.insert(observed.id.clone(), observed);
             }
         }
@@ -345,7 +365,69 @@ fn target_action(kind: ActionKind, region: &InteractionRegion) -> ObservedAction
         role: Some(region.role()),
         target_fingerprint: region.fingerprint().bits(),
         state: region.state().clone(),
+        bounds: Some(pixel_box(region.rect())),
+        near_text: None,
     }
+}
+
+fn pixel_box(rect: Rect) -> [i32; 4] {
+    // Saturating float-to-int casts: an absurd coordinate cannot wrap.
+    [rect.x(), rect.y(), rect.width(), rect.height()].map(|v| v.round() as i32)
+}
+
+/// Widest gap, in viewport pixels, between an unnamed target and text to its
+/// left on the same row.
+const NEAR_TEXT_ROW_GAP_PX: f64 = 160.0;
+/// Widest gap between an unnamed target and text directly above it.
+const NEAR_TEXT_ABOVE_GAP_PX: f64 = 40.0;
+/// Longest near text carried, in characters.
+const NEAR_TEXT_MAX_CHARS: usize = 80;
+
+/// Observed text that names an unnamed target the way a sighted reader would
+/// read it: the parent's own text ("Date: [ ]"), else the nearest text to the
+/// left on the same row, else the nearest text directly above. Geometry only;
+/// `None` when no text is that close.
+fn near_text(manifold: &InteractionManifold, target: &InteractionRegion) -> Option<String> {
+    let named = |region: &InteractionRegion| {
+        region.id() != target.id() && !region.label().trim().is_empty()
+    };
+    let parent = target
+        .parent()
+        .and_then(|id| manifold.get(id))
+        .filter(|parent| named(parent));
+    let t = target.rect();
+    let left = manifold
+        .regions()
+        .filter(|r| named(r))
+        .filter_map(|r| {
+            let rect = r.rect();
+            let same_row = rect.y() < t.bottom() && t.y() < rect.bottom();
+            let gap = t.x() - rect.right();
+            (same_row && (0.0..=NEAR_TEXT_ROW_GAP_PX).contains(&gap)).then_some((gap, r))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0));
+    let above = || {
+        manifold
+            .regions()
+            .filter(|r| named(r))
+            .filter_map(|r| {
+                let rect = r.rect();
+                let overlaps = rect.x() < t.right() && t.x() < rect.right();
+                let gap = t.y() - rect.bottom();
+                (overlaps && (0.0..=NEAR_TEXT_ABOVE_GAP_PX).contains(&gap)).then_some((gap, r))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+    };
+    let region = parent.or_else(|| left.map(|(_, r)| r).or_else(|| above().map(|(_, r)| r)))?;
+    let text: String = region
+        .label()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(NEAR_TEXT_MAX_CHARS)
+        .collect();
+    Some(text)
 }
 
 fn control_action(kind: ActionKind) -> ObservedAction {
@@ -365,6 +447,8 @@ fn control_action(kind: ActionKind) -> ObservedAction {
         role: None,
         target_fingerprint: 0,
         state: ElementState::default(),
+        bounds: None,
+        near_text: None,
     }
 }
 
@@ -450,6 +534,79 @@ mod tests {
         let mut sorted = ids.clone();
         sorted.sort();
         assert_eq!(ids, sorted);
+    }
+
+    #[test]
+    fn unnamed_targets_carry_near_text_and_every_target_carries_its_box() {
+        let m = parse_fixture(
+            r#"
+            viewport w=800 h=600
+            region id=row role=generic label="Date:" x=2 y=52 w=156 h=21 actions= sources=dom
+            region id=date role=text_field label="" x=32.6 y=55 w=120 h=15 actions=type parent=row sources=dom
+            region id=email-text role=text label="Email" x=10 y=100 w=50 h=20 actions= sources=dom
+            region id=email role=text_field label="" x=80 y=100 w=200 h=20 actions=type sources=dom
+            region id=far-text role=text label="Far away" x=10 y=200 w=50 h=20 actions= sources=dom
+            region id=far role=text_field label="" x=400 y=200 w=100 h=20 actions=type sources=dom
+            region id=heading role=heading label="  Shipping   address  " x=10 y=300 w=300 h=20 actions= sources=dom
+            region id=street role=text_field label="" x=10 y=340 w=300 h=20 actions=type sources=dom
+            region id=go role=button label="Go" x=320 y=100 w=40 h=20 actions=click sources=dom
+            "#,
+        )
+        .unwrap();
+        let space = ActionSpace::from_manifold(&m);
+        let near = |id: &str| space.get_str(id).unwrap().near_text().map(str::to_owned);
+        assert_eq!(
+            near("TYPE_TEXT:date").as_deref(),
+            Some("Date:"),
+            "parent text"
+        );
+        assert_eq!(
+            near("TYPE_TEXT:email").as_deref(),
+            Some("Email"),
+            "same row, left"
+        );
+        assert_eq!(near("TYPE_TEXT:far"), None, "past the row gap");
+        assert_eq!(
+            near("TYPE_TEXT:street").as_deref(),
+            Some("Shipping address"),
+            "directly above, whitespace folded"
+        );
+        assert_eq!(
+            near("CLICK:go"),
+            None,
+            "named targets keep their label only"
+        );
+        assert_eq!(space.get_str("TYPE_TEXT:date").unwrap().label(), "");
+        assert_eq!(
+            space.get_str("TYPE_TEXT:date").unwrap().bounds(),
+            Some([33, 55, 120, 15])
+        );
+        assert_eq!(space.get_str("DONE").unwrap().bounds(), None);
+    }
+
+    #[test]
+    fn near_text_row_and_above_gaps_are_inclusive() {
+        let at = |gap_x: f64, gap_y: f64| {
+            let m = parse_fixture(&format!(
+                "viewport w=800 h=600\n\
+                 region id=t role=text label=\"Name\" x=0 y=0 w=100 h=20 actions= sources=dom\n\
+                 region id=f role=text_field label=\"\" x={} y={} w=50 h=20 actions=type sources=dom\n",
+                100.0 + gap_x,
+                20.0 + gap_y,
+            ))
+            .unwrap();
+            ActionSpace::from_manifold(&m)
+                .get_str("TYPE_TEXT:f")
+                .unwrap()
+                .near_text()
+                .map(str::to_owned)
+        };
+        // Same row (y overlap) at the row limit and one pixel past it.
+        assert_eq!(at(NEAR_TEXT_ROW_GAP_PX, -20.0).as_deref(), Some("Name"));
+        assert_eq!(at(NEAR_TEXT_ROW_GAP_PX + 1.0, -20.0), None);
+        // Directly above (x overlap) at the above limit and one pixel past it.
+        assert_eq!(at(-100.0, NEAR_TEXT_ABOVE_GAP_PX).as_deref(), Some("Name"));
+        assert_eq!(at(-100.0, NEAR_TEXT_ABOVE_GAP_PX + 1.0), None);
     }
 
     #[test]

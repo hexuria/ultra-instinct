@@ -32,8 +32,10 @@ crate.
 >    evidence and builds the action space. No browser concepts in Instinct. No
 >    second float confidence gate on the agent path. Abstain is never turned
 >    into "top candidate wins". Habituation (ADR 0008) only lowers the urge of
->    a repeated no-effect / wrong-effect action; it never adds candidates or
->    bypasses the gate.
+>    a repeated `dispatched-no-visible-change` / wrong-effect action; it never
+>    adds candidates or bypasses the gate. A click whose only change is a
+>    target's control state (checked / expanded / value / selected) verifies
+>    as state-changed (ADR 0009), without that state entering the fingerprint.
 > 3. **Hard invalidity is guard evidence, not a score.** Disabled, readonly
 >    (TYPE / SELECT), hidden / zero-area, occluded, front-layer, offscreen,
 >    missing target, unsupported action → `aui_guard::gate` refuses. The
@@ -44,7 +46,12 @@ crate.
 >    input kind == `ticket.action` → **fresh observe** → `revalidate`
 >    (target-scoped world fingerprint + target role / label / fingerprint) →
 >    hard gate on the fresh region → **mark consumed before dispatch** →
->    dispatch to `ticket.target_id`. The host helper `consume_ticket_once` uses
+>    dispatch to `ticket.target_id`. The agent's CLICK is a trusted pointer
+>    press at the region center (`Input::Click`); the DOM `this.click()` tiers
+>    are its CDP-refusal fallback and the retry (`Input::ScriptClick`) after a
+>    pointer click shows no visible change (ADR 0009). The MCP host's
+>    `browser_click` stays DOM-side unless called with `mouse: true`. The host
+>    helper `consume_ticket_once` uses
 >    the same consume-before-press order. `Predicted` carries no fingerprint of
 >    its own; do not add a "pre-ticket check" that is not wired into a refusal.
 > 5. **Stale ≠ spent.** `WorldChanged` / `TargetChanged` / `TargetGone` are
@@ -71,8 +78,13 @@ crate.
 > 7a. **Model text is payload-only and grounded** (feature `model-text`,
 >    ADR 0006). The model fills the payload of an action Instinct already chose;
 >    replies must echo the context fingerprint, pass shape checks, and occur
->    in the goal clause, else deterministic fallback, else abstain. CI uses
->    scripted models only; no provider SDK or key handling in the tree.
+>    in the goal clause, else deterministic fallback, else abstain. One opt-in
+>    exception (`--allow-derived-text`, ADR 0009): a value read or worked out
+>    from page text may be typed when the goal quotes no untyped value, the
+>    field is not secret (password / hidden / file inputs; PIN /
+>    CVV / card / one-time-code labels), and the value is one line of ≤ 64
+>    chars; every derived value is printed. CI uses scripted models only; no
+>    provider SDK or key handling in the tree.
 > 7b. **Harder page types** (ADR 0007). Observe pierces open shadow roots and
 >    same-origin iframes (`pierce: true`). ComboBox / ListBox / Option are
 >    first-class roles. Virtualized lists are the visible window only (scroll
@@ -81,13 +93,21 @@ crate.
 >    10 polls at 25 ms intervals and reads its `aria-controls` / `aria-owns`
 >    popup when present. The document fallback ends early only after visible
 >    options change from the first poll and stabilize; input is never
->    re-dispatched. Observe also records control state (value, checked,
+>    re-dispatched. A plain element the page made clickable (an `onclick`
+>    attribute or handler property, `tabindex` ≥ 0, or a pointer cursor it
+>    sets itself rather than inherits) is offered CLICK (ADR 0009). Observe
+>    also records control state (value, checked,
 >    expanded, select options) as evidence only: it is not in the region
 >    fingerprint, and password values are never read. Do not claim cross-origin
 >    iframe or closed-shadow coverage.
 > 8. **Remote escalation is explicit and closed.** Feature `remote`;
 >    reply is exactly a choice id + kind from the offered menu or abstain.
->    Selectors, coordinates, scripts, extra fields → hard error.
+>    Selectors, coordinates, scripts, extra fields → hard error. The request
+>    may carry evidence a transport asks for (`wants_evidence`, ADR 0009):
+>    the viewport JPEG beside it (`jev`: a System One image, `--no-screenshot`),
+>    `page` {url, title, ≤ 6000 chars of visible text} (`jev`, `clef`,
+>    `--no-page-text`), and per-target `box` / `near_text`. Evidence never
+>    widens the reply.
 > 9. **HGRA stays frozen.** No matcher tuning on the agent path.
 > 10. **One blocking CDP socket per agent.** Parallelism means separate agents
 >    in separate tabs with no shared state. Formal tools stay unjustified for

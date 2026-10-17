@@ -23,6 +23,6 @@ pub use error::AgentError;
 pub use executor::{execute_ticketed, ExecError, Executed};
 pub use journal::JournalEvent;
 pub use outcome::{AgentOutcome, StepRecord, VerificationKind};
-pub use runtime::{BrowserRuntime, FieldValue, Input, MockBrowser};
+pub use runtime::{BrowserRuntime, FieldValue, Input, MockBrowser, PAGE_TEXT_MAX_CHARS};
 pub use verify_map::{classify_delta, classify_value};
 pub use win::step_is_win;

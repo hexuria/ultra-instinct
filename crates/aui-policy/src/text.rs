@@ -14,6 +14,11 @@ pub struct TextContext {
     pub typed: Vec<String>,
     /// Observation / action-space fingerprint bits the resolve was based on.
     pub context_fingerprint: u64,
+    /// The page's visible text, only when the resolver asked for it
+    /// ([`TextResolver::wants_page_text`]). Untrusted data; not fingerprinted.
+    pub page_text: Option<String>,
+    /// The field's INPUT `type`, lowercased (`password`, `email`, …).
+    pub input_type: Option<String>,
 }
 
 impl TextContext {
@@ -65,6 +70,11 @@ impl std::error::Error for TextError {}
 
 pub trait TextResolver {
     fn resolve(&mut self, context: &TextContext) -> Result<TextResolution, TextError>;
+
+    /// Whether [`TextContext::page_text`] should be filled. Default: no.
+    fn wants_page_text(&self) -> bool {
+        false
+    }
 }
 
 /// Ground a SELECT payload in the observed enabled options.
@@ -211,6 +221,16 @@ impl TextResolver for DeterministicTextResolver {
     }
 }
 
+/// The first double-quoted value in the goal not typed yet: an explicit
+/// value the user gave, which beats anything read off the page.
+#[cfg(feature = "model-text")]
+pub(crate) fn untyped_quoted_value(context: &TextContext) -> Option<String> {
+    quoted_literals(context.goal.as_str())
+        .into_iter()
+        .map(|(_, literal)| literal)
+        .find(|literal| !context.typed.contains(literal))
+}
+
 fn quoted_literals(goal: &str) -> Vec<(usize, String)> {
     let mut literals = Vec::new();
     let mut cursor = 0;
@@ -324,6 +344,8 @@ mod tests {
             field_role: "text_field".into(),
             typed: Vec::new(),
             context_fingerprint: 1,
+            page_text: None,
+            input_type: None,
         };
         let res = r.resolve(&ctx).unwrap();
         assert_eq!(res.text, "Zürich");
@@ -338,6 +360,8 @@ mod tests {
             field_role: "text_field".into(),
             typed: Vec::new(),
             context_fingerprint: 2,
+            page_text: None,
+            input_type: None,
         };
         assert_eq!(r.resolve(&ctx).unwrap().text, "hello world");
     }
@@ -351,6 +375,8 @@ mod tests {
             field_role: "text_field".into(),
             typed: Vec::new(),
             context_fingerprint: 4,
+            page_text: None,
+            input_type: None,
         };
         assert_eq!(r.resolve(&ctx), Err(TextError::Missing));
     }
@@ -364,6 +390,8 @@ mod tests {
             field_role: "text_field".into(),
             typed: Vec::new(),
             context_fingerprint: 3,
+            page_text: None,
+            input_type: None,
         };
         assert_eq!(r.resolve(&ctx), Err(TextError::Missing));
     }
@@ -375,6 +403,8 @@ mod tests {
             field_role: "text_field".into(),
             typed: typed.iter().map(|text| (*text).to_owned()).collect(),
             context_fingerprint: 5,
+            page_text: None,
+            input_type: None,
         };
         DeterministicTextResolver
             .resolve(&context)
@@ -465,6 +495,8 @@ mod tests {
             field_role: "text_field".into(),
             typed: Vec::new(),
             context_fingerprint: 9,
+            page_text: None,
+            input_type: None,
         };
         let fingerprint = context.fingerprint();
         context.typed.push("already typed".into());
