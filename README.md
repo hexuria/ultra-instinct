@@ -55,6 +55,24 @@ scripts/install-aui.sh   # idempotent; installs aui + ultra-instinct to ~/.cargo
 Agents: `skills/ultra-instinct/SKILL.md` turns a plain-language goal into one
 `aui run` call — install, CDP check, policy pick, and run are all covered there.
 
+### Claude Code: `screen-driver` subagent
+
+[`agents/screen-driver.md`](agents/screen-driver.md) is the Claude Code subagent
+from the [benchmark](#benchmark-browser-tools-for-an-llm-agent): it starts
+`aui mcp` for itself, drives a private headless Chrome (never your own), clicks
+by element index, and checks visuals from `browser_screenshot` images. It needs
+`aui` on `PATH` and Chrome or Chromium installed.
+
+```bash
+scripts/install-aui.sh
+mkdir -p ~/.claude/agents && cp agents/screen-driver.md ~/.claude/agents/
+```
+
+Copy it to `.claude/agents/` instead to scope it to one project. Claude Code
+reads agent files and their MCP servers when a session starts, so restart the
+session after installing it or after rebuilding `aui`. Then delegate page checks
+to it, for example: "use screen-driver to check the checkout page in dark mode".
+
 ## Run the agent
 
 ```bash
