@@ -84,6 +84,82 @@ pub struct HistoryEntry {
     pub verification: String,
 }
 
+/// A viewport screenshot captured for one decision: base64 image file bytes,
+/// as CDP `Page.captureScreenshot` returns them.
+///
+/// Evidence for a policy that reads pixels (a vision-language remote model).
+/// It never names a target: the reply stays an offered id. Instinct never
+/// asks for one.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Screenshot {
+    base64: String,
+    css_size: Option<[i32; 2]>,
+}
+
+impl Screenshot {
+    pub fn from_base64(base64: impl Into<String>) -> Self {
+        Self {
+            base64: base64.into(),
+            css_size: None,
+        }
+    }
+
+    /// The viewport's size in CSS pixels, the unit of action boxes. On a
+    /// high-density screen the image has more pixels than this.
+    pub fn with_css_size(mut self, width: i32, height: i32) -> Self {
+        self.css_size = Some([width, height]);
+        self
+    }
+
+    pub fn base64(&self) -> &str {
+        &self.base64
+    }
+
+    pub fn css_size(&self) -> Option<[i32; 2]> {
+        self.css_size
+    }
+}
+
+impl fmt::Debug for Screenshot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Screenshot({} base64 bytes)", self.base64.len())
+    }
+}
+
+/// The page's visible text at decision time, with its URL and title. Page
+/// text is untrusted data, never instructions.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PageView {
+    pub url: Option<String>,
+    pub title: Option<String>,
+    pub text: String,
+}
+
+/// What a decision may see beyond the action menu. Evidence only: it never
+/// names a target, and the reply stays an offered id.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DecisionEvidence {
+    pub screenshot: Option<Screenshot>,
+    pub page: Option<PageView>,
+}
+
+/// Which [`DecisionEvidence`] a policy reads. The agent captures nothing
+/// else.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EvidenceWants {
+    pub screenshot: bool,
+    pub page_text: bool,
+}
+
+impl EvidenceWants {
+    pub fn or(self, other: Self) -> Self {
+        Self {
+            screenshot: self.screenshot || other.screenshot,
+            page_text: self.page_text || other.page_text,
+        }
+    }
+}
+
 /// Policy over a finite [`ActionSpace`].
 pub trait BrowserPolicy {
     fn decide(
@@ -110,6 +186,24 @@ pub trait BrowserPolicy {
     /// post-decision artifact and is not context). Default no-op: only
     /// policies that consult situational knowledge (the dojo) need it.
     fn set_situation(&mut self, _ctx: &PolicyContext) {}
+
+    /// Which evidence [`Self::decide_with_evidence`] reads. Default: none,
+    /// so the agent captures none.
+    fn wants_evidence(&self) -> EvidenceWants {
+        EvidenceWants::default()
+    }
+
+    /// [`Self::decide`] with the evidence the runtime could capture.
+    /// Default: ignores it.
+    fn decide_with_evidence(
+        &mut self,
+        space: &ActionSpace,
+        goal: &AgentGoal,
+        history: &[HistoryEntry],
+        _evidence: &DecisionEvidence,
+    ) -> Result<PolicyOutcome, PolicyError> {
+        self.decide(space, goal, history)
+    }
 }
 
 /// Where a decision happens, as far as the caller can know before the

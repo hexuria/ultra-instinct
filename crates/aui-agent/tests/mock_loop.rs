@@ -3,8 +3,8 @@
 use aui_agent::{AgentBuilder, AgentOutcome, MockBrowser, TickResult, VerificationKind};
 use aui_core::{parse_fixture, Action, ActionKind, ActionSpace, ElementState, InteractionManifold};
 use aui_policy::{
-    AgentGoal, BrowserPolicy, HistoryEntry, InstinctPolicy, PolicyDecision, PolicyError,
-    PolicyOutcome,
+    AgentGoal, BrowserPolicy, DecisionEvidence, EvidenceWants, HistoryEntry, InstinctPolicy,
+    PolicyDecision, PolicyError, PolicyOutcome, Screenshot,
 };
 
 fn manifold(src: &str) -> InteractionManifold {
@@ -50,7 +50,7 @@ fn clicks_exact_label_and_sees_state_change() {
             matches!(
                 first.verification,
                 VerificationKind::StateChanged
-                    | VerificationKind::NoEffect
+                    | VerificationKind::NoVisibleChange
                     | VerificationKind::Success
             ),
             "{:?}",
@@ -188,7 +188,7 @@ fn repeated_no_effect_click_abstains_before_max_steps() {
     assert!(outcome
         .steps()
         .iter()
-        .all(|step| step.verification == VerificationKind::NoEffect));
+        .all(|step| step.verification == VerificationKind::NoVisibleChange));
     assert_eq!(agent.browser_mut().press_log().len(), 2);
     assert!(outcome.steps().len() < 10);
 }
@@ -766,8 +766,8 @@ fn skip_while_marker_catches_an_ad_that_starts_after_the_page() {
 }
 
 #[test]
-fn click_with_no_effect_is_retried_as_a_trusted_pointer_click() {
-    // The page ignores the first (script) click: nothing changes.
+fn click_with_no_visible_change_is_retried_as_a_script_click() {
+    // The page shows nothing after the first (pointer) click.
     let mut agent = AgentBuilder::new(MockBrowser::new(player(true)), InstinctPolicy::default())
         .max_steps(2)
         .build("click Skip Ad");
@@ -782,13 +782,13 @@ fn click_with_no_effect_is_retried_as_a_trusted_pointer_click() {
         inputs,
         [
             ("skip".to_owned(), aui_agent::Input::Click),
-            ("skip".to_owned(), aui_agent::Input::PointerClick),
+            ("skip".to_owned(), aui_agent::Input::ScriptClick),
         ]
     );
 }
 
 #[test]
-fn skip_while_marker_clicks_with_a_trusted_pointer_first() {
+fn skip_while_marker_clicks_with_a_trusted_pointer() {
     let mut browser = MockBrowser::new(watch_page(true, true));
     browser.set_on_press(watch_page(false, false));
     let mut agent = AgentBuilder::new(browser, InstinctPolicy::default())
@@ -800,7 +800,7 @@ fn skip_while_marker_clicks_with_a_trusted_pointer_first() {
         .iter()
         .map(|(_, i)| i.clone())
         .collect();
-    assert_eq!(inputs, [aui_agent::Input::PointerClick]);
+    assert_eq!(inputs, [aui_agent::Input::Click]);
 }
 
 #[test]
@@ -1146,4 +1146,123 @@ fn placeholder_hrefs_are_not_one_destination() {
         );
         assert!(agent.browser_mut().press_log().is_empty(), "{href}");
     }
+}
+
+/// Reads pixels and page text: records what it got, then DONE.
+#[derive(Default)]
+struct SeesThenDone {
+    seen: std::rc::Rc<std::cell::RefCell<Vec<DecisionEvidence>>>,
+}
+
+impl BrowserPolicy for SeesThenDone {
+    fn decide(
+        &mut self,
+        space: &ActionSpace,
+        goal: &AgentGoal,
+        history: &[HistoryEntry],
+    ) -> Result<PolicyOutcome, PolicyError> {
+        self.decide_with_evidence(space, goal, history, &DecisionEvidence::default())
+    }
+
+    fn wants_evidence(&self) -> EvidenceWants {
+        EvidenceWants {
+            screenshot: true,
+            page_text: true,
+        }
+    }
+
+    fn decide_with_evidence(
+        &mut self,
+        space: &ActionSpace,
+        _goal: &AgentGoal,
+        _history: &[HistoryEntry],
+        evidence: &DecisionEvidence,
+    ) -> Result<PolicyOutcome, PolicyError> {
+        self.seen.borrow_mut().push(evidence.clone());
+        let done = space
+            .get_str(ActionKind::Done.as_str())
+            .expect("DONE offered");
+        Ok(PolicyOutcome::Choice(PolicyDecision {
+            action_id: done.id().clone(),
+            kind: done.kind(),
+            target_label: done.label().to_owned(),
+            confidence_millis: 1_000,
+            operation_ranked: Vec::new(),
+            target_ranked: Vec::new(),
+        }))
+    }
+}
+
+const ONE_BUTTON: &str = r#"
+    viewport w=800 h=600
+    region id=go role=button label="Continue" x=10 y=10 w=80 h=24 actions=click sources=dom,accessibility
+    "#;
+
+#[test]
+fn policy_that_wants_evidence_gets_the_decision_screenshot_and_page_text() {
+    let browser = MockBrowser::new(manifold(ONE_BUTTON))
+        .with_screenshot(Screenshot::from_base64("/9j/AA=="))
+        .with_page_text("x".repeat(aui_agent::PAGE_TEXT_MAX_CHARS + 10));
+    let policy = SeesThenDone::default();
+    let seen = policy.seen.clone();
+    let mut agent = AgentBuilder::new(browser, policy)
+        .max_steps(3)
+        .build("Finish");
+    let outcome = agent.run();
+    assert!(matches!(outcome, AgentOutcome::Done { .. }), "{outcome:?}");
+    let seen = seen.borrow();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(
+        seen[0].screenshot.as_ref().map(Screenshot::base64),
+        Some("/9j/AA==")
+    );
+    let page = seen[0].page.as_ref().expect("page view");
+    assert_eq!(
+        page.text.chars().count(),
+        aui_agent::PAGE_TEXT_MAX_CHARS,
+        "capped"
+    );
+    assert_eq!(agent.into_browser().screenshots_taken(), 1);
+}
+
+#[test]
+fn instinct_never_triggers_a_screenshot() {
+    let browser =
+        MockBrowser::new(manifold(ONE_BUTTON)).with_screenshot(Screenshot::from_base64("/9j/AA=="));
+    let mut agent = AgentBuilder::new(browser, InstinctPolicy::default())
+        .max_steps(2)
+        .build("Continue");
+    let _ = agent.run();
+    assert_eq!(agent.into_browser().screenshots_taken(), 0);
+}
+
+fn remember_me(checked: bool) -> InteractionManifold {
+    let mut page = manifold(
+        r#"
+        viewport w=800 h=600
+        region id=remember role=checkbox label="Remember me" x=10 y=10 w=20 h=20 actions=click sources=dom,accessibility
+        "#,
+    );
+    let region = page
+        .get_str("remember")
+        .unwrap()
+        .clone()
+        .with_state(aui_core::ElementState {
+            checked: Some(checked),
+            ..aui_core::ElementState::default()
+        });
+    page.replace(region);
+    page
+}
+
+#[test]
+fn checkbox_click_that_only_flips_checked_is_state_changed() {
+    let mut browser = MockBrowser::new(remember_me(false));
+    browser.set_on_press(remember_me(true));
+    let mut agent = AgentBuilder::new(browser, InstinctPolicy::default())
+        .max_steps(1)
+        .build("Remember me");
+    agent.predict().unwrap();
+    let record = agent.act().unwrap();
+    assert_eq!(record.verification, VerificationKind::StateChanged);
 }

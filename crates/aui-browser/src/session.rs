@@ -5,7 +5,11 @@
 //! `Page.getNavigationHistory` may set the page URL and title. That payload
 //! has no time, so it does not change `captured_at_ms`.
 //!
-//! Press preference, and only for [`Action::Click`]:
+//! The agent clicks with [`BrowserSession::pointer_click`]: a trusted
+//! pointer move / press / release at the region center, falling back to
+//! [`BrowserSession::press`] when CDP refuses the pointer press.
+//!
+//! [`BrowserSession::press`] preference, and only for [`Action::Click`]:
 //! 1. DOM semantic click by node id (`DOM.resolveNode` + `Runtime.callFunctionOn`)
 //! 2. DOM semantic click by backend node id (same calls, `backendNodeId`)
 //! 3. coordinate click (`Input.dispatchMouseEvent`)
@@ -46,6 +50,10 @@ use crate::page::PageState;
 use crate::verify::{self, Expectation};
 
 pub const DOM_CLICK_FUNCTION: &str = "function(){this.click()}";
+
+/// JPEG quality of [`BrowserSession::screenshot_jpeg`]: small page text stays
+/// legible to a vision model at a fraction of the PNG size.
+pub const SCREENSHOT_JPEG_QUALITY: u8 = 80;
 
 /// Set the value of an editable element the way a user edit would, then fire
 /// `input` + `change`. Throws (and so changes nothing) when the element is
@@ -438,26 +446,40 @@ impl<T: CdpTransport> BrowserSession<T> {
         Ok(ActMechanism::Coordinate)
     }
 
-    /// Click the observed region `id` with a trusted pointer event at its
-    /// center (`Input.dispatchMouseEvent`), skipping the semantic tier.
+    /// Click the observed region `id` the way a user does: a trusted pointer
+    /// move, press, and release at its center (`Input.dispatchMouseEvent`).
     ///
-    /// Some controls ignore script-dispatched clicks (a video player's skip
-    /// button checks `isTrusted`). The agent uses this only after a semantic
-    /// click on the same target verified no effect, and only through the
-    /// executor, after the gate has checked that nothing covers the center.
+    /// This is the agent's first click. `HTMLElement.click()` neither moves
+    /// focus nor fires `pointerdown` / `mousedown`, and some controls check
+    /// `isTrusted`, so a script click misses handlers a real click reaches.
+    /// The agent calls this only through the executor, after the gate has
+    /// checked that nothing covers the center. When CDP refuses the move or
+    /// the press (a protocol error, so no button went down on the page), the
+    /// semantic tiers of [`Self::press`] run instead.
     #[doc(hidden)]
     pub fn pointer_click(&mut self, id: &RegionId) -> Result<ActMechanism, BrowserError> {
         let binding = self.binding_for(id)?;
         self.stale = true;
-        let move_params = json!({
-            "type": "mouseMoved",
-            "x": binding.center_x,
-            "y": binding.center_y
-        })
-        .to_string();
-        self.call("Input.dispatchMouseEvent", &move_params)?;
-        self.coordinate_click(binding.center_x, binding.center_y)?;
-        Ok(ActMechanism::Coordinate)
+        let (x, y) = (binding.center_x, binding.center_y);
+        let mouse = |kind: &str| {
+            let mut params = json!({"type": kind, "x": x, "y": y});
+            if kind != "mouseMoved" {
+                params["button"] = json!("left");
+                params["clickCount"] = json!(1);
+            }
+            params.to_string()
+        };
+        let pressed = self
+            .call("Input.dispatchMouseEvent", &mouse("mouseMoved"))
+            .and_then(|_| self.call("Input.dispatchMouseEvent", &mouse("mousePressed")));
+        match pressed {
+            Ok(_) => {
+                self.call("Input.dispatchMouseEvent", &mouse("mouseReleased"))?;
+                Ok(ActMechanism::Coordinate)
+            }
+            Err(BrowserError::Cdp(CdpError::Protocol { .. })) => self.press(id, Action::Click),
+            Err(other) => Err(other),
+        }
     }
 
     /// Set `text` as the value of the observed editable region `id`.
@@ -581,6 +603,27 @@ impl<T: CdpTransport> BrowserSession<T> {
                     message: "captureScreenshot returned no data".into(),
                 })
             })
+    }
+
+    /// JPEG screenshot of the viewport, base64, for a policy that reads
+    /// pixels. Read only: no page input, and the stored observation stays
+    /// fresh. `None` when CDP cannot answer.
+    pub fn screenshot_jpeg(&mut self) -> Result<Option<String>, BrowserError> {
+        let params = json!({"format": "jpeg", "quality": SCREENSHOT_JPEG_QUALITY}).to_string();
+        let body = match self.call("Page.captureScreenshot", &params) {
+            Ok(body) => body,
+            Err(BrowserError::Cdp(CdpError::Protocol { .. })) => return Ok(None),
+            Err(other) => return Err(other),
+        };
+        let value: serde_json::Value =
+            serde_json::from_str(&body).map_err(|err| CdpError::BadJson {
+                message: err.to_string(),
+            })?;
+        Ok(value
+            .get("data")
+            .and_then(serde_json::Value::as_str)
+            .filter(|data| !data.is_empty())
+            .map(str::to_owned))
     }
 
     /// Back one navigation-history entry. Errors when there is no entry

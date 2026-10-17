@@ -1,7 +1,9 @@
 //! Optional escalation after Instinct abstains. Fallback is feature-shaped, not required.
 
 use crate::goal::AgentGoal;
-use crate::types::{BrowserPolicy, HistoryEntry, PolicyError, PolicyOutcome};
+use crate::types::{
+    BrowserPolicy, DecisionEvidence, EvidenceWants, HistoryEntry, PolicyError, PolicyOutcome,
+};
 use aui_core::ActionSpace;
 
 /// Try `local` first; on [`PolicyOutcome::Abstain`], optionally call `fallback`.
@@ -66,6 +68,33 @@ where
     /// `instinct` vs `jev`/`clef-flash`, not the `escalating` wrapper.
     fn decision_source(&self) -> &'static str {
         self.last
+    }
+
+    fn wants_evidence(&self) -> EvidenceWants {
+        let fallback = self.fallback.as_ref().map(H::wants_evidence);
+        self.local.wants_evidence().or(fallback.unwrap_or_default())
+    }
+
+    fn decide_with_evidence(
+        &mut self,
+        space: &ActionSpace,
+        goal: &AgentGoal,
+        history: &[HistoryEntry],
+        evidence: &DecisionEvidence,
+    ) -> Result<PolicyOutcome, PolicyError> {
+        let first = self
+            .local
+            .decide_with_evidence(space, goal, history, evidence)?;
+        self.last = self.local.decision_source();
+        if first.as_choice().is_some() {
+            return Ok(first);
+        }
+        if let Some(fallback) = self.fallback.as_mut() {
+            let outcome = fallback.decide_with_evidence(space, goal, history, evidence)?;
+            self.last = fallback.decision_source();
+            return Ok(outcome);
+        }
+        Ok(first)
     }
 }
 

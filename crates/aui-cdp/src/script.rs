@@ -573,6 +573,26 @@ impl ScriptBuilder {
         self
     }
 
+    /// Trusted pointer click at a region center: move, press, release.
+    pub fn pointer_click(mut self) -> Self {
+        for _ in 0..3 {
+            self.calls
+                .push(result("Input.dispatchMouseEvent", json!({})));
+        }
+        self
+    }
+
+    /// CDP refuses the pointer move (protocol error), then the DOM click by
+    /// node id succeeds.
+    pub fn pointer_refused_then_dom_click(self, node_id: i64) -> Self {
+        let mut next = self;
+        next.calls.push(error(
+            "Input.dispatchMouseEvent",
+            "Input dispatch is not available",
+        ));
+        next.dom_click(node_id)
+    }
+
     /// Both DOM click tiers fail with a protocol error (the node is gone), and
     /// the coordinate click is scripted.
     pub fn stale_node_then_coordinate_click(mut self) -> Self {

@@ -21,12 +21,23 @@
 //! most 2 retries on 408 / 429 / 5xx / connection / timeout errors, 30 s
 //! total budget. Retrying is safe: the call only asks for a decision and
 //! runs before any ticket is issued, so a retry never repeats page input.
+//!
+//! Screenshots (on unless `--no-screenshot`): the agent's viewport JPEG goes
+//! with each call as a System One image (`TypeSafe-Danger-Zone-Images: true`),
+//! referenced from `state.viewport_screenshot`, so JEV reads the page the way
+//! jev-ultrafast's page text lets it. It is evidence only: the answer is
+//! still an offered criteria key. When the API refuses the image request
+//! (400 / 403 / 422), the transport says so on stderr, stops sending images,
+//! and asks again without one.
 
 use serde_json::{json, Map, Value};
 use typesafe_sdk::blocking::Client;
-use typesafe_sdk::{ChoiceAnswer, JsonContent, Question};
+use typesafe_sdk::{ApiErrorKind, ChoiceAnswer, Error, Image, JsonContent, Question};
 
-use aui_policy::RemoteTransport;
+use aui_policy::{EvidenceWants, RemoteTransport, Screenshot};
+
+/// Opt-in header the System One API needs before it accepts images.
+const IMAGES_HEADER: &str = "TypeSafe-Danger-Zone-Images";
 
 /// Operation question rules (jev-ultrafast `NEXT_ACTION`).
 const NEXT_ACTION: &str = "Advance the user's entire goal from the CURRENT page using one operation. \
@@ -77,18 +88,86 @@ const CONTROL_LABELS: [(&str, &str); 5] = [
 pub struct TypesafeTransport {
     client: Client,
     model: Option<String>,
+    screenshots: bool,
+    page_text: bool,
 }
 
 impl TypesafeTransport {
     /// `TYPESAFE_API_KEY` via the SDK; `TYPESAFE_MODEL` overrides the SDK's
-    /// `TYPESAFE_DEFAULT_MODEL` / `jev-latest` chain when set.
-    pub fn from_env() -> Result<Self, String> {
-        let client = Client::from_env().map_err(|err| err.to_string())?;
+    /// `TYPESAFE_DEFAULT_MODEL` / `jev-latest` chain when set. `screenshots`
+    /// sends each decision's viewport screenshot with the call; `page_text`
+    /// sends the page's visible text, URL, and title.
+    pub fn from_env(screenshots: bool, page_text: bool) -> Result<Self, String> {
+        let client = if screenshots {
+            let key = std::env::var("TYPESAFE_API_KEY").map_err(|_| {
+                "No API key was provided. Set the TYPESAFE_API_KEY environment variable.".to_owned()
+            })?;
+            Client::builder()
+                .api_key(key)
+                .header(IMAGES_HEADER, "true")
+                .and_then(|builder| builder.build())
+        } else {
+            Client::from_env()
+        }
+        .map_err(|err| err.to_string())?;
         let model = std::env::var("TYPESAFE_MODEL")
             .ok()
             .filter(|m| !m.trim().is_empty());
-        Ok(Self { client, model })
+        Ok(Self {
+            client,
+            model,
+            screenshots,
+            page_text,
+        })
     }
+
+    fn ask(
+        &self,
+        built: &BuiltQuestions,
+        image: Option<Image>,
+        css_size: Option<[i32; 2]>,
+    ) -> Result<typesafe_sdk::SystemOneResponse, Error> {
+        let state = state_with_screenshot(&built.state, image.as_ref(), css_size);
+        let opts = typesafe_sdk::SystemOneOpts {
+            model: self.model.clone(),
+            images: image.into_iter().collect(),
+            ..Default::default()
+        };
+        self.client
+            .system_one_opts(state, built.questions.clone(), opts)
+    }
+}
+
+/// `state` plus the image reference under `viewport_screenshot` and the
+/// viewport's CSS size (the unit of action boxes) under `viewport_css_px`.
+/// The SDK sends the image because its reference appears in the request.
+fn state_with_screenshot(
+    state: &Value,
+    image: Option<&Image>,
+    css_size: Option<[i32; 2]>,
+) -> Value {
+    let mut state = state.clone();
+    if let Some(image) = image {
+        state["viewport_screenshot"] = Value::String(image.reference().to_owned());
+        if let Some(size) = css_size {
+            state["viewport_css_px"] = json!(size);
+        }
+    }
+    state
+}
+
+/// The API refused the request itself, as it does an image request from a
+/// key or model without image access. Asking again without the image is safe.
+fn refused_request(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::Api(api) if matches!(
+            api.kind,
+            ApiErrorKind::BadRequest
+                | ApiErrorKind::PermissionDenied
+                | ApiErrorKind::UnprocessableEntity
+        )
+    )
 }
 
 /// (criterion key, about text) pairs for one question.
@@ -130,6 +209,11 @@ pub(crate) fn build_questions(request: &Value) -> Result<BuiltQuestions, String>
                 );
                 if let Some(role) = a["role"].as_str() {
                     element.insert("role".to_owned(), Value::String(role.to_owned()));
+                }
+                for key in ["near_text", "box"] {
+                    if let Some(value) = a.get(key) {
+                        element.insert(key.to_owned(), value.clone());
+                    }
                 }
                 if let Some(state) = a.get("state").and_then(Value::as_object) {
                     for key in ["value", "checked", "expanded", "selected", "options"] {
@@ -197,11 +281,15 @@ pub(crate) fn build_questions(request: &Value) -> Result<BuiltQuestions, String>
         ));
     }
 
-    let state = json!({
+    let mut state = json!({
         "goal": goal,
         "actions": request["actions"].clone(),
         "recent_actions": request["history"].clone(),
     });
+    // jev-ultrafast's `page` block: visible text, untrusted data.
+    if let Some(page) = request.get("page").filter(|p| p.is_object()) {
+        state["page"] = page.clone();
+    }
     Ok(BuiltQuestions {
         state,
         questions,
@@ -251,20 +339,46 @@ fn keys_for<'a>(
 
 impl RemoteTransport for TypesafeTransport {
     fn call(&mut self, request_json: &str) -> Result<String, String> {
+        self.call_with_screenshot(request_json, None)
+    }
+
+    fn wants_evidence(&self) -> EvidenceWants {
+        EvidenceWants {
+            screenshot: self.screenshots,
+            page_text: self.page_text,
+        }
+    }
+
+    fn call_with_screenshot(
+        &mut self,
+        request_json: &str,
+        screenshot: Option<&Screenshot>,
+    ) -> Result<String, String> {
         let request: Value =
             serde_json::from_str(request_json).map_err(|err| format!("typesafe request: {err}"))?;
         let built = build_questions(&request)?;
-        let criteria_keys = built.criteria_keys;
-        let opts = typesafe_sdk::SystemOneOpts {
-            model: self.model.clone(),
-            ..Default::default()
+        let image = match screenshot.filter(|_| self.screenshots) {
+            Some(shot) => Some(
+                Image::from_base64(shot.base64())
+                    .map_err(|err| format!("typesafe screenshot: {err}"))?,
+            ),
+            None => None,
         };
-        let response = self
-            .client
-            .system_one_opts(built.state, built.questions, opts)
-            .map_err(|err| format!("typesafe call: {err}"))?;
+        let sent_image = image.is_some();
+        let css_size = screenshot.and_then(Screenshot::css_size);
+        let response = match self.ask(&built, image, css_size) {
+            Err(err) if sent_image && refused_request(&err) => {
+                eprintln!(
+                    "typesafe: image request refused ({err}); continuing without screenshots"
+                );
+                self.screenshots = false;
+                self.ask(&built, None, None)
+            }
+            other => other,
+        }
+        .map_err(|err| format!("typesafe call: {err}"))?;
 
-        compose_reply(&criteria_keys, |head| {
+        compose_reply(&built.criteria_keys, |head| {
             response
                 .choice(head)
                 .map_err(|err| format!("typesafe answer {head}: {err}"))
@@ -370,6 +484,53 @@ mod tests {
             "criteria about: {}",
             question["criteria"]["n44"]
         );
+    }
+
+    #[test]
+    fn screenshot_rides_in_state_by_reference_and_menu_is_unchanged() {
+        let built = build_questions(&request()).unwrap();
+        let image = Image::from_base64("/9j/AA==").unwrap();
+        let state = state_with_screenshot(&built.state, Some(&image), Some([1280, 800]));
+        assert_eq!(state["viewport_screenshot"], image.reference());
+        assert_eq!(state["viewport_css_px"], json!([1280, 800]));
+        assert_eq!(state["actions"], built.state["actions"]);
+        assert!(state_with_screenshot(&built.state, None, Some([1280, 800]))
+            .get("viewport_screenshot")
+            .is_none());
+    }
+
+    #[test]
+    fn target_criteria_carry_box_and_near_text() {
+        let request = json!({
+            "goal": "Focus the field",
+            "actions": [{
+                "id": "TYPE_TEXT:n2", "kind": "TYPE_TEXT", "label": "", "role": "text_field",
+                "box": [32, 55, 120, 15], "near_text": "Date:"
+            }],
+            "history": []
+        });
+        let built = build_questions(&request).unwrap();
+        let (_, question) = built
+            .questions
+            .iter()
+            .find(|(name, _)| name == "type_text_target")
+            .unwrap();
+        let criterion = &serde_json::to_value(question).unwrap()["criteria"]["n2"];
+        assert_eq!(criterion["near_text"], "Date:");
+        assert_eq!(criterion["box"], json!([32, 55, 120, 15]));
+    }
+
+    #[test]
+    fn page_block_rides_in_state_only_when_requested() {
+        let mut request = request();
+        assert!(build_questions(&request)
+            .unwrap()
+            .state
+            .get("page")
+            .is_none());
+        request["page"] = json!({"url": "https://x.test/", "title": "T", "text": "3 + 9 = ?"});
+        let state = build_questions(&request).unwrap().state;
+        assert_eq!(state["page"]["text"], "3 + 9 = ?");
     }
 
     #[test]

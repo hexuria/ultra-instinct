@@ -3,7 +3,10 @@ use aui_core::{ActionId, ActionKind};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VerificationKind {
     Success,
-    NoEffect,
+    /// The input was dispatched and the page took it, but the next
+    /// observation shows no change: not proof of failure (a button may only
+    /// set a flag), and repeated it counts toward the no-progress bound.
+    NoVisibleChange,
     WrongEffect,
     Navigation,
     StateChanged,
@@ -15,7 +18,7 @@ impl VerificationKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Success => "success",
-            Self::NoEffect => "no-effect",
+            Self::NoVisibleChange => "dispatched-no-visible-change",
             Self::WrongEffect => "wrong-effect",
             Self::Navigation => "navigation",
             Self::StateChanged => "state-changed",

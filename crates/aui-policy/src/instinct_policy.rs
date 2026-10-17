@@ -290,7 +290,10 @@ fn habituation_weight(id: &ActionId, history: &[HistoryEntry]) -> Confidence {
     let mut weight = 1000_i16;
     for entry in history.iter().rev() {
         if &entry.action_id != id
-            || !matches!(entry.verification.as_str(), "no-effect" | "wrong-effect")
+            || !matches!(
+                entry.verification.as_str(),
+                "dispatched-no-visible-change" | "wrong-effect"
+            )
         {
             break;
         }
@@ -659,7 +662,9 @@ mod tests {
         let done = policy.decide(&space, &goal, &[entry("success")]).unwrap();
         assert_eq!(done.as_choice().unwrap().kind, ActionKind::Done);
         // No verified effect: not satisfied, repeat stays the choice.
-        let again = policy.decide(&space, &goal, &[entry("no-effect")]).unwrap();
+        let again = policy
+            .decide(&space, &goal, &[entry("dispatched-no-visible-change")])
+            .unwrap();
         assert_eq!(again.as_choice().unwrap().kind, ActionKind::TypeText);
     }
 
@@ -1008,7 +1013,11 @@ mod tests {
         );
         let action = space.targets_of(ActionKind::Click).next().unwrap();
         let scored = [(action, Confidence::MAX)];
-        let history = [history_entry(action.id(), ActionKind::Click, "no-effect")];
+        let history = [history_entry(
+            action.id(),
+            ActionKind::Click,
+            "dispatched-no-visible-change",
+        )];
         let (chosen, ranked) = choose_targets(&scored, &history, Profile::Standard).unwrap();
         assert_eq!(chosen.map(|a| a.id()), Some(action.id()));
         assert_eq!(ranked[0].confidence_millis, 750);
@@ -1025,7 +1034,13 @@ mod tests {
         let action = space.targets_of(ActionKind::Click).next().unwrap();
         let scored = [(action, Confidence::MAX)];
         let history: Vec<_> = (0..4)
-            .map(|_| history_entry(action.id(), ActionKind::Click, "no-effect"))
+            .map(|_| {
+                history_entry(
+                    action.id(),
+                    ActionKind::Click,
+                    "dispatched-no-visible-change",
+                )
+            })
             .collect();
         let (chosen, ranked) = choose_targets(&scored, &history, Profile::Standard).unwrap();
         assert!(chosen.is_none());
@@ -1053,8 +1068,16 @@ mod tests {
         assert_eq!(score_a.get(), 1000);
         assert_eq!(score_b.get(), 1000);
         let history = [
-            history_entry(target_a.id(), ActionKind::Click, "no-effect"),
-            history_entry(target_a.id(), ActionKind::Click, "no-effect"),
+            history_entry(
+                target_a.id(),
+                ActionKind::Click,
+                "dispatched-no-visible-change",
+            ),
+            history_entry(
+                target_a.id(),
+                ActionKind::Click,
+                "dispatched-no-visible-change",
+            ),
         ];
         let outcome = InstinctPolicy::default()
             .decide(&space, &AgentGoal::new("Save"), &history)
@@ -1070,12 +1093,12 @@ mod tests {
         let id_a = ActionId::try_new("CLICK:a").unwrap();
         let id_b = ActionId::try_new("CLICK:b").unwrap();
         let success = [
-            history_entry(&id_a, ActionKind::Click, "no-effect"),
+            history_entry(&id_a, ActionKind::Click, "dispatched-no-visible-change"),
             history_entry(&id_a, ActionKind::Click, "success"),
         ];
         let other_id = [
-            history_entry(&id_a, ActionKind::Click, "no-effect"),
-            history_entry(&id_b, ActionKind::Click, "no-effect"),
+            history_entry(&id_a, ActionKind::Click, "dispatched-no-visible-change"),
+            history_entry(&id_b, ActionKind::Click, "dispatched-no-visible-change"),
         ];
         assert_eq!(habituation_weight(&id_a, &success), Confidence::MAX);
         assert_eq!(habituation_weight(&id_a, &other_id), Confidence::MAX);
@@ -1084,7 +1107,11 @@ mod tests {
     #[test]
     fn wrong_effect_counts_like_no_effect() {
         let id = ActionId::try_new("CLICK:a").unwrap();
-        let no_effect = [history_entry(&id, ActionKind::Click, "no-effect")];
+        let no_effect = [history_entry(
+            &id,
+            ActionKind::Click,
+            "dispatched-no-visible-change",
+        )];
         let wrong_effect = [history_entry(&id, ActionKind::Click, "wrong-effect")];
         assert_eq!(
             habituation_weight(&id, &wrong_effect),
@@ -1103,7 +1130,13 @@ mod tests {
         );
         let scroll_down = ActionId::try_new(ActionKind::ScrollDown.as_str()).unwrap();
         let history: Vec<_> = (0..4)
-            .map(|_| history_entry(&scroll_down, ActionKind::ScrollDown, "no-effect"))
+            .map(|_| {
+                history_entry(
+                    &scroll_down,
+                    ActionKind::ScrollDown,
+                    "dispatched-no-visible-change",
+                )
+            })
             .collect();
         let outcome = InstinctPolicy::default()
             .decide(&space, &AgentGoal::new("scroll down"), &history)

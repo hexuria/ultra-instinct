@@ -746,6 +746,65 @@ mod exact_errors {
         );
     }
 
+    fn sign_in_page() -> PageSpec {
+        PageSpec::new(
+            vec![DomSpec::button(
+                10,
+                100,
+                "Sign in",
+                (400.0, 300.0, 80.0, 32.0),
+            )],
+            vec![AxSpec::new(
+                100,
+                "button",
+                "Sign in",
+                (400.0, 300.0, 80.0, 32.0),
+            )],
+            "https://example.test/sign-in",
+            "Sign in",
+        )
+    }
+
+    #[test]
+    fn pointer_click_is_a_trusted_move_press_release_at_the_center() {
+        let script = ScriptBuilder::new()
+            .observe(&sign_in_page())
+            .pointer_click()
+            .to_json();
+        let mut session = BrowserSession::new(ReplayTransport::parse(&script).unwrap());
+        session.observe().unwrap();
+        let mechanism = session
+            .pointer_click(&RegionId::try_new("n100").unwrap())
+            .unwrap();
+        assert_eq!(mechanism, ActMechanism::Coordinate);
+        let calls = session.transport().logged_calls();
+        assert!(calls.iter().all(|(m, _)| m != "Runtime.callFunctionOn"));
+        let mouse: Vec<serde_json::Value> = calls
+            .iter()
+            .filter(|(m, _)| m == "Input.dispatchMouseEvent")
+            .map(|(_, p)| serde_json::from_str(p).unwrap())
+            .collect();
+        let kinds: Vec<&str> = mouse.iter().map(|p| p["type"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["mouseMoved", "mousePressed", "mouseReleased"]);
+        assert!(mouse.iter().all(|p| p["x"] == 440.0 && p["y"] == 316.0));
+        assert_eq!(session.transport().remaining(), 0);
+    }
+
+    #[test]
+    fn pointer_click_refused_by_cdp_falls_back_to_the_dom_click() {
+        let script = ScriptBuilder::new()
+            .observe(&sign_in_page())
+            .pointer_refused_then_dom_click(10)
+            .to_json();
+        let mut session = BrowserSession::new(ReplayTransport::parse(&script).unwrap());
+        session.observe().unwrap();
+        let mechanism = session
+            .pointer_click(&RegionId::try_new("n100").unwrap())
+            .unwrap();
+        assert_eq!(mechanism, ActMechanism::DomSemantic);
+        assert_eq!(session.transport().remaining(), 0);
+    }
+
     #[test]
     fn press_marks_the_observation_stale_and_observe_clears_it() {
         let page = PageSpec::new(

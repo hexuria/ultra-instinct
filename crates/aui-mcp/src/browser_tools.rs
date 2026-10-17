@@ -428,13 +428,15 @@ fn gated_input(
     let index = opt_usize(arguments, "index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".into()))?;
     let input = match input_kind {
-        "click" => Input::Click,
+        // The host surface keeps its DOM-side click; the agent loop clicks
+        // with a trusted pointer (`Input::Click`).
+        "click" => Input::ScriptClick,
         "type" => Input::Type(req_str(arguments, "text")?.to_owned()),
         "select" => Input::Select(req_str(arguments, "text")?.to_owned()),
         other => return Err(ToolError::UnknownTool(other.to_owned())),
     };
     let action = match input {
-        Input::Click | Input::PointerClick => Action::Click,
+        Input::Click | Input::ScriptClick => Action::Click,
         Input::Type(_) => Action::Type,
         Input::Select(_) => Action::Select,
     };

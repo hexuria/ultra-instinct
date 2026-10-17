@@ -6,6 +6,9 @@
 //! ultra-instinct run --goal <text> --fixture <page.manifold>     # predict only (dry run)
 //! ultra-instinct run ... --text-model-cmd <program>   # feature `model-text`: model TYPE/SELECT payloads
 //! ultra-instinct run ... --policy jev                 # feature `jev`: JEV decides every step (default)
+//! ultra-instinct run ... --policy jev --no-screenshot # JEV without the viewport screenshot
+//! ultra-instinct run ... --policy jev --no-page-text  # JEV / Clef without the page's text
+//! ultra-instinct run ... --allow-derived-text         # feature `model-text`: type values read off the page
 //! ultra-instinct run ... --policy clef                # feature `clef`: Cloudflare Clef (27B) decides
 //! ultra-instinct run ... --policy clef-flash          # feature `clef`: Cloudflare Clef-Flash (9B) decides
 //! ultra-instinct run ... --policy instinct            # offline; `pua` is a deprecated alias
@@ -24,7 +27,10 @@
 //! `<kind>_target` question per element kind in a single call — the
 //! speculative fan-out jev-ultrafast uses. JEV can only pick an offered id,
 //! never a selector or script, and the ticket / gate / revalidate chain is
-//! unchanged. Reads `TYPESAFE_API_KEY` (required), `TYPESAFE_MODEL`,
+//! unchanged. Live runs send each decision's viewport screenshot (JPEG,
+//! `Page.captureScreenshot` on the agent's own socket) as a System One image,
+//! so JEV can read values that exist only on the page; `--no-screenshot`
+//! turns that off. Reads `TYPESAFE_API_KEY` (required), `TYPESAFE_MODEL`,
 //! `TYPESAFE_BASE_URL`. It does not read `TEXT_MODEL_*` yet; combine with
 //! `--text-model-cmd` for model-written payloads.
 //!
@@ -66,6 +72,17 @@ struct RunArgs {
     /// `--lessons <path>`: the dojo's lesson store (loaded at start,
     /// grown during the run, saved back at exit).
     lessons: Option<String>,
+    /// `--no-screenshot`: a pixel-reading policy decides without the viewport.
+    /// Only `jev` reads pixels today.
+    #[cfg_attr(not(feature = "jev"), allow(dead_code))]
+    no_screenshot: bool,
+    /// `--no-page-text`: remote policies decide without the page's text.
+    #[cfg_attr(not(feature = "jev"), allow(dead_code))]
+    no_page_text: bool,
+    /// `--allow-derived-text`: the text model may type a value read or
+    /// worked out from the page when the goal gives none (guarded).
+    #[cfg_attr(not(feature = "model-text"), allow(dead_code))]
+    allow_derived_text: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -90,6 +107,9 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     let mut policy = None;
     let mut diary = None;
     let mut lessons = None;
+    let mut no_screenshot = false;
+    let mut no_page_text = false;
+    let mut allow_derived_text = false;
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
@@ -133,6 +153,14 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
                 set(&mut policy, "--policy", kind)?;
             }
             "--lessons" => set(&mut lessons, "--lessons", value("--lessons")?)?,
+            "--no-screenshot" => switch(&mut no_screenshot, "--no-screenshot", arg, &inline)?,
+            "--no-page-text" => switch(&mut no_page_text, "--no-page-text", arg, &inline)?,
+            "--allow-derived-text" => switch(
+                &mut allow_derived_text,
+                "--allow-derived-text",
+                arg,
+                &inline,
+            )?,
             "--max-steps" => {
                 let raw = value("--max-steps")?;
                 let n: u32 = raw.parse().map_err(|_| CliError::BadNumber {
@@ -194,7 +222,27 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
         policy: policy.unwrap_or(PolicyKind::Instinct),
         diary,
         lessons,
+        no_screenshot,
+        no_page_text,
+        allow_derived_text,
     })
+}
+
+/// A bare on switch: no value, at most once.
+fn switch(
+    slot: &mut bool,
+    flag: &'static str,
+    arg: &str,
+    inline: &Option<String>,
+) -> Result<(), CliError> {
+    if inline.is_some() {
+        return Err(CliError::UnknownFlag(arg.to_owned()));
+    }
+    if *slot {
+        return Err(CliError::DuplicateFlag(flag));
+    }
+    *slot = true;
+    Ok(())
 }
 
 fn set<T>(slot: &mut Option<T>, flag: &'static str, value: T) -> Result<(), CliError> {
@@ -289,7 +337,8 @@ fn predict_jev(
     manifold: aui_core::InteractionManifold,
     args: &RunArgs,
 ) -> Result<String, CliError> {
-    let transport = crate::typesafe::TypesafeTransport::from_env()
+    // A manifold fixture has no pixels or page text to send.
+    let transport = crate::typesafe::TypesafeTransport::from_env(false, false)
         .map_err(|err| CliError::Config(format!("typesafe: {err}")))?;
     predict_once(
         MockBrowser::new(manifold),
@@ -355,7 +404,8 @@ fn drive<T: CdpTransport>(session: BrowserSession<T>, args: &RunArgs) -> Result<
 fn dojo_remote() -> Option<Box<dyn BrowserPolicy>> {
     #[cfg(feature = "jev")]
     {
-        if let Ok(transport) = crate::typesafe::TypesafeTransport::from_env() {
+        // The dojo does not forward screenshots to its remote arm yet.
+        if let Ok(transport) = crate::typesafe::TypesafeTransport::from_env(false, false) {
             return Some(Box::new(aui_policy::RemotePolicy::named("jev", transport)));
         }
     }
@@ -441,6 +491,12 @@ fn drive_with<T: CdpTransport, P: BrowserPolicy>(
         let source = model.api().label();
         return drive_model_text(builder, source, Box::new(model), args);
     }
+    if args.allow_derived_text {
+        return Err(CliError::Config(
+            "--allow-derived-text needs a text model (TEXT_MODEL_API_KEY or --text-model-cmd)"
+                .into(),
+        ));
+    }
     let mut agent = builder.build(args.goal.clone());
     let outcome = agent.run();
     let diary = write_diary_line(&mut agent, args)?;
@@ -452,8 +508,9 @@ fn drive_jev<T: CdpTransport>(
     session: BrowserSession<T>,
     args: &RunArgs,
 ) -> Result<String, CliError> {
-    let transport = crate::typesafe::TypesafeTransport::from_env()
-        .map_err(|err| CliError::Config(format!("typesafe: {err}")))?;
+    let transport =
+        crate::typesafe::TypesafeTransport::from_env(!args.no_screenshot, !args.no_page_text)
+            .map_err(|err| CliError::Config(format!("typesafe: {err}")))?;
     drive_with(
         session,
         aui_policy::RemotePolicy::named("jev", transport),
@@ -478,7 +535,8 @@ fn drive_clef<T: CdpTransport>(
     model: &str,
 ) -> Result<String, CliError> {
     let transport = crate::clef::ClefTransport::from_env(model)
-        .map_err(|err| CliError::Config(format!("clef: {err}")))?;
+        .map_err(|err| CliError::Config(format!("clef: {err}")))?
+        .with_page_text(!args.no_page_text);
     let model_name: &'static str = if model == "clef-flash" {
         "clef-flash"
     } else {
@@ -534,12 +592,17 @@ fn drive_model_text<B: BrowserRuntime, P: BrowserPolicy>(
     model: Box<dyn aui_policy::TextModel>,
     args: &RunArgs,
 ) -> Result<String, CliError> {
-    let mut agent = builder.model_text(model).build(args.goal.clone());
+    let resolver = aui_policy::ModelTextResolver::new(model).allow_derived(args.allow_derived_text);
+    let mut agent = builder.text_resolver(resolver).build(args.goal.clone());
     let outcome = agent.run();
     let mut out = format!(
         "text resolver model ({source}) calls={}\n",
         agent.text_resolver().model_calls()
     );
+    // Every value typed from the page instead of the goal, for review.
+    for value in agent.text_resolver().derived() {
+        out.push_str(&format!("text derived from page: {value:?}\n"));
+    }
     let diary = write_diary_line(&mut agent, args)?;
     match with_diary(render(&agent, &outcome), diary.as_deref()) {
         Ok(rendered) => {
@@ -763,6 +826,46 @@ mod tests {
     }
 
     #[test]
+    fn evidence_switches_are_bare_and_single() {
+        let parsed = parse(&a(&["--goal", "Go", "--fixture", "x", "--no-page-text"])).unwrap();
+        assert!(parsed.no_page_text && !parsed.no_screenshot && !parsed.allow_derived_text);
+        let parsed = parse(&a(&[
+            "--goal",
+            "Go",
+            "--fixture",
+            "x",
+            "--allow-derived-text",
+        ]))
+        .unwrap();
+        assert!(parsed.allow_derived_text);
+        assert!(parse(&a(&["--goal", "Go", "--fixture", "x", "--no-page-text=1"])).is_err());
+    }
+
+    #[test]
+    fn no_screenshot_is_a_bare_switch() {
+        assert!(
+            !parse(&a(&["--goal", "Go", "--fixture", "x"]))
+                .unwrap()
+                .no_screenshot
+        );
+        assert!(
+            parse(&a(&["--goal", "Go", "--fixture", "x", "--no-screenshot"]))
+                .unwrap()
+                .no_screenshot
+        );
+        assert!(parse(&a(&["--goal", "Go", "--fixture", "x", "--no-screenshot=1"])).is_err());
+        assert!(parse(&a(&[
+            "--goal",
+            "Go",
+            "--fixture",
+            "x",
+            "--no-screenshot",
+            "--no-screenshot"
+        ]))
+        .is_err());
+    }
+
+    #[test]
     fn unknown_policy_is_rejected() {
         let err =
             run_command(&a(&["--goal", "x", "--fixture", "y", "--policy", "grok"])).unwrap_err();
@@ -919,7 +1022,7 @@ mod tests {
         let click_script = ScriptBuilder::new()
             .observe(&click_page)
             .observe(&click_page)
-            .dom_click(20)
+            .pointer_click()
             .observe(&after)
             .observe(&after);
         std::fs::write(root.join("agent-click-go.cdp.json"), click_script.to_json()).unwrap();

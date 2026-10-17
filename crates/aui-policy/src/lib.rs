@@ -34,14 +34,15 @@ pub use model_text::{
 pub type PuaPolicy = InstinctPolicy;
 #[cfg(feature = "remote")]
 pub use remote::{
-    parse_reply, request_json, RemotePolicy, RemoteTransport, ScriptedRemote, UnconfiguredRemote,
+    parse_reply, request_json, request_json_with_page, RemotePolicy, RemoteTransport,
+    ScriptedRemote, UnconfiguredRemote,
 };
 pub use text::{
     ground_select, DeterministicTextResolver, TextContext, TextError, TextResolution, TextResolver,
 };
 pub use types::{
-    BrowserPolicy, HistoryEntry, PolicyContext, PolicyDecision, PolicyError, PolicyOutcome,
-    RankedAction,
+    BrowserPolicy, DecisionEvidence, EvidenceWants, HistoryEntry, PageView, PolicyContext,
+    PolicyDecision, PolicyError, PolicyOutcome, RankedAction, Screenshot,
 };
 
 /// Documented Instinct git rev this crate is pinned to.
