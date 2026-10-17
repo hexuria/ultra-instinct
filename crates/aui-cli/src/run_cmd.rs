@@ -30,9 +30,10 @@
 //!
 //! `--policy clef` / `--policy clef-flash` (built with `--features clef`) decide
 //! through Cloudflare Workers AI Clef models — same closed wire and the same
-//! System One body as `jev`, POSTed to `…/accounts/{id}/ai/run/@cf/cloudflare/{model}`.
-//! Reads `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` (required), `CLEF_MODEL`,
-//! `CLEF_BASE_URL`. A target head with one offered candidate never reaches the
+//! System One body as `jev`, sent by `typesafe-sdk`'s Clef provider to
+//! `…/accounts/{id}/ai/run/@cf/cloudflare/{model}`. Reads `CLOUDFLARE_ACCOUNT_ID`,
+//! `CLOUDFLARE_API_TOKEN` (required), `CLEF_MODEL`, `CLEF_BASE_URL` (the prefix
+//! before `/accounts`). A target head with one offered candidate never reaches the
 //! wire — it is answered locally.
 //!
 //! `--text-model-cmd` (built with `--features model-text`) only changes where

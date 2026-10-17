@@ -1340,6 +1340,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_path_to_error"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10a9ff822e371bb5403e391ecd83e182e0e77ba7f6fe0160b795797109d1b457"
+dependencies = [
+ "itoa",
+ "serde",
+ "serde_core",
+]
+
+[[package]]
 name = "serde_stacker"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1722,10 +1733,11 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "typesafe-sdk"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1102e5116f2387b12dd09510921efab5b2ea4d2d77e3059c3d19381aa973619"
+checksum = "3afd33b9454f6962fc3eb98331f85a406f0928062b6d334d08f216a323a008a8"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
  "encoding_rs",
  "fastrand",
@@ -1738,6 +1750,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "tokio",
  "url",
 ]
