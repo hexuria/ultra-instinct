@@ -21,6 +21,10 @@ registration (``miniwob/registration.py``), no hand-picking. Pages are served fr
   ``{attempt, reward, raw_reward, reason}`` to ``/_wob/end``. The harness keeps the
   first report per attempt only and never judges success itself.
 
+It hides MiniWoB's reward HUD (``core.hideDisplay()``): MiniWoB's own agent observation
+(``core.getDOMInfo``) already skips ``#reward-display``, and its 1 Hz countdown would
+otherwise be live page text that changes under every decision.
+
 It also POSTs ``/_wob/start`` (the utterance MiniWoB put in ``#query``) and a coarse
 ``/_wob/state`` DOM version (mutations outside MiniWoB's reward HUD, plus input /
 change events) that the harness uses only for its ``stuck`` cap.
@@ -103,6 +107,9 @@ HARNESS_JS = r"""
       core.EPISODE_MAX_TIME = maxMs;
       Math.seedrandom(seed);
       core.startEpisodeReal();
+      // MiniWoB's own agent observation (core.getDOMInfo) skips the reward HUD; hide it with
+      // MiniWoB's own call so its 1 Hz countdown is not live page state for either arm.
+      core.hideDisplay();
       W.started = true;
       // #query text, normalized like core.getUtterance (some tasks override that to return an object)
       var query = document.getElementById('query');
