@@ -110,6 +110,15 @@ let outcome = agent.run(); // Done | Blocked | Abstained | Failed, with verified
 deprecated alias of `guard` and never clicks. Locate, inspect, and diff remain
 debug helpers.
 
+## Benchmark: browser tools for an LLM agent
+
+The same Claude Code subagent (Claude Haiku 5.5) checked and drove one page with
+different browser tools, 2 runs each. With `ultra-instinct mcp` it was as
+accurate as obscura + pageshot (10 / 10), used **30% fewer tokens**, ran **2.2×
+faster**, and screenshotted every state, including after clicks. Small sample,
+one site: see [`RESULTS.md`](RESULTS.md) and the
+[writeup](bench/results/AGENT-MCP-COMPARE-2026-10-17.md) for method and caveats.
+
 ## Commands
 
 ```bash
