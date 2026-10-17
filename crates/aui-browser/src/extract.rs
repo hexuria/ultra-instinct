@@ -354,12 +354,15 @@ fn element_from(node: &Value) -> Option<DomElement> {
     }
     let attributes = attr_map(node);
     let svg_shape = is_svg_shape(name);
+    let surface = is_surface(name);
     let aria = attributes
         .get("aria-label")
         .cloned()
         .filter(|label| !label.trim().is_empty());
     let mut label = if svg_shape {
         shape_label(node, name, &attributes, aria)
+    } else if surface {
+        surface_label(node, name, aria)
     } else {
         aria.unwrap_or_else(|| direct_text(node))
     };
@@ -367,16 +370,17 @@ fn element_from(node: &Value) -> Option<DomElement> {
     // A text-less box the page made clickable (a colored square, a card, a
     // board cell) is a region only when a click hint confirms it.
     let hint_box = !svg_shape
+        && !surface
         && !keep_element(name, role_attr.as_deref(), &label)
         && is_textual(name)
         && label.is_empty();
-    if !svg_shape && !hint_box && !keep_element(name, role_attr.as_deref(), &label) {
+    if !svg_shape && !surface && !hint_box && !keep_element(name, role_attr.as_deref(), &label) {
         return None;
     }
     if hint_box {
         label = inline_style(&attributes, "background-color").unwrap_or_default();
     }
-    let role = if svg_shape {
+    let role = if svg_shape || surface {
         Role::Image
     } else {
         dom_role(
@@ -402,8 +406,11 @@ fn element_from(node: &Value) -> Option<DomElement> {
         .and_then(|raw| raw.parse::<u32>().ok());
     let mut actions = dom_actions(name, role);
     let marked_clickable = attribute_click_hint(&attributes);
-    if svg_shape || marked_clickable {
+    if svg_shape || surface || marked_clickable {
         add_click(&mut actions);
+    }
+    if surface {
+        actions.push(Action::Point);
     }
     if opens_on_hover(&attributes, role) && !actions.contains(&Action::Hover) {
         actions.push(Action::Hover);
@@ -436,6 +443,26 @@ fn is_svg_shape(name: &str) -> bool {
         name,
         "circle" | "ellipse" | "rect" | "polygon" | "polyline" | "path" | "text"
     )
+}
+
+/// Drawing surfaces: an HTML `canvas` or an `svg` root. Any point inside one
+/// may be what a goal means ("click the center", "the point (3, 4)").
+fn is_surface(name: &str) -> bool {
+    name == "svg" || name.eq_ignore_ascii_case("CANVAS")
+}
+
+/// A surface's `aria-label`, else its `<title>`, else "canvas" / "drawing".
+fn surface_label(node: &Value, name: &str, aria: Option<String>) -> String {
+    let title = node
+        .get("children")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|c| c.get("nodeName").and_then(Value::as_str) == Some("title"))
+        .map(direct_text)
+        .filter(|t| !t.is_empty());
+    aria.or(title)
+        .unwrap_or_else(|| if name == "svg" { "drawing" } else { "canvas" }.to_owned())
 }
 
 fn is_textual(name: &str) -> bool {
@@ -873,6 +900,7 @@ mod pierce_tests {
         assert_eq!(
             shapes,
             [
+                (2, "drawing", Role::Image, true),
                 (10, "red circle", Role::Image, true),
                 (11, "blue rect", Role::Image, true),
                 (12, "Triangle", Role::Image, true),

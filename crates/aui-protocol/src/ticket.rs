@@ -32,6 +32,9 @@ pub struct ActionTicket {
     pub world_fingerprint: u64,
     /// DRAG only: the release region, bound like the target.
     pub dest: Option<Box<TicketDest>>,
+    /// Surface point clicks only: the grid cell `[col, row]` the ticket
+    /// allows. The executor clicks exactly this cell.
+    pub cell: Option<[u16; 2]>,
 }
 
 /// The second end of a two-region ticket (DRAG). Revalidated like the target.

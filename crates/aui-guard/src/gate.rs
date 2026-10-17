@@ -88,6 +88,27 @@ pub fn gate_drag(
     Ok(ticket)
 }
 
+/// Gate a click on one grid cell of a drawing surface. The surface must
+/// claim Point and pass every [`check`] for Click; the ticket binds the cell.
+pub fn gate_point(
+    manifold: &InteractionManifold,
+    surface: &RegionId,
+    cell: [u16; 2],
+    focused: Option<RegionId>,
+    snapshot_id: u64,
+) -> Result<ActionTicket, GuardReason> {
+    let region = manifold.get(surface).ok_or(GuardReason::MissingTarget)?;
+    if !region.actions().contains(&Action::Point)
+        || cell[0] >= aui_core::SURFACE_GRID
+        || cell[1] >= aui_core::SURFACE_GRID
+    {
+        return Err(GuardReason::UnsupportedAction);
+    }
+    let mut ticket = gate(manifold, surface, Action::Click, focused, snapshot_id)?;
+    ticket.cell = Some(cell);
+    Ok(ticket)
+}
+
 /// Hard checks for a release point: it needs no claim of its own, but it
 /// must be visible, uncovered, in front, and on screen.
 pub fn check_drop_target(

@@ -95,6 +95,8 @@ pub enum Action {
     Toggle,
     /// Press, move, and release: the region can be dragged.
     Drag,
+    /// A drawing surface (canvas, svg): any point inside it can be clicked.
+    Point,
 }
 
 impl Action {
@@ -108,6 +110,7 @@ impl Action {
             Self::Select => "select",
             Self::Toggle => "toggle",
             Self::Drag => "drag",
+            Self::Point => "point",
         }
     }
 
@@ -121,6 +124,7 @@ impl Action {
             "select" => Self::Select,
             "toggle" => Self::Toggle,
             "drag" => Self::Drag,
+            "point" => Self::Point,
             _ => return None,
         })
     }

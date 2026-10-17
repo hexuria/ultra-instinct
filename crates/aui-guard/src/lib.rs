@@ -45,7 +45,7 @@ pub use aui_protocol::{
     ActionTicket, GuardCandidate, GuardDecision, GuardEvidence, GuardReason, TicketDest,
     TicketInvalid,
 };
-pub use gate::{check as gate_check, check_drop_target, gate, gate_drag};
+pub use gate::{check as gate_check, check_drop_target, gate, gate_drag, gate_point};
 #[allow(deprecated)]
 pub use ticket::consume_ticket;
 pub use ticket::{

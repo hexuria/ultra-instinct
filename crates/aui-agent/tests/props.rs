@@ -239,3 +239,51 @@ fn a_drag_ticket_releases_only_at_its_own_destination() {
     .unwrap();
     assert_eq!(browser.input_log(), &[(card, Input::Drag { to: bin })]);
 }
+
+#[test]
+fn a_cell_ticket_clicks_only_its_own_cell() {
+    use aui_agent::{execute_ticketed, ExecError, Input, MockBrowser};
+    use aui_guard::TicketLedger;
+    use aui_protocol::TicketInvalid;
+    let m = aui_core::parse_fixture(
+        "viewport w=800 h=600\n\
+         region id=pad role=image label=\"canvas\" x=0 y=0 w=160 h=160 actions=point,click sources=dom\n",
+    )
+    .unwrap();
+    let pad = aui_core::RegionId::try_new("pad").unwrap();
+    assert!(
+        aui_guard::gate_point(&m, &pad, [8, 0], None, 0).is_err(),
+        "off-grid refused"
+    );
+    let ticket = aui_guard::gate_point(&m, &pad, [3, 4], None, 0).unwrap();
+    let mut browser = MockBrowser::new(m.clone());
+    let mut ledger = TicketLedger::default();
+    for wrong in [Input::ClickAt { cell: [4, 3] }, Input::Click] {
+        assert!(matches!(
+            execute_ticketed(&mut browser, &mut ledger, &ticket, &wrong),
+            Err(ExecError::Ticket(TicketInvalid::TicketMismatch))
+        ));
+    }
+    // A plain click ticket never clicks a cell.
+    let plain = aui_guard::gate(&m, &pad, aui_core::Action::Click, None, 0).unwrap();
+    assert!(matches!(
+        execute_ticketed(
+            &mut browser,
+            &mut ledger,
+            &plain,
+            &Input::ClickAt { cell: [3, 4] }
+        ),
+        Err(ExecError::Ticket(TicketInvalid::TicketMismatch))
+    ));
+    execute_ticketed(
+        &mut browser,
+        &mut ledger,
+        &ticket,
+        &Input::ClickAt { cell: [3, 4] },
+    )
+    .unwrap();
+    assert_eq!(
+        browser.input_log(),
+        &[(pad, Input::ClickAt { cell: [3, 4] })]
+    );
+}

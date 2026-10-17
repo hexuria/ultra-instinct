@@ -68,6 +68,7 @@ pub fn issue_ticket(
         target_fingerprint: region.fingerprint().bits(),
         world_fingerprint: world_fingerprint(world),
         dest: None,
+        cell: None,
     }
 }
 

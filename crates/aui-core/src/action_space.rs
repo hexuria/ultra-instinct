@@ -163,6 +163,8 @@ pub struct ObservedAction {
     near_text: Option<String>,
     /// DRAG only: where the dragged region is released.
     dest: Option<DragDest>,
+    /// Surface point clicks only: the grid cell `[col, row]`.
+    cell: Option<[u16; 2]>,
 }
 
 /// The release region of an offered DRAG.
@@ -198,6 +200,7 @@ impl ObservedAction {
             bounds: None,
             near_text: None,
             dest: None,
+            cell: None,
         }
     }
 
@@ -230,6 +233,10 @@ impl ObservedAction {
     }
     pub fn dest(&self) -> Option<&DragDest> {
         self.dest.as_ref()
+    }
+    /// The surface cell `[col, row]` of a point click ([`SURFACE_GRID`] wide).
+    pub fn cell(&self) -> Option<[u16; 2]> {
+        self.cell
     }
 }
 
@@ -277,6 +284,9 @@ impl ActionSpace {
         }
 
         for observed in drag_actions(manifold) {
+            actions.insert(observed.id.clone(), observed);
+        }
+        for observed in point_actions(manifold) {
             actions.insert(observed.id.clone(), observed);
         }
 
@@ -399,7 +409,8 @@ const fn map_region_claim(claim: Action) -> Option<ActionKind> {
         Action::Hover => Some(ActionKind::Hover),
         Action::Scroll => Some(ActionKind::ScrollIn),
         // A drag needs a destination: offered as source / destination pairs.
-        Action::Focus | Action::Drag => None,
+        // A surface's points are offered as a grid of cells.
+        Action::Focus | Action::Drag | Action::Point => None,
     }
 }
 
@@ -415,7 +426,64 @@ fn target_action(kind: ActionKind, region: &InteractionRegion) -> ObservedAction
         bounds: Some(pixel_box(region.rect())),
         near_text: None,
         dest: None,
+        cell: None,
     }
+}
+
+/// Cells per side of the click grid offered on a drawing surface.
+pub const SURFACE_GRID: u16 = 8;
+/// Most surfaces whose points are offered per observation.
+const MAX_SURFACES: usize = 2;
+/// Smallest surface side, in pixels, that gets a grid.
+const MIN_SURFACE_PX: f64 = 40.0;
+
+/// The fraction `(fx, fy)` of the surface box at a cell's center.
+pub fn cell_center_fraction(cell: [u16; 2]) -> (f64, f64) {
+    let side = f64::from(SURFACE_GRID);
+    (
+        (f64::from(cell[0]) + 0.5) / side,
+        (f64::from(cell[1]) + 0.5) / side,
+    )
+}
+
+/// Point clicks on drawing surfaces: each viable region claiming Point gets a
+/// `SURFACE_GRID` x `SURFACE_GRID` grid of offered `CLICK:<surface>@c,r`
+/// cells. The policy picks a cell id; it never sends coordinates.
+fn point_actions(manifold: &InteractionManifold) -> Vec<ObservedAction> {
+    let mut out = Vec::new();
+    let surfaces = manifold
+        .regions()
+        .filter(|r| region_is_viable_target(r) && r.actions().contains(&Action::Point))
+        .filter(|r| r.rect().width() >= MIN_SURFACE_PX && r.rect().height() >= MIN_SURFACE_PX)
+        .take(MAX_SURFACES);
+    for surface in surfaces {
+        let rect = surface.rect();
+        let (cw, ch) = (
+            rect.width() / f64::from(SURFACE_GRID),
+            rect.height() / f64::from(SURFACE_GRID),
+        );
+        for row in 0..SURFACE_GRID {
+            for col in 0..SURFACE_GRID {
+                let mut action = target_action(ActionKind::Click, surface);
+                action.id = ActionId(format!("CLICK:{}@{col},{row}", surface.id()));
+                action.cell = Some([col, row]);
+                let x = rect.x() + f64::from(col) * cw;
+                let y = rect.y() + f64::from(row) * ch;
+                action.bounds = Some([x, y, cw, ch].map(|v| v.round() as i32));
+                action.near_text = Some(format!(
+                    "{} point col {col} row {row} of {}",
+                    if surface.label().is_empty() {
+                        "surface"
+                    } else {
+                        surface.label()
+                    },
+                    SURFACE_GRID
+                ));
+                out.push(action);
+            }
+        }
+    }
+    out
 }
 
 /// Most drag sources offered per observation.
@@ -545,6 +613,7 @@ fn control_action(kind: ActionKind) -> ObservedAction {
         bounds: None,
         near_text: None,
         dest: None,
+        cell: None,
     }
 }
 
@@ -728,6 +797,29 @@ mod tests {
             space.get_str("CLICK:list").is_none(),
             "scrolling is not clicking"
         );
+    }
+
+    #[test]
+    fn a_surface_offers_a_click_grid_of_cells() {
+        let m = parse_fixture(
+            "viewport w=800 h=600\n\
+             region id=pad role=image label=\"canvas\" x=0 y=0 w=160 h=80 actions=point,click sources=dom\n\
+             region id=tiny role=image label=\"canvas\" x=300 y=0 w=20 h=20 actions=point,click sources=dom\n",
+        )
+        .unwrap();
+        let space = ActionSpace::from_manifold(&m);
+        let cells: Vec<_> = space.actions().filter(|a| a.cell().is_some()).collect();
+        assert_eq!(
+            cells.len(),
+            usize::from(SURFACE_GRID * SURFACE_GRID),
+            "only the big surface"
+        );
+        let corner = space.get_str("CLICK:pad@7,7").expect("last cell offered");
+        assert_eq!(corner.kind(), ActionKind::Click);
+        assert_eq!(corner.target().map(RegionId::as_str), Some("pad"));
+        assert_eq!(corner.bounds(), Some([140, 70, 20, 10]));
+        assert!(space.get_str("CLICK:pad@8,0").is_none(), "off the grid");
+        assert_eq!(cell_center_fraction([0, 7]), (0.0625, 0.9375));
     }
 
     #[test]

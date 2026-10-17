@@ -506,6 +506,33 @@ impl<T: CdpTransport> BrowserSession<T> {
         }
     }
 
+    /// Trusted click at fraction `(fx, fy)` of the observed region's box
+    /// (each clamped into [0, 1], so the point never leaves the region).
+    #[doc(hidden)]
+    pub fn pointer_click_at(
+        &mut self,
+        id: &RegionId,
+        fx: f64,
+        fy: f64,
+    ) -> Result<ActMechanism, BrowserError> {
+        let rect = self
+            .manifold
+            .as_ref()
+            .and_then(|m| m.get(id))
+            .map(|region| region.rect())
+            .ok_or(BrowserError::TargetUnresolved)?;
+        self.binding_for(id)?;
+        let x = rect.x() + rect.width() * fx.clamp(0.0, 1.0);
+        let y = rect.y() + rect.height() * fy.clamp(0.0, 1.0);
+        self.stale = true;
+        self.call(
+            "Input.dispatchMouseEvent",
+            &json!({"type": "mouseMoved", "x": x, "y": y}).to_string(),
+        )?;
+        self.coordinate_click(x, y)?;
+        Ok(ActMechanism::Coordinate)
+    }
+
     /// Set `text` as the value of the observed editable region `id`.
     ///
     /// Low-level input used by the agent executor **after** ticket

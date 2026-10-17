@@ -1050,15 +1050,23 @@ where
             .ok_or_else(|| AgentError::Guard("target-bound action missing region id".into()))?;
 
         let dest = offered.dest().map(|d| d.id.clone());
-        let ticket = match &dest {
-            Some(dest) => aui_guard::gate_drag(
+        let cell = offered.cell();
+        let ticket = match (&dest, cell) {
+            (Some(dest), _) => aui_guard::gate_drag(
                 &predicted.manifold,
                 &target,
                 dest,
                 predicted.focused.clone(),
                 predicted.space_captured_at_ms,
             ),
-            None => gate(
+            (None, Some(cell)) => aui_guard::gate_point(
+                &predicted.manifold,
+                &target,
+                cell,
+                predicted.focused.clone(),
+                predicted.space_captured_at_ms,
+            ),
+            (None, None) => gate(
                 &predicted.manifold,
                 &target,
                 action,
@@ -1074,19 +1082,24 @@ where
             // M` clauses act on time-critical overlay controls (an ad's skip
             // button) that ignore script clicks: they stay trusted.
             ActionKind::Click
-                if !matches!(
-                    self.mode,
-                    ClauseMode::Optional {
-                        while_marker: Some(_)
-                    }
-                ) && self.history.last().is_some_and(|step| {
-                    step.kind == ActionKind::Click
-                        && step.label == predicted.decision.target_label
-                        && step.verification == VerificationKind::NoVisibleChange
-                }) =>
+                if cell.is_none()
+                    && !matches!(
+                        self.mode,
+                        ClauseMode::Optional {
+                            while_marker: Some(_)
+                        }
+                    )
+                    && self.history.last().is_some_and(|step| {
+                        step.kind == ActionKind::Click
+                            && step.label == predicted.decision.target_label
+                            && step.verification == VerificationKind::NoVisibleChange
+                    }) =>
             {
                 Input::ScriptClick
             }
+            ActionKind::Click if cell.is_some() => Input::ClickAt {
+                cell: cell.expect("checked"),
+            },
             ActionKind::Click => Input::Click,
             ActionKind::TypeText => Input::Type(
                 predicted
@@ -1114,6 +1127,7 @@ where
             Input::Hover => "hover",
             Input::ScrollIn => "scroll-in",
             Input::Drag { .. } => "drag",
+            Input::ClickAt { .. } => "click-at",
             Input::Type(_) => "type",
             Input::Select(_) => "select",
         };

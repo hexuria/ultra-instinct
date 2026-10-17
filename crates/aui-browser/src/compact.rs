@@ -171,6 +171,7 @@ function candidate(el){
   var name=el.nodeName.toUpperCase();
   if(name==='SCRIPT'||name==='STYLE'||name==='HEAD'||name==='HTML'||name==='BODY')return false;
   if(el.namespaceURI===SVG_NS&&SHAPES[el.localName])return true;
+  if(name==='CANVAS'||(el.namespaceURI===SVG_NS&&el.localName==='svg'))return true;
   if(el.hasAttribute('role'))return true;
   if(KEEP[name])return true;
   if(!TEXTUAL[name])return false;

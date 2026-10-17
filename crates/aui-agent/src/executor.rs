@@ -106,6 +106,14 @@ pub fn execute_ticketed<B: BrowserRuntime + ?Sized>(
         }
         _ => {}
     }
+    // A cell ticket clicks exactly its cell; a plain ticket never clicks a cell.
+    let cell = match input {
+        Input::ClickAt { cell } => Some(*cell),
+        _ => None,
+    };
+    if cell != ticket.cell {
+        return Err(ExecError::Ticket(TicketInvalid::TicketMismatch));
+    }
     revalidate(ticket, &fresh, focused).map_err(ExecError::Ticket)?;
     let region = fresh
         .get(&ticket.target_id)
