@@ -63,7 +63,11 @@ crate.
 >    layer and focus are global; clickable / occluded sets are the target
 >    neighborhood (ancestors, same-parent siblings, children, root peers within
 >    `NEIGHBOR_RADIUS_PX` = 160, inclusive). MCP `seen_world` stays whole-page
->    (`WorldSnapshot::of`).
+>    (`WorldSnapshot::of`). A DRAG ticket binds two ends: the source world as
+>    above and a `TicketDest` with the destination's own neighborhood; a
+>    surface-point ticket binds its grid `cell`. The executor refuses a
+>    swapped destination, another cell, or a two-end / cell ticket on any other
+>    input (`TicketMismatch`), and re-checks the drop target (ADR 0010).
 > 7. **Text is not Instinct.** `TYPE_TEXT` / `SELECT` payloads come from a
 >    `TextResolver`, checked against their context fingerprint, before the
 >    ticket is consumed, so executor revalidation always runs after resolver
@@ -95,7 +99,11 @@ crate.
 >    options change from the first poll and stabilize; input is never
 >    re-dispatched. A plain element the page made clickable (an `onclick`
 >    attribute or handler property, `tabindex` ≥ 0, or a pointer cursor it
->    sets itself rather than inherits) is offered CLICK (ADR 0009). Observe
+>    sets itself rather than inherits) is offered CLICK (ADR 0009). Also kept
+>    (ADR 0010): SVG shapes (named by title / text / fill), `LI` with text,
+>    text-less boxes only with a click hint, `canvas` / `svg` surfaces (claim
+>    `point`), scrollable boxes (claim `scroll`), popup owners (claim
+>    `hover`), and drag-marked elements (claim `drag`). Observe
 >    also records control state (value, checked,
 >    expanded, select options) as evidence only: it is not in the region
 >    fingerprint, and password values are never read. Do not claim cross-origin
@@ -106,8 +114,13 @@ crate.
 >    may carry evidence a transport asks for (`wants_evidence`, ADR 0009):
 >    the viewport JPEG beside it (`jev`: a System One image, `--no-screenshot`),
 >    `page` {url, title, ≤ 6000 chars of visible text} (`jev`, `clef`,
->    `--no-page-text`), and per-target `box` / `near_text`. Evidence never
->    widens the reply.
+>    `--no-page-text`), per-target `box` / `near_text`, and the run's
+>    `progress` (clauses, which are satisfied, values typed; secrets masked).
+>    Evidence never widens the reply. New kinds (ADR 0010) are still offered
+>    ids: `HOVER:<id>`, `SCROLL_IN:<id>`, `DRAG:<src>><dst>` (capped pairs), and
+>    surface cells `CLICK:<surface>@c,r` (8×8). JEV's DONE carries a
+>    same-call `goal_satisfied` self-check; DONE below one half is re-asked
+>    once without DONE, else abstain.
 > 9. **HGRA stays frozen.** No matcher tuning on the agent path.
 > 10. **One blocking CDP socket per agent.** Parallelism means separate agents
 >    in separate tabs with no shared state. Formal tools stay unjustified for
@@ -136,6 +149,7 @@ crate.
 | `aui-protocol` | Guard / ticket / verify wire types |
 | `aui-resonance` | `WeightedMatcher` (MCP / CLI locate + ranked guard only) |
 | `aui-mcp` | Optional JSON-RPC adapter (observe / guard / verify) |
+| `aui-remote` | Remote decision transports and the HTTP text model, the only crate with a model SDK / HTTP client: `typesafe` (feature `jev`), `clef` (feature `clef`), `http_text` (feature `model-text`); re-exported by `aui-cli` |
 | `aui-cli` | `ultra-instinct run` (agent loop, `--policy instinct|jev|clef|clef-flash`, `--diary <dir>`); `replay --diary` (offline arena: agree / would-abstain / regress per recorded decision); `observe` / `guard` / `verify` / `locate` / `inspect` / `diff` preflight helpers; `mcp` (stdio); `TypesafeTransport` (feature `jev`: JEV-primary over the closed remote wire); `ClefTransport` (feature `clef`: Cloudflare Workers AI Clef / Clef-Flash over the same wire through `typesafe-sdk`'s Clef provider, one decision call, single-candidate heads answered locally) |
 | `aui-dojo` | Battle diary schema v1 (`DiaryLine` JSONL), `DiaryWriter` / `read_diary`, site + situation keys, decision→`ActionSpace` rebuild for the replay arena; versioned `LessonStore` (words / places / moves / trust, keyed per situation, carrying proving diary ids); lessons only adjust evidence inside the finite `ActionSpace` |
 
@@ -148,7 +162,8 @@ feature, not the default product path.
 - Agent loop, stale discards, multi-step clauses: `aui-agent` unit tests,
   `tests/mock_loop.rs`, `tests/adversarial.rs`, `tests/replay_cdp.rs`.
 - Executor boundary: `executor.rs` unit tests, `tests/props.rs`
-  (substitution, staleness, consumed-beats-stale, `is_stale` classification).
+  (substitution, staleness, consumed-beats-stale, `is_stale` classification,
+  drag destination and surface cell substitution).
 - Gate / ticket / world: `aui-guard` unit tests,
   `tests/ticket_props.rs` (radius boundary 159 / 160 / 161, focus-only change,
   consumed never stale), `tests/world_context.rs`.
