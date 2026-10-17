@@ -194,7 +194,7 @@ names: `browser_navigate`, `browser_get_state`, `browser_click`,
 indexes come from `browser_get_state` in reading order; `browser_click` /
 `browser_type` issue an `of_target` ticket and run `execute_ticketed`, so a
 stale page refuses instead of clicking the wrong element. Page-level calls
-(navigate, scroll, screenshot, tabs) are plain CDP like browser-use's.
+(navigate, scroll, screenshot, tabs) are plain CDP like browser-use's. Over MCP, `browser_screenshot` answers with an `image` content item (`image/png`) the client can show, then the metadata as text; `Server::call_tool` keeps returning the base64 in its body. `browser_screenshot` and `browser_save_as_pdf` take an optional `path` that writes the decoded file.
 Coordinate clicks are deliberately not offered. Diagnostics:
 `browser_exec`/`browser_javascript_exec` (Runtime.evaluate),
 `browser_extract_content` (deterministic DOM→markdown, no model call),

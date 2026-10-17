@@ -375,7 +375,24 @@ fn screenshot(server: &mut Server, arguments: &Value) -> Result<Value, ToolError
         .map(|png| json!({"format": "png", "base64": png}))
         .map_err(browser_err);
     keep(server, &key, session);
-    outcome
+    save_artifact(outcome?, "base64", opt_str(arguments, "path")?)
+}
+
+/// With a `path`, writes the decoded base64 in `body[field]` there and
+/// records `path` and `bytes`. The body keeps the base64 either way.
+fn save_artifact(mut body: Value, field: &str, path: Option<&str>) -> Result<Value, ToolError> {
+    use base64::Engine as _;
+    let Some(path) = path else {
+        return Ok(body);
+    };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(body[field].as_str().unwrap_or_default())
+        .map_err(browser_err)?;
+    std::fs::write(path, &bytes)
+        .map_err(|err| ToolError::InvalidArguments(format!("`path` {path:?}: {err}")))?;
+    body["path"] = json!(path);
+    body["bytes"] = json!(bytes.len());
+    Ok(body)
 }
 
 fn scroll(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
@@ -682,7 +699,7 @@ fn save_as_pdf(server: &mut Server, arguments: &Value) -> Result<Value, ToolErro
         .map(|data| json!({"data": data}))
         .map_err(browser_err);
     keep(server, &key, session);
-    outcome
+    save_artifact(outcome?, "data", opt_str(arguments, "path")?)
 }
 
 fn get_dropdown_options(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
@@ -1172,7 +1189,10 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
         "browser_get_html" => "document.documentElement.outerHTML of the current tab.",
         "browser_get_page_text" => "Visible text of the current tab (alias of browser_get_text).",
         "browser_get_text" => "document.body.innerText — visible page text.",
-        "browser_screenshot" => "PNG screenshot of the viewport, base64.",
+        "browser_screenshot" => {
+            props.insert("path".into(), json!({"type": "string"}));
+            "PNG screenshot of the viewport, returned as an MCP image. `path` also writes the PNG there."
+        }
         "browser_scroll" => {
             props.insert("down".into(), json!({"type": "boolean"}));
             props.insert("pages".into(), json!({"type": "number"}));
@@ -1271,7 +1291,8 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             props.insert("landscape".into(), json!({"type": "boolean"}));
             props.insert("print_background".into(), json!({"type": "boolean"}));
             props.insert("scale".into(), json!({"type": "number"}));
-            "Page.printToPDF → base64 data of the current tab."
+            props.insert("path".into(), json!({"type": "string"}));
+            "Page.printToPDF → base64 data of the current tab. `path` also writes the PDF there."
         }
         "browser_get_dropdown_options" => {
             props.insert("index".into(), json!({"type": "integer"}));
