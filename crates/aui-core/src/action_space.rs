@@ -43,6 +43,10 @@ pub enum ActionKind {
     ScrollIn,
     /// Drag a draggable region onto another observed region.
     Drag,
+    /// Press one key from [`KEY_NAMES`] on a region that takes keys.
+    Key,
+    /// Select (highlight) all of a text block's text, as a triple-click does.
+    SelectText,
 }
 
 impl ActionKind {
@@ -64,6 +68,8 @@ impl ActionKind {
             Self::Hover => "HOVER",
             Self::ScrollIn => "SCROLL_IN",
             Self::Drag => "DRAG",
+            Self::Key => "KEY",
+            Self::SelectText => "SELECT_TEXT",
         }
     }
 
@@ -80,6 +86,8 @@ impl ActionKind {
             "HOVER" | "hover" => Self::Hover,
             "SCROLL_IN" | "scroll_in" => Self::ScrollIn,
             "DRAG" | "drag" => Self::Drag,
+            "KEY" | "key" => Self::Key,
+            "SELECT_TEXT" | "select_text" => Self::SelectText,
             _ => return None,
         })
     }
@@ -165,6 +173,8 @@ pub struct ObservedAction {
     dest: Option<DragDest>,
     /// Surface point clicks only: the grid cell `[col, row]`.
     cell: Option<[u16; 2]>,
+    /// KEY only: the key pressed, one of [`KEY_NAMES`].
+    key: Option<&'static str>,
 }
 
 /// The release region of an offered DRAG.
@@ -174,6 +184,9 @@ pub struct DragDest {
     pub label: String,
     pub fingerprint: u64,
     pub bounds: [i32; 4],
+    /// A grid cell `[col, row]` of the destination surface: the release
+    /// point. `None` releases on the region.
+    pub cell: Option<[u16; 2]>,
 }
 
 impl ObservedAction {
@@ -201,6 +214,7 @@ impl ObservedAction {
             near_text: None,
             dest: None,
             cell: None,
+            key: None,
         }
     }
 
@@ -237,6 +251,10 @@ impl ObservedAction {
     /// The surface cell `[col, row]` of a point click ([`SURFACE_GRID`] wide).
     pub fn cell(&self) -> Option<[u16; 2]> {
         self.cell
+    }
+    /// KEY only: the key this action presses.
+    pub fn key(&self) -> Option<&'static str> {
+        self.key
     }
 }
 
@@ -309,6 +327,9 @@ impl ActionSpace {
             actions.insert(observed.id.clone(), observed);
         }
         for observed in point_actions(manifold) {
+            actions.insert(observed.id.clone(), observed);
+        }
+        for observed in key_actions(manifold) {
             actions.insert(observed.id.clone(), observed);
         }
 
@@ -432,7 +453,9 @@ const fn map_region_claim(claim: Action) -> Option<ActionKind> {
         Action::Scroll => Some(ActionKind::ScrollIn),
         // A drag needs a destination: offered as source / destination pairs.
         // A surface's points are offered as a grid of cells.
-        Action::Focus | Action::Drag | Action::Point => None,
+        Action::SelectText => Some(ActionKind::SelectText),
+        // Keys are offered one per key (`key_actions`).
+        Action::Focus | Action::Drag | Action::Point | Action::Key => None,
     }
 }
 
@@ -449,6 +472,7 @@ fn target_action(kind: ActionKind, region: &InteractionRegion) -> ObservedAction
         near_text: None,
         dest: None,
         cell: None,
+        key: None,
     }
 }
 
@@ -508,14 +532,79 @@ fn point_actions(manifold: &InteractionManifold) -> Vec<ObservedAction> {
     out
 }
 
+/// Every key a KEY action may press: a closed set, never page-supplied.
+pub const KEY_NAMES: [&str; 10] = [
+    "ArrowLeft",
+    "ArrowRight",
+    "ArrowUp",
+    "ArrowDown",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+    "Enter",
+    "Escape",
+];
+/// Keys that move a slider's value.
+const SLIDER_KEYS: [&str; 8] = [
+    "ArrowLeft",
+    "ArrowRight",
+    "ArrowUp",
+    "ArrowDown",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+];
+/// Keys that walk and pick a combobox's options.
+const COMBOBOX_KEYS: [&str; 4] = ["ArrowDown", "ArrowUp", "Enter", "Escape"];
+/// Most KEY actions offered per observation.
+const MAX_KEY_ACTIONS: usize = 48;
+
+/// The keys a region that claims Key takes, by what it is: a combobox walks
+/// its options, a text field submits with Enter, anything else (a slider, a
+/// slider handle) moves its value.
+fn keys_for(region: &InteractionRegion) -> &'static [&'static str] {
+    if region.role() == Role::ComboBox {
+        &COMBOBOX_KEYS
+    } else if region.actions().contains(&Action::Type) {
+        &["Enter"]
+    } else {
+        &SLIDER_KEYS
+    }
+}
+
+/// KEY offers `KEY:<region>#<key>`, one per key a viable Key region takes.
+fn key_actions(manifold: &InteractionManifold) -> Vec<ObservedAction> {
+    let mut out = Vec::new();
+    for region in manifold
+        .regions()
+        .filter(|r| region_is_viable_target(r) && r.actions().contains(&Action::Key))
+    {
+        for key in keys_for(region) {
+            if out.len() == MAX_KEY_ACTIONS {
+                return out;
+            }
+            let mut action = target_action(ActionKind::Key, region);
+            action.id = ActionId(format!("KEY:{}#{key}", region.id()));
+            action.key = Some(key);
+            out.push(action);
+        }
+    }
+    out
+}
+
 /// Most drag sources offered per observation.
 const MAX_DRAG_SOURCES: usize = 8;
-/// Most destinations offered per drag source, nearest first.
-const MAX_DROPS_PER_SOURCE: usize = 16;
+/// Most destinations offered per drag source, nearest first. A sanity bound,
+/// not a menu cut: a remote request sends sources and destinations once each
+/// (not one entry per pair), so a far destination costs one entry.
+const MAX_DROPS_PER_SOURCE: usize = 96;
 
-/// DRAG offers: each viable region claiming Drag, paired with the nearest
-/// other viable regions as release points. The menu stays finite and every
-/// pair is an explicit offered id `DRAG:<src>><dst>`.
+/// DRAG offers: each viable region claiming Drag, paired with the other
+/// viable regions as release points, nearest first, up to
+/// [`MAX_DROPS_PER_SOURCE`]. The menu stays finite and every pair is an
+/// explicit offered id `DRAG:<src>><dst>`.
 fn drag_actions(manifold: &InteractionManifold) -> Vec<ObservedAction> {
     let viable: Vec<&InteractionRegion> = manifold
         .regions()
@@ -548,8 +637,48 @@ fn drag_actions(manifold: &InteractionManifold) -> Vec<ObservedAction> {
                 label: dst.label().to_owned(),
                 fingerprint: dst.fingerprint().bits(),
                 bounds: pixel_box(dst.rect()),
+                cell: None,
             });
             out.push(action);
+        }
+        // A source drawn on a surface can be moved to any cell of it ("drag
+        // the circle up"): a surface that takes points, or the drawing the
+        // source sits in.
+        for surface in viable.iter().filter(|s| {
+            s.id() != src.id()
+                && (s.actions().contains(&Action::Point) || src.parent() == Some(s.id()))
+                && s.rect().width() >= MIN_SURFACE_PX
+                && s.rect().height() >= MIN_SURFACE_PX
+                && s.rect().contains_point(c)
+        }) {
+            let rect = surface.rect();
+            let (cw, ch) = (
+                rect.width() / f64::from(SURFACE_GRID),
+                rect.height() / f64::from(SURFACE_GRID),
+            );
+            for row in 0..SURFACE_GRID {
+                for col in 0..SURFACE_GRID {
+                    let mut action = target_action(ActionKind::Drag, src);
+                    action.id = ActionId(format!("DRAG:{}>{}@{col},{row}", src.id(), surface.id()));
+                    let x = rect.x() + f64::from(col) * cw;
+                    let y = rect.y() + f64::from(row) * ch;
+                    action.dest = Some(DragDest {
+                        id: surface.id().clone(),
+                        label: format!(
+                            "{} point col {col} row {row} of {SURFACE_GRID}",
+                            if surface.label().is_empty() {
+                                "surface"
+                            } else {
+                                surface.label()
+                            }
+                        ),
+                        fingerprint: surface.fingerprint().bits(),
+                        bounds: [x, y, cw, ch].map(|v| v.round() as i32),
+                        cell: Some([col, row]),
+                    });
+                    out.push(action);
+                }
+            }
         }
     }
     out
@@ -661,6 +790,7 @@ fn control_action(kind: ActionKind) -> ObservedAction {
         near_text: None,
         dest: None,
         cell: None,
+        key: None,
     }
 }
 
@@ -946,23 +1076,104 @@ mod tests {
     }
 
     #[test]
+    fn regions_that_take_keys_offer_the_keys_they_take() {
+        let m = parse_fixture(
+            r#"
+            viewport w=800 h=600
+            region id=handle role=generic label="" x=10 y=10 w=12 h=12 actions=drag,key sources=dom
+            region id=q role=text_field label="Search" x=10 y=50 w=200 h=20 actions=type,key sources=dom
+            region id=city role=combobox label="City" x=10 y=90 w=200 h=20 actions=type,key sources=dom
+            region id=go role=button label="Go" x=10 y=130 w=40 h=20 actions=click sources=dom
+            "#,
+        )
+        .unwrap();
+        let space = ActionSpace::from_manifold(&m);
+        let keys = |region: &str| -> Vec<&str> {
+            space
+                .targets_of(ActionKind::Key)
+                .filter(|a| a.target().is_some_and(|t| t.as_str() == region))
+                .filter_map(ObservedAction::key)
+                .collect()
+        };
+        assert_eq!(
+            keys("handle").len(),
+            8,
+            "a slider handle moves by every movement key"
+        );
+        assert!(keys("handle").contains(&"ArrowRight") && !keys("handle").contains(&"Enter"));
+        assert_eq!(keys("q"), ["Enter"], "a field submits");
+        assert_eq!(keys("city").len(), 4, "a combobox walks and picks");
+        assert!(keys("go").is_empty(), "no key claim, no keys");
+        let right = space.get_str("KEY:handle#ArrowRight").unwrap();
+        assert_eq!(right.key(), Some("ArrowRight"));
+        assert!(KEY_NAMES.contains(&right.key().unwrap()));
+    }
+
+    #[test]
+    fn a_shape_on_a_drawing_can_be_moved_to_any_cell_of_it() {
+        let m = parse_fixture(
+            r#"
+            viewport w=800 h=600
+            region id=svg role=image label="drawing" x=0 y=50 w=160 h=160 actions=click,point sources=dom
+            region id=dot role=image label="black circle" x=70 y=120 w=20 h=20 actions=click,drag sources=dom
+            region id=chip role=generic label="Chip" x=400 y=400 w=20 h=20 actions=drag sources=dom
+            "#,
+        )
+        .unwrap();
+        let space = ActionSpace::from_manifold(&m);
+        let up = space.get_str("DRAG:dot>svg@4,0").expect("a cell above it");
+        let dest = up.dest().unwrap();
+        assert_eq!((dest.id.as_str(), dest.cell), ("svg", Some([4, 0])));
+        assert_eq!(dest.bounds, [80, 50, 20, 20]);
+        assert!(
+            space.get_str("DRAG:dot>svg").is_some(),
+            "the surface itself too"
+        );
+        assert!(
+            space.get_str("DRAG:chip>svg@0,0").is_none(),
+            "a source off the drawing gets no cells"
+        );
+        // A drawing with no click evidence still takes the shapes drawn in it.
+        let m = parse_fixture(
+            r#"
+            viewport w=800 h=600
+            region id=art role=image label="drawing" x=0 y=50 w=160 h=160 sources=dom
+            region id=star role=image label="black polygon" x=70 y=120 w=20 h=20 actions=click,drag parent=art sources=dom
+            "#,
+        )
+        .unwrap();
+        let space = ActionSpace::from_manifold(&m);
+        assert!(
+            space.get_str("DRAG:star>art@4,0").is_some(),
+            "its own drawing"
+        );
+        assert!(
+            !space
+                .targets_of(ActionKind::Click)
+                .any(|a| a.cell().is_some()),
+            "no click cells without click evidence"
+        );
+    }
+
+    #[test]
     fn drag_sources_pair_with_their_nearest_viable_regions() {
         let mut src = String::from(
             "viewport w=1200 h=900\n\
              region id=card role=generic label=\"Card\" x=0 y=0 w=20 h=20 actions=drag sources=dom\n\
              region id=gone role=generic label=\"Gone\" x=30 y=0 w=20 h=20 sources=dom flags=hidden\n",
         );
-        for i in 0..20 {
+        for i in 0..(MAX_DROPS_PER_SOURCE + 4) {
             src.push_str(&format!(
-                "region id=slot{i:02} role=generic label=\"Slot {i}\" x={} y=0 w=20 h=20 sources=dom\n",
-                40 + i * 30
+                "region id=slot{i:03} role=generic label=\"Slot {i}\" x={} y={} w=20 h=20 sources=dom\n",
+                40 + (i % 30) * 30,
+                (i / 30) * 30
             ));
         }
         let space = ActionSpace::from_manifold(&parse_fixture(&src).unwrap());
         let drags: Vec<_> = space.targets_of(ActionKind::Drag).collect();
         assert_eq!(drags.len(), MAX_DROPS_PER_SOURCE, "capped, nearest first");
         let first = space
-            .get_str("DRAG:card>slot00")
+            .get_str("DRAG:card>slot000")
             .expect("nearest slot offered");
         assert_eq!(first.dest().map(|d| d.label.as_str()), Some("Slot 0"));
         assert!(

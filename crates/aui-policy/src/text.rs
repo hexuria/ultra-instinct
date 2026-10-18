@@ -373,6 +373,110 @@ fn fill_with_pattern(goal: &str, field: &str) -> Option<String> {
     Some(value.trim_matches(|c| c == '"' || c == '\'').to_owned())
 }
 
+/// A resolved payload in the value format the field's `type` takes: a
+/// date field holds `YYYY-MM-DD`, a time field `HH:MM` (24-hour), a month
+/// field `YYYY-MM`. Its native value setter silently drops anything else
+/// ("03/07/2016"), so the text is converted first. Text that does not parse
+/// as that kind of value, and every other field, is returned unchanged.
+pub fn form_value(input_type: Option<&str>, text: &str) -> String {
+    let converted = match input_type {
+        Some("date") => parse_date(text).map(|(y, m, d)| format!("{y:04}-{m:02}-{d:02}")),
+        Some("time") => parse_time(text).map(|(h, min)| format!("{h:02}:{min:02}")),
+        Some("month") => parse_month(text).map(|(y, m)| format!("{y:04}-{m:02}")),
+        _ => None,
+    };
+    converted.unwrap_or_else(|| text.to_owned())
+}
+
+const MONTHS: [&str; 12] = [
+    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+];
+
+fn month_named(word: &str) -> Option<u32> {
+    let lower = word.to_ascii_lowercase();
+    if lower.len() < 3 || !lower.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    MONTHS
+        .iter()
+        .position(|m| lower.starts_with(m))
+        .map(|i| i as u32 + 1)
+}
+
+fn date_parts(text: &str) -> Vec<&str> {
+    text.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+fn valid_date(y: u32, m: u32, d: u32) -> Option<(u32, u32, u32)> {
+    ((1..=9999).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d)).then_some((y, m, d))
+}
+
+/// `03/07/2016` (month first unless the first number cannot be a month),
+/// `2016-03-07`, `March 7, 2016`, `7 Mar 2016`.
+fn parse_date(text: &str) -> Option<(u32, u32, u32)> {
+    let parts = date_parts(text);
+    let numbers: Vec<(u32, usize)> = parts
+        .iter()
+        .filter_map(|p| Some((p.parse::<u32>().ok()?, p.len())))
+        .collect();
+    if let Some(month) = parts.iter().find_map(|p| month_named(p)) {
+        let year = numbers.iter().find(|(_, len)| *len == 4)?.0;
+        let day = numbers.iter().find(|(_, len)| *len <= 2)?.0;
+        return valid_date(year, month, day);
+    }
+    let [(a, la), (b, _), (c, lc)] = numbers.as_slice() else {
+        return None;
+    };
+    if *la == 4 {
+        valid_date(*a, *b, *c)
+    } else if *lc == 4 && *a > 12 {
+        valid_date(*c, *b, *a)
+    } else if *lc == 4 {
+        valid_date(*c, *a, *b)
+    } else {
+        None
+    }
+}
+
+/// `8:16 PM`, `08:16`, `20:16`, `8pm`, `12 AM`.
+fn parse_time(text: &str) -> Option<(u32, u32)> {
+    let lower = text.to_ascii_lowercase();
+    let pm = lower.contains("pm") || lower.contains("p.m");
+    let am = lower.contains("am") || lower.contains("a.m");
+    let numbers: Vec<u32> = lower
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|w| !w.is_empty())
+        .filter_map(|w| w.parse().ok())
+        .collect();
+    let (&hour, rest) = numbers.split_first()?;
+    let minute = rest.first().copied().unwrap_or(0);
+    let hour = match (am, pm) {
+        (_, true) if (1..=11).contains(&hour) => hour + 12,
+        (true, _) if hour == 12 => 0,
+        (true, _) | (_, true) if !(1..=12).contains(&hour) => return None,
+        _ => hour,
+    };
+    (hour < 24 && minute < 60).then_some((hour, minute))
+}
+
+/// `03/2016`, `2016-03`, `March 2016`.
+fn parse_month(text: &str) -> Option<(u32, u32)> {
+    let parts = date_parts(text);
+    let year = parts
+        .iter()
+        .find(|p| p.len() == 4)
+        .and_then(|p| p.parse::<u32>().ok())?;
+    let month = parts.iter().find_map(|p| month_named(p)).or_else(|| {
+        parts
+            .iter()
+            .filter(|p| p.len() <= 2)
+            .find_map(|p| p.parse::<u32>().ok())
+    })?;
+    (1..=12).contains(&month).then_some((year, month))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -508,6 +612,36 @@ mod tests {
             .unwrap(),
             "1100"
         );
+    }
+
+    #[test]
+    fn date_time_and_month_fields_get_their_own_value_format() {
+        let date = |t| form_value(Some("date"), t);
+        assert_eq!(date("03/07/2016"), "2016-03-07", "month first");
+        assert_eq!(date("2016-03-07"), "2016-03-07");
+        assert_eq!(
+            date("25/12/2020"),
+            "2020-12-25",
+            "a first number above 12 is the day"
+        );
+        assert_eq!(date("March 7, 2016"), "2016-03-07");
+        assert_eq!(date("7 Mar 2016"), "2016-03-07");
+        assert_eq!(date("13/13/2016"), "13/13/2016", "not a date: unchanged");
+        let time = |t| form_value(Some("time"), t);
+        assert_eq!(time("8:16 PM"), "20:16");
+        assert_eq!(time("08:05"), "08:05");
+        assert_eq!(time("12 AM"), "00:00");
+        assert_eq!(time("12:30 pm"), "12:30");
+        assert_eq!(time("7pm"), "19:00");
+        assert_eq!(time("25:00"), "25:00", "not a time: unchanged");
+        assert_eq!(form_value(Some("month"), "March 2016"), "2016-03");
+        assert_eq!(form_value(Some("month"), "03/2016"), "2016-03");
+        assert_eq!(
+            form_value(Some("text"), "03/07/2016"),
+            "03/07/2016",
+            "other fields: unchanged"
+        );
+        assert_eq!(form_value(None, "8:16 PM"), "8:16 PM");
     }
 
     #[test]

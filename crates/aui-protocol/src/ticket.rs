@@ -35,6 +35,8 @@ pub struct ActionTicket {
     /// Surface point clicks only: the grid cell `[col, row]` the ticket
     /// allows. The executor clicks exactly this cell.
     pub cell: Option<[u16; 2]>,
+    /// KEY only: the one key the ticket allows (from `aui_core::KEY_NAMES`).
+    pub key: Option<String>,
 }
 
 /// The second end of a two-region ticket (DRAG). Revalidated like the target.
@@ -46,6 +48,9 @@ pub struct TicketDest {
     pub fingerprint: u64,
     /// World fingerprint of the destination's neighborhood at issue time.
     pub world_fingerprint: u64,
+    /// A release on a grid cell `[col, row]` of a drawing surface; `None`
+    /// releases on the region itself.
+    pub cell: Option<[u16; 2]>,
 }
 
 impl ActionTicket {

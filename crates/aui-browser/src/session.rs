@@ -77,6 +77,10 @@ pub const DOM_TYPE_FUNCTION: &str = "function(v){if(this.disabled)throw new Erro
 /// so nothing is selected. Fires `input` + `change`.
 pub const DOM_SELECT_FUNCTION: &str = "function(v){if(this.disabled)throw new Error('disabled');if(this.tagName!=='SELECT')throw new Error('not a select');var o=Array.prototype.slice.call(this.options);var m=o.filter(function(x){return x.value===v||x.label===v||x.text.trim()===v;});if(m.length===0){var l=String(v).trim().toLowerCase();m=o.filter(function(x){return x.value.toLowerCase()===l||x.label.trim().toLowerCase()===l||x.text.trim().toLowerCase()===l;});}if(m.length!==1)throw new Error('option matches: '+m.length);if(m[0].disabled)throw new Error('option disabled');this.value=m[0].value;this.dispatchEvent(new Event('input',{bubbles:true}));this.dispatchEvent(new Event('change',{bubbles:true}));return m[0].value;}";
 
+/// Move keyboard focus to the element (the argument is unused).
+pub const DOM_FOCUS_FUNCTION: &str =
+    "function(_){if(this.disabled)throw new Error('disabled');this.focus();return true;}";
+
 /// Read `[value, selectedOptionText]` of a field; `null` for non-fields.
 pub const DOM_READ_VALUE_FUNCTION: &str = "function(){var t='';if(this.tagName==='SELECT'&&this.selectedIndex>=0){t=this.options[this.selectedIndex].text.trim();}if(this.isContentEditable){return [this.textContent,t];}if(this.value===undefined||this.value===null){return null;}return [String(this.value),t];}";
 
@@ -871,27 +875,54 @@ impl<T: CdpTransport> BrowserSession<T> {
                 .map(|region| (region.rect().width(), region.rect().height()))
         };
         let sizes = size_of(from).zip(size_of(to));
-        let (release_x, release_y) =
-            release_point((a.center_x, a.center_y), (b.center_x, b.center_y), sizes);
+        let release = release_point((a.center_x, a.center_y), (b.center_x, b.center_y), sizes);
+        self.drag_gesture((a.center_x, a.center_y), release)
+    }
+
+    /// Press on `from`'s center and release at the center of grid cell
+    /// `[col, row]` of the surface `to`, placed from its observed box
+    /// (moving a shape to a point of its drawing).
+    #[doc(hidden)]
+    pub fn drag_to_cell(
+        &mut self,
+        from: &RegionId,
+        to: &RegionId,
+        cell: [u16; 2],
+    ) -> Result<(), BrowserError> {
+        let a = self.binding_for(from)?;
+        let rect = self
+            .manifold
+            .as_ref()
+            .and_then(|m| m.get(to))
+            .map(|region| region.rect())
+            .ok_or(BrowserError::TargetUnresolved)?;
+        let (fx, fy) = aui_core::cell_center_fraction(cell);
+        let release = (rect.x() + rect.width() * fx, rect.y() + rect.height() * fy);
+        self.drag_gesture((a.center_x, a.center_y), release)
+    }
+
+    /// Move to `start`, press, travel in [`DRAG_STEPS`] moves with the button
+    /// held, and release at `release`. A failed move still releases.
+    fn drag_gesture(&mut self, start: (f64, f64), release: (f64, f64)) -> Result<(), BrowserError> {
+        let a_x = start.0;
+        let a_y = start.1;
+        let (release_x, release_y) = release;
         self.stale = true;
         self.call(
             "Input.dispatchMouseEvent",
-            &json!({"type": "mouseMoved", "x": a.center_x, "y": a.center_y}).to_string(),
+            &json!({"type": "mouseMoved", "x": a_x, "y": a_y}).to_string(),
         )?;
         self.call(
             "Input.dispatchMouseEvent",
-            &json!({"type": "mousePressed", "x": a.center_x, "y": a.center_y, "button": "left", "clickCount": 1})
+            &json!({"type": "mousePressed", "x": a_x, "y": a_y, "button": "left", "clickCount": 1})
                 .to_string(),
         )?;
         // Intermediate moves: pointer and HTML5 drag libraries start a drag
         // only after the pointer travels with the button held.
-        let mut at = (a.center_x, a.center_y);
+        let mut at = (a_x, a_y);
         for step in 1..=DRAG_STEPS {
             let t = f64::from(step) / f64::from(DRAG_STEPS);
-            let point = (
-                a.center_x + (release_x - a.center_x) * t,
-                a.center_y + (release_y - a.center_y) * t,
-            );
+            let point = (a_x + (release_x - a_x) * t, a_y + (release_y - a_y) * t);
             let moved = self.call(
                 "Input.dispatchMouseEvent",
                 &json!({"type": "mouseMoved", "x": point.0, "y": point.1, "button": "left", "buttons": 1})
@@ -956,6 +987,55 @@ impl<T: CdpTransport> BrowserSession<T> {
                 message: "printToPDF result missing data".to_owned(),
             })
             .map_err(BrowserError::Cdp)
+    }
+
+    /// The text of the page's current selection (`getSelection()`).
+    pub fn selected_text(&mut self) -> Result<String, BrowserError> {
+        self.eval_string("String(window.getSelection ? window.getSelection() : '')")
+    }
+
+    /// Three trusted presses at the region's center in a row, as a reader
+    /// selects a whole paragraph.
+    #[doc(hidden)]
+    pub fn triple_click(&mut self, id: &RegionId) -> Result<(), BrowserError> {
+        let binding = self.binding_for(id)?;
+        self.stale = true;
+        let (x, y) = (binding.center_x, binding.center_y);
+        self.call(
+            "Input.dispatchMouseEvent",
+            &json!({"type": "mouseMoved", "x": x, "y": y}).to_string(),
+        )?;
+        for count in 1..=3 {
+            for kind in ["mousePressed", "mouseReleased"] {
+                self.call(
+                    "Input.dispatchMouseEvent",
+                    &json!({"type": kind, "x": x, "y": y, "button": "left", "clickCount": count})
+                        .to_string(),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Focus the observed region `id`, then press `key` once
+    /// ([`Self::key_event`]): an arrow on a slider, Enter in a field.
+    #[doc(hidden)]
+    pub fn press_key(&mut self, id: &RegionId, key: &str) -> Result<(), BrowserError> {
+        let binding = self.binding_for(id)?;
+        self.stale = true;
+        self.semantic_input(&binding, DOM_FOCUS_FUNCTION, "")?;
+        if key != "Enter" {
+            return self.key_event(key, 0);
+        }
+        // Enter must carry its text ("\r") for a field to submit its form.
+        let (k, c, v, _) = key_params(key).expect("Enter is a named key");
+        let down = json!({"type": "keyDown", "key": k, "code": c, "windowsVirtualKeyCode": v,
+            "nativeVirtualKeyCode": v, "text": "\r", "unmodifiedText": "\r"});
+        self.call("Input.dispatchKeyEvent", &down.to_string())?;
+        let up = json!({"type": "keyUp", "key": k, "code": c, "windowsVirtualKeyCode": v,
+            "nativeVirtualKeyCode": v});
+        self.call("Input.dispatchKeyEvent", &up.to_string())?;
+        Ok(())
     }
 
     /// One trusted key event (`Input.dispatchKeyEvent` down/up, optional hold).

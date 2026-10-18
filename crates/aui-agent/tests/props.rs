@@ -241,6 +241,98 @@ fn a_drag_ticket_releases_only_at_its_own_destination() {
 }
 
 #[test]
+fn a_key_ticket_presses_only_its_own_key() {
+    use aui_agent::{execute_ticketed, ExecError, Input, MockBrowser};
+    use aui_guard::TicketLedger;
+    use aui_protocol::TicketInvalid;
+    let m = aui_core::parse_fixture(
+        "viewport w=800 h=600\n\
+         region id=handle role=generic label=\"\" x=10 y=10 w=12 h=12 actions=click,drag,key sources=dom\n",
+    )
+    .unwrap();
+    let handle = aui_core::RegionId::try_new("handle").unwrap();
+    let ticket = aui_guard::gate_key(&m, &handle, "ArrowRight", None, 0).unwrap();
+    let mut browser = MockBrowser::new(m.clone());
+    let mut ledger = TicketLedger::default();
+    for wrong in [Input::Key("ArrowLeft".into()), Input::Click] {
+        assert!(matches!(
+            execute_ticketed(&mut browser, &mut ledger, &ticket, &wrong),
+            Err(ExecError::Ticket(TicketInvalid::TicketMismatch))
+        ));
+    }
+    let click = aui_guard::gate(&m, &handle, aui_core::Action::Click, None, 0).unwrap();
+    assert!(
+        matches!(
+            execute_ticketed(
+                &mut browser,
+                &mut ledger,
+                &click,
+                &Input::Key("Enter".into())
+            ),
+            Err(ExecError::Ticket(TicketInvalid::TicketMismatch))
+        ),
+        "a click ticket never presses a key"
+    );
+    assert!(browser.input_log().is_empty());
+    let right = Input::Key("ArrowRight".into());
+    execute_ticketed(&mut browser, &mut ledger, &ticket, &right).unwrap();
+    assert_eq!(browser.input_log(), &[(handle, right)]);
+}
+
+#[test]
+fn a_drag_to_a_cell_releases_only_on_its_own_cell() {
+    use aui_agent::{execute_ticketed, ExecError, Input, MockBrowser};
+    use aui_guard::TicketLedger;
+    use aui_protocol::TicketInvalid;
+    let m = aui_core::parse_fixture(
+        "viewport w=800 h=600\n\
+         region id=svg role=image label=\"drawing\" x=0 y=50 w=160 h=160 actions=click,point sources=dom\n\
+         region id=dot role=image label=\"dot\" x=70 y=120 w=20 h=20 actions=click,drag sources=dom\n",
+    )
+    .unwrap();
+    let dot = aui_core::RegionId::try_new("dot").unwrap();
+    let svg = aui_core::RegionId::try_new("svg").unwrap();
+    let ticket = aui_guard::gate_drag_to_cell(&m, &dot, &svg, [4, 0], None, 0).unwrap();
+    let mut browser = MockBrowser::new(m.clone());
+    let mut ledger = TicketLedger::default();
+    for wrong in [
+        Input::DragToCell {
+            to: svg.clone(),
+            cell: [4, 1],
+        },
+        Input::Drag { to: svg.clone() },
+    ] {
+        assert!(matches!(
+            execute_ticketed(&mut browser, &mut ledger, &ticket, &wrong),
+            Err(ExecError::Ticket(TicketInvalid::TicketMismatch))
+        ));
+    }
+    assert!(browser.input_log().is_empty());
+    let plain = aui_guard::gate_drag(&m, &dot, &svg, None, 0).unwrap();
+    assert!(
+        matches!(
+            execute_ticketed(
+                &mut browser,
+                &mut ledger,
+                &plain,
+                &Input::DragToCell {
+                    to: svg.clone(),
+                    cell: [0, 0]
+                }
+            ),
+            Err(ExecError::Ticket(TicketInvalid::TicketMismatch))
+        ),
+        "a region drag never releases on a cell"
+    );
+    let right = Input::DragToCell {
+        to: svg,
+        cell: [4, 0],
+    };
+    execute_ticketed(&mut browser, &mut ledger, &ticket, &right).unwrap();
+    assert_eq!(browser.input_log(), &[(dot, right)]);
+}
+
+#[test]
 fn a_cell_ticket_clicks_only_its_own_cell() {
     use aui_agent::{execute_ticketed, ExecError, Input, MockBrowser};
     use aui_guard::TicketLedger;

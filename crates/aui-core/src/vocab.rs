@@ -97,6 +97,11 @@ pub enum Action {
     Drag,
     /// A drawing surface (canvas, svg): any point inside it can be clicked.
     Point,
+    /// Takes key presses from a fixed set (arrows on a slider, Enter in a
+    /// field): see [`crate::KEY_NAMES`].
+    Key,
+    /// A block of text a reader can select (highlight).
+    SelectText,
 }
 
 impl Action {
@@ -111,6 +116,8 @@ impl Action {
             Self::Toggle => "toggle",
             Self::Drag => "drag",
             Self::Point => "point",
+            Self::Key => "key",
+            Self::SelectText => "select_text",
         }
     }
 
@@ -125,6 +132,8 @@ impl Action {
             "toggle" => Self::Toggle,
             "drag" => Self::Drag,
             "point" => Self::Point,
+            "key" => Self::Key,
+            "select_text" => Self::SelectText,
             _ => return None,
         })
     }

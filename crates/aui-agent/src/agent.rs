@@ -483,6 +483,8 @@ pub fn region_action(kind: ActionKind) -> Option<Action> {
         ActionKind::Hover => Some(Action::Hover),
         ActionKind::ScrollIn => Some(Action::Scroll),
         ActionKind::Drag => Some(Action::Drag),
+        ActionKind::Key => Some(Action::Key),
+        ActionKind::SelectText => Some(Action::SelectText),
         _ => None,
     }
 }
@@ -929,8 +931,12 @@ where
             // The target is revalidated after resolution by the executor
             // (fresh observe + ticket), so resolver latency cannot go stale
             // unnoticed. The ticket binds the same target role / label /
-            // fingerprint the text context was built from.
-            payload = Some(resolution.text);
+            // fingerprint the text context was built from. A date / time /
+            // month field takes the text in its own value format.
+            payload = Some(aui_policy::form_value(
+                ctx.input_type.as_deref(),
+                &resolution.text,
+            ));
         }
 
         self.predicted = Some(Predicted {
@@ -1099,8 +1105,25 @@ where
             .ok_or_else(|| AgentError::Guard("target-bound action missing region id".into()))?;
 
         let dest = offered.dest().map(|d| d.id.clone());
+        let dest_cell = offered.dest().and_then(|d| d.cell);
         let cell = offered.cell();
+        let key = offered.key();
         let ticket = match (&dest, cell) {
+            _ if key.is_some() => aui_guard::gate_key(
+                &predicted.manifold,
+                &target,
+                key.expect("checked"),
+                predicted.focused.clone(),
+                predicted.space_captured_at_ms,
+            ),
+            (Some(dest), _) if dest_cell.is_some() => aui_guard::gate_drag_to_cell(
+                &predicted.manifold,
+                &target,
+                dest,
+                dest_cell.expect("checked"),
+                predicted.focused.clone(),
+                predicted.space_captured_at_ms,
+            ),
             (Some(dest), _) => aui_guard::gate_drag(
                 &predicted.manifold,
                 &target,
@@ -1164,9 +1187,19 @@ where
             ),
             ActionKind::Hover => Input::Hover,
             ActionKind::ScrollIn => Input::ScrollIn,
-            ActionKind::Drag => Input::Drag {
-                to: dest.ok_or_else(|| AgentError::Guard("DRAG without a destination".into()))?,
-            },
+            ActionKind::Drag => {
+                let to =
+                    dest.ok_or_else(|| AgentError::Guard("DRAG without a destination".into()))?;
+                match dest_cell {
+                    Some(cell) => Input::DragToCell { to, cell },
+                    None => Input::Drag { to },
+                }
+            }
+            ActionKind::SelectText => Input::SelectText,
+            ActionKind::Key => Input::Key(
+                key.ok_or_else(|| AgentError::Guard("KEY without a key".into()))?
+                    .to_owned(),
+            ),
             _ => unreachable!("region_action filtered kinds"),
         };
 
@@ -1176,6 +1209,9 @@ where
             Input::Hover => "hover",
             Input::ScrollIn => "scroll-in",
             Input::Drag { .. } => "drag",
+            Input::DragToCell { .. } => "drag-to-cell",
+            Input::Key(_) => "key",
+            Input::SelectText => "select-text",
             Input::ClickAt { .. } => "click-at",
             Input::Type(_) => "type",
             Input::Select(_) => "select",
@@ -1211,6 +1247,24 @@ where
                 .unwrap_or_else(|| classify_delta(&executed.before, after, page_d.as_ref())),
             None => classify_delta(&executed.before, after, page_d.as_ref()),
         };
+        // A selection changes no element: it verifies by the page's selected
+        // text (some of the target's text selected, or nothing).
+        if matches!(input, Input::SelectText) {
+            let label = predicted.decision.target_label.to_lowercase();
+            verification = match self.browser.selected_text() {
+                Some(selected)
+                    if !selected.trim().is_empty()
+                        && selected
+                            .split_whitespace()
+                            .any(|w| label.contains(&w.to_lowercase())) =>
+                {
+                    VerificationKind::Success
+                }
+                Some(_) => VerificationKind::WrongEffect,
+                None => verification,
+            };
+            return Ok((record(verification), input_name));
+        }
         // Popups, pickers, and menus often render a beat after the page
         // settles. Look once more before calling a click "no visible change".
         self.late_effect = false;

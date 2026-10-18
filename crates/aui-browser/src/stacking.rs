@@ -167,13 +167,13 @@ pub fn apply_stacking_occlusion(
 /// own hit test at their center landed on them, which beats this
 /// approximation (an unkept fixed ancestor can lift a static field above
 /// positioned page content).
-/// Regions a pointer must reach: CLICK, DRAG, HOVER, and SCROLL_IN
-/// targets. Their centers are the ones occlusion checks.
+/// Regions a pointer must reach: CLICK, DRAG, HOVER, SCROLL_IN, and
+/// SELECT_TEXT targets. Their centers are the ones occlusion checks.
 pub(crate) fn pointer_target(region: &InteractionRegion) -> bool {
     region.actions().iter().any(|a| {
         matches!(
             a,
-            Action::Click | Action::Drag | Action::Hover | Action::Scroll
+            Action::Click | Action::Drag | Action::Hover | Action::Scroll | Action::SelectText
         )
     })
 }

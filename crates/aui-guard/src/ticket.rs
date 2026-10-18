@@ -69,6 +69,7 @@ pub fn issue_ticket(
         world_fingerprint: world_fingerprint(world),
         dest: None,
         cell: None,
+        key: None,
     }
 }
 

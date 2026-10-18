@@ -336,6 +336,9 @@ enum DomWork<'a> {
     PopNode,
 }
 
+/// Fewest words of its own a text block needs to be offered SELECT_TEXT.
+const SELECT_TEXT_MIN_WORDS: usize = 3;
+
 /// Longest row text added to a markup-named label.
 const ROW_CONTEXT_MAX_CHARS: usize = 60;
 
@@ -394,6 +397,23 @@ fn walk_dom(
                 .is_some_and(|backend| listeners.contains(&backend));
             if let Some(mut element) = element_from(node, listener, hidden).filter(|_| !face) {
                 element.ancestors = kept_ancestors.iter().rev().copied().collect();
+                // A shape that listens to the pointer, or sits in a drawing
+                // that does, can be moved: it claims DRAG as well as CLICK.
+                let shape = node
+                    .get("nodeName")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_svg_shape);
+                if shape
+                    && (listener
+                        || chain.iter().any(|n| {
+                            n.get("nodeName").and_then(Value::as_str) == Some("svg")
+                                && n.get("backendNodeId")
+                                    .and_then(Value::as_i64)
+                                    .is_some_and(|b| listeners.contains(&b))
+                        }))
+                {
+                    add_drag(&mut element.actions);
+                }
                 // "more" or "trash" repeats in every row: the row's own text
                 // (the nearest ancestor with any) says which one this is.
                 if element.named_by_markup {
@@ -559,6 +579,29 @@ fn element_from(node: &Value, listener: bool, hidden: &BTreeSet<u32>) -> Option<
     }
     if attribute_drag_hint(&attributes, role) {
         add_drag(&mut actions);
+    }
+    // A block of reading text (a paragraph, a list item, a cell, a text box
+    // with words of its own) can be selected. Controls and fields cannot.
+    let words = label.split_whitespace().count();
+    if matches!(
+        name.to_ascii_uppercase().as_str(),
+        "P" | "LI" | "TD" | "DIV" | "SPAN" | "BLOCKQUOTE" | "PRE"
+    ) && !surface
+        && !svg_shape
+        && words >= SELECT_TEXT_MIN_WORDS
+        && !actions
+            .iter()
+            .any(|a| matches!(a, Action::Type | Action::Select))
+    {
+        actions.push(Action::SelectText);
+    }
+    // Takes key presses: a slider (or a slider handle) moves by arrows, a
+    // text field submits with Enter, a combobox walks its options.
+    let slider_handle = attributes
+        .get("class")
+        .is_some_and(|c| c.split_whitespace().any(|t| t == "ui-slider-handle"));
+    if matches!(role, Role::Slider | Role::TextField | Role::ComboBox) || slider_handle {
+        actions.push(Action::Key);
     }
     let needs_hint = hint_box && !marked_clickable;
     debug_assert!(!(listener_box && needs_hint));
@@ -1424,6 +1467,56 @@ mod pierce_tests {
             labels,
             [(10, "star outline"), (20, "Close"), (30, "Logo"), (40, "")],
             "form fields keep their accessibility label"
+        );
+    }
+
+    #[test]
+    fn paragraphs_can_be_selected_and_fields_cannot() {
+        let json = r##"{"root": {"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
+          "children": [
+            {"nodeId": 2, "backendNodeId": 2, "nodeType": 1, "nodeName": "P", "attributes": [],
+             "children": [{"nodeId": 3, "backendNodeId": 3, "nodeType": 3, "nodeName": "#text", "nodeValue": "Nibh interdum curabitur non"}]},
+            {"nodeId": 4, "backendNodeId": 4, "nodeType": 1, "nodeName": "SPAN", "attributes": [],
+             "children": [{"nodeId": 5, "backendNodeId": 5, "nodeType": 3, "nodeName": "#text", "nodeValue": "Two words"}]},
+            {"nodeId": 6, "backendNodeId": 6, "nodeType": 1, "nodeName": "BUTTON", "attributes": [],
+             "children": [{"nodeId": 7, "backendNodeId": 7, "nodeType": 3, "nodeName": "#text", "nodeValue": "Send it now please"}]}
+          ]}}"##;
+        let doc = dom_document(json).unwrap();
+        let selectable = |id: i64| {
+            doc.elements
+                .iter()
+                .find(|e| e.node_id == id)
+                .is_some_and(|e| e.actions.contains(&Action::SelectText))
+        };
+        assert!(selectable(2), "a paragraph");
+        assert!(!selectable(4), "too short to be a block of text");
+        assert!(!selectable(6), "a control is pressed, not read");
+    }
+
+    #[test]
+    fn shapes_in_a_drawing_that_listens_can_be_dragged() {
+        let json = r##"{"root": {"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
+          "children": [
+            {"nodeId": 2, "backendNodeId": 2, "nodeType": 1, "nodeName": "svg", "attributes": [],
+             "children": [{"nodeId": 3, "backendNodeId": 3, "nodeType": 1, "nodeName": "circle", "attributes": ["fill", "black"]}]},
+            {"nodeId": 4, "backendNodeId": 4, "nodeType": 1, "nodeName": "svg", "attributes": [],
+             "children": [{"nodeId": 5, "backendNodeId": 5, "nodeType": 1, "nodeName": "rect", "attributes": ["fill", "red"]}]}
+          ]}}"##;
+        let doc = dom_document_with(json, &BTreeSet::from([2]), &BTreeSet::new()).unwrap();
+        let drag = |id: i64| {
+            doc.elements
+                .iter()
+                .find(|e| e.node_id == id)
+                .is_some_and(|e| e.actions.contains(&Action::Drag))
+        };
+        assert!(drag(3), "its drawing has a pointer listener");
+        assert!(!drag(5), "a static drawing's shapes only click");
+        let own = dom_document_with(json, &BTreeSet::from([5]), &BTreeSet::new()).unwrap();
+        assert!(
+            own.elements
+                .iter()
+                .any(|e| e.node_id == 5 && e.actions.contains(&Action::Drag)),
+            "a shape with its own pointer listener"
         );
     }
 

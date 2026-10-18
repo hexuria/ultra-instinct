@@ -258,3 +258,74 @@ fn drag_needs_a_drag_claim_and_a_visible_destination() {
         GuardReason::Hidden
     );
 }
+
+#[test]
+fn a_drag_to_a_surface_cell_binds_the_cell() {
+    let m = parse_fixture(
+        "viewport w=800 h=600\n\
+         region id=svg role=image label=\"drawing\" x=0 y=50 w=160 h=160 actions=click,point sources=dom\n\
+         region id=dot role=image label=\"dot\" x=70 y=120 w=20 h=20 actions=click,drag sources=dom\n\
+         region id=card role=generic label=\"Card\" x=300 y=50 w=60 h=40 actions=drag sources=dom\n",
+    )
+    .unwrap();
+    let ticket =
+        aui_guard::gate_drag_to_cell(&m, &id("dot"), &id("svg"), [4, 0], None, 0).expect("allowed");
+    let dest = ticket.dest.as_ref().expect("two ends");
+    assert_eq!((dest.id.as_str(), dest.cell), ("svg", Some([4, 0])));
+    assert_eq!(revalidate(&ticket, &m, None), Ok(()));
+    assert_eq!(
+        aui_guard::gate_drag_to_cell(&m, &id("dot"), &id("svg"), [8, 0], None, 0).unwrap_err(),
+        GuardReason::UnsupportedAction,
+        "off the grid"
+    );
+    assert_eq!(
+        aui_guard::gate_drag_to_cell(&m, &id("dot"), &id("card"), [0, 0], None, 0).unwrap_err(),
+        GuardReason::UnsupportedAction,
+        "a region that takes no points has no cells"
+    );
+    let plain = aui_guard::gate_drag(&m, &id("dot"), &id("svg"), None, 0).unwrap();
+    assert_eq!(
+        plain.dest.unwrap().cell,
+        None,
+        "a plain drag releases on the region"
+    );
+}
+
+#[test]
+fn a_key_ticket_binds_one_known_key_on_a_region_that_takes_keys() {
+    let m = parse_fixture(
+        "viewport w=800 h=600\n\
+         region id=handle role=generic label=\"\" x=10 y=10 w=12 h=12 actions=drag,key sources=dom\n\
+         region id=go role=button label=\"Go\" x=10 y=130 w=40 h=20 actions=click sources=dom\n",
+    )
+    .unwrap();
+    let ticket = aui_guard::gate_key(&m, &id("handle"), "ArrowRight", None, 0).expect("allowed");
+    assert_eq!(ticket.action, Action::Key);
+    assert_eq!(ticket.key.as_deref(), Some("ArrowRight"));
+    assert_eq!(
+        aui_guard::gate_key(&m, &id("handle"), "F12", None, 0).unwrap_err(),
+        GuardReason::UnsupportedAction,
+        "a key outside the closed set"
+    );
+    assert!(
+        aui_guard::gate_key(&m, &id("go"), "Enter", None, 0).is_err(),
+        "a region without a key claim"
+    );
+}
+
+#[test]
+fn a_shape_may_be_dropped_on_a_cell_of_the_drawing_it_sits_in() {
+    let m = parse_fixture(
+        "viewport w=800 h=600\n\
+         region id=art role=image label=\"drawing\" x=0 y=50 w=160 h=160 sources=dom\n\
+         region id=star role=image label=\"star\" x=70 y=120 w=20 h=20 actions=click,drag parent=art sources=dom\n\
+         region id=other role=image label=\"other\" x=300 y=50 w=160 h=160 sources=dom\n",
+    )
+    .unwrap();
+    assert!(aui_guard::gate_drag_to_cell(&m, &id("star"), &id("art"), [4, 0], None, 0).is_ok());
+    assert_eq!(
+        aui_guard::gate_drag_to_cell(&m, &id("star"), &id("other"), [0, 0], None, 0).unwrap_err(),
+        GuardReason::UnsupportedAction,
+        "not its drawing, takes no points"
+    );
+}

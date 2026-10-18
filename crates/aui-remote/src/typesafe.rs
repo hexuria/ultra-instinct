@@ -61,15 +61,17 @@ a target for that operation; another question decides which operation to execute
 a field that already contains the requested value. Choose only an offered element index.";
 
 /// Element-bearing kinds that get a `<kind>_target` head, in jev naming.
-const ELEMENT_HEADS: [(&str, &str); 5] = [
+const ELEMENT_HEADS: [(&str, &str); 7] = [
     ("CLICK", "click_target"),
     ("TYPE_TEXT", "type_text_target"),
     ("SELECT", "select_target"),
     ("HOVER", "hover_target"),
     ("SCROLL_IN", "scroll_in_target"),
+    ("KEY", "key_target"),
+    ("SELECT_TEXT", "select_text_target"),
 ];
 
-const ELEMENT_LABELS: [(&str, &str); 5] = [
+const ELEMENT_LABELS: [(&str, &str); 7] = [
     ("CLICK", "Click an element, button, menu option, autocomplete suggestion, or calendar day."),
     (
         "TYPE_TEXT",
@@ -80,6 +82,16 @@ const ELEMENT_LABELS: [(&str, &str); 5] = [
     (
         "SCROLL_IN",
         "Scroll inside a scrollable box (a list, a pane) to show more of its content.",
+    ),
+    (
+        "KEY",
+        "Press one key on an element: arrows, Home, End, PageUp, PageDown move a slider's value \
+one step or to its end; Enter submits a field; ArrowDown, ArrowUp, Enter, Escape walk a \
+dropdown list.",
+    ),
+    (
+        "SELECT_TEXT",
+        "Select (highlight) all the text of a paragraph or text block, as a triple-click does.",
     ),
 ];
 
@@ -218,7 +230,7 @@ pub(crate) fn build_questions(request: &Value) -> Result<BuiltQuestions, String>
                 if let Some(role) = a["role"].as_str() {
                     element.insert("role".to_owned(), Value::String(role.to_owned()));
                 }
-                for key in ["near_text", "box"] {
+                for key in ["near_text", "box", "key"] {
                     if let Some(value) = a.get(key) {
                         element.insert(key.to_owned(), value.clone());
                     }
@@ -243,7 +255,10 @@ pub(crate) fn build_questions(request: &Value) -> Result<BuiltQuestions, String>
         operation_criteria.push((kind.to_owned(), Some(JsonContent::from(*label))));
         target_heads.push((head.to_owned(), targets));
     }
-    let drag = drag_heads(actions);
+    let drag = request
+        .get("drag")
+        .filter(|d| d.is_object())
+        .map_or_else(|| drag_heads(actions), drag_block_heads);
     let mut drag_rules = false;
     if let Some((sources, destinations, _)) = &drag {
         operation_criteria.push(("DRAG".to_owned(), Some(JsonContent::from(DRAG_LABEL))));
@@ -311,6 +326,10 @@ pub(crate) fn build_questions(request: &Value) -> Result<BuiltQuestions, String>
         "actions": request["actions"].clone(),
         "recent_actions": request["history"].clone(),
     });
+    // What can be dragged and where to; the pair list stays here for checks.
+    if let Some(drag) = request.get("drag").filter(|d| d.is_object()) {
+        state["drag"] = json!({"sources": drag["sources"], "destinations": drag["destinations"]});
+    }
     // jev-ultrafast's `page` block: visible text, untrusted data.
     if let Some(page) = request.get("page").filter(|p| p.is_object()) {
         state["page"] = page.clone();
@@ -335,6 +354,42 @@ element from the one being dragged (the drag_source), at the place the goal name
 const DRAG_TARGET_HEAD: &str = "drag_target";
 /// Not a question: the offered `src>dst` pairs, kept for answer validation.
 const DRAG_PAIRS: &str = "__drag_pairs";
+
+/// [`drag_heads`] from the request's compact `drag` block.
+fn drag_block_heads(block: &Value) -> Option<(Criteria, Criteria, Vec<String>)> {
+    let element = |entry: &Value, keys: &[&str]| {
+        let id = entry["id"].as_str().unwrap_or("");
+        let label = entry["label"].as_str().unwrap_or("");
+        let mut element = Map::new();
+        element.insert("element".to_owned(), json!(format!("[{id}] {label}")));
+        for key in keys {
+            if let Some(value) = entry.get(*key) {
+                element.insert((*key).to_owned(), value.clone());
+            }
+        }
+        (id.to_owned(), Some(JsonContent::from(element)))
+    };
+    let sources: Criteria = block["sources"]
+        .as_array()?
+        .iter()
+        .map(|s| element(s, &["role", "near_text", "box"]))
+        .collect();
+    let destinations: Criteria = block["destinations"]
+        .as_array()?
+        .iter()
+        .map(|d| element(d, &["box"]))
+        .collect();
+    let pairs: Vec<String> = block["pairs"]
+        .as_array()?
+        .iter()
+        .filter_map(|p| p.as_str().map(str::to_owned))
+        .collect();
+    (!pairs.is_empty() && !sources.is_empty() && !destinations.is_empty()).then_some((
+        sources,
+        destinations,
+        pairs,
+    ))
+}
 
 /// Source and destination criteria for the offered DRAG pairs, plus the
 /// pairs themselves. `None` when no DRAG is offered.
@@ -455,6 +510,9 @@ fn without_control(request: &Value, kind: &str) -> Value {
     }
     request
 }
+
+/// Prefix of the error for a DRAG pair the menu does not offer.
+const UNOFFERED_DRAG: &str = "answer: drag pair not offered:";
 
 /// The model's answer broke the answer contract (not a transport failure).
 fn malformed_answer(err: &str) -> bool {
@@ -612,6 +670,11 @@ impl TypesafeTransport {
             });
             match composed {
                 Ok(reply) => break (response, reply),
+                Err(err) if retried && err.starts_with(UNOFFERED_DRAG) => {
+                    let pair = err.trim_start_matches(UNOFFERED_DRAG).trim();
+                    let abstain = json!({"abstain": format!("drag {pair} was not offered")});
+                    return Ok((abstain.to_string(), None, None));
+                }
                 Err(err) if !retried && malformed_answer(&err) => {
                     eprintln!("typesafe: {err}; asking once more");
                     retried = true;
@@ -658,10 +721,11 @@ pub(crate) fn compose_reply<'a>(
             keys_for(criteria_keys, DRAG_TARGET_HEAD)?,
         )?;
         let pair = format!("{source}>{dest}");
-        // Two valid heads can still name a pair the menu does not offer (or
-        // the same region twice): that is an abstain, never a new action.
+        // Two valid heads can still name a pair the menu does not offer (the
+        // same region twice): a broken answer, asked once more, then an
+        // abstain. Never a new action.
         if !keys_for(criteria_keys, DRAG_PAIRS)?.contains(&pair) {
-            return Ok(json!({"abstain": format!("drag {pair} was not offered")}).to_string());
+            return Err(format!("{UNOFFERED_DRAG} {pair}"));
         }
         return Ok(json!({"choice": {"id": format!("DRAG:{pair}"), "kind": "DRAG"}}).to_string());
     }
@@ -849,6 +913,83 @@ mod tests {
         assert_eq!(
             compose(&answers("n1", "n3")).unwrap(),
             r#"{"choice":{"id":"DRAG:n1>n3","kind":"DRAG"}}"#
+        );
+    }
+
+    #[test]
+    fn a_compact_drag_block_offers_every_source_and_destination() {
+        let request = json!({
+            "goal": "Drag the triangle into the box",
+            "actions": [{"id": "DONE", "kind": "DONE", "label": "done"}],
+            "drag": {
+                "sources": [{"id": "n1", "label": "triangle", "box": [1, 1, 5, 5]}],
+                "destinations": [{"id": "n2", "label": "box", "box": [9, 9, 20, 20]},
+                                 {"id": "n3", "label": "circle", "box": [40, 9, 5, 5]}],
+                "pairs": ["n1>n2", "n1>n3"]
+            },
+            "history": []
+        });
+        let built = build_questions(&request).unwrap();
+        assert!(
+            built.state["drag"]["pairs"].is_null(),
+            "pairs stay out of the model's state"
+        );
+        assert_eq!(built.state["drag"]["destinations"][0]["id"], "n2");
+        let answers = |dst: &str| {
+            std::collections::BTreeMap::from([
+                (
+                    "operation".to_owned(),
+                    answer("DRAG", &[("DRAG", 0.9), ("DONE", 0.1)]),
+                ),
+                ("drag_source".to_owned(), answer("n1", &[("n1", 1.0)])),
+                (
+                    "drag_target".to_owned(),
+                    answer(
+                        dst,
+                        &[
+                            ("n2", if dst == "n2" { 1.0 } else { 0.0 }),
+                            ("n3", if dst == "n3" { 1.0 } else { 0.0 }),
+                        ],
+                    ),
+                ),
+            ])
+        };
+        let compose = |a: &std::collections::BTreeMap<String, ChoiceAnswer>| {
+            compose_reply(&built.criteria_keys, |head| {
+                a.get(head).ok_or_else(|| format!("missing {head}"))
+            })
+        };
+        assert_eq!(
+            compose(&answers("n2")).unwrap(),
+            r#"{"choice":{"id":"DRAG:n1>n2","kind":"DRAG"}}"#
+        );
+        let mut self_pair = built.criteria_keys.clone();
+        for (head, keys) in &mut self_pair {
+            if head == DRAG_TARGET_HEAD {
+                keys.push("n1".to_owned());
+            }
+        }
+        let err = compose_reply(&self_pair, |head| {
+            let a = std::collections::BTreeMap::from([
+                (
+                    "operation".to_owned(),
+                    answer("DRAG", &[("DRAG", 0.9), ("DONE", 0.1)]),
+                ),
+                ("drag_source".to_owned(), answer("n1", &[("n1", 1.0)])),
+                (
+                    "drag_target".to_owned(),
+                    answer("n1", &[("n2", 0.0), ("n3", 0.0), ("n1", 1.0)]),
+                ),
+            ]);
+            a.get(head)
+                .cloned()
+                .ok_or_else(|| format!("missing {head}"))
+                .map(|a| Box::leak(Box::new(a)) as &ChoiceAnswer)
+        })
+        .unwrap_err();
+        assert!(
+            err.starts_with(UNOFFERED_DRAG) && malformed_answer(&err),
+            "{err}"
         );
     }
 

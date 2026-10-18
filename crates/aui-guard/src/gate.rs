@@ -87,7 +87,38 @@ pub fn gate_drag(
         label: region.label().to_owned(),
         fingerprint: region.fingerprint().bits(),
         world_fingerprint: crate::ticket::world_fingerprint(&world),
+        cell: None,
     }));
+    Ok(ticket)
+}
+
+/// Gate a DRAG from `source` to grid cell `cell` of the surface `surface`
+/// (moving a shape to a point of its drawing): [`gate_drag`]'s checks, plus
+/// the surface must claim Point or be the source's parent (the drawing it
+/// sits in), and the cell must lie on its grid. The ticket binds the cell;
+/// the executor releases exactly there.
+pub fn gate_drag_to_cell(
+    manifold: &InteractionManifold,
+    source: &RegionId,
+    surface: &RegionId,
+    cell: [u16; 2],
+    focused: Option<RegionId>,
+    snapshot_id: u64,
+) -> Result<ActionTicket, GuardReason> {
+    let region = manifold.get(surface).ok_or(GuardReason::MissingTarget)?;
+    let drawn_on = manifold
+        .get(source)
+        .is_some_and(|src| src.parent() == Some(surface));
+    if !(region.actions().contains(&Action::Point) || drawn_on)
+        || cell[0] >= aui_core::SURFACE_GRID
+        || cell[1] >= aui_core::SURFACE_GRID
+    {
+        return Err(GuardReason::UnsupportedAction);
+    }
+    let mut ticket = gate_drag(manifold, source, surface, focused, snapshot_id)?;
+    if let Some(dest) = ticket.dest.as_mut() {
+        dest.cell = Some(cell);
+    }
     Ok(ticket)
 }
 
@@ -109,6 +140,24 @@ pub fn gate_point(
     }
     let mut ticket = gate(manifold, surface, Action::Click, focused, snapshot_id)?;
     ticket.cell = Some(cell);
+    Ok(ticket)
+}
+
+/// Gate one key press on `target`. The region must claim Key and pass every
+/// [`check`]; `key` must be one of [`aui_core::KEY_NAMES`]. The ticket binds
+/// the key: the executor presses exactly that key, nothing else.
+pub fn gate_key(
+    manifold: &InteractionManifold,
+    target: &RegionId,
+    key: &str,
+    focused: Option<RegionId>,
+    snapshot_id: u64,
+) -> Result<ActionTicket, GuardReason> {
+    if !aui_core::KEY_NAMES.contains(&key) {
+        return Err(GuardReason::UnsupportedAction);
+    }
+    let mut ticket = gate(manifold, target, Action::Key, focused, snapshot_id)?;
+    ticket.key = Some(key.to_owned());
     Ok(ticket)
 }
 

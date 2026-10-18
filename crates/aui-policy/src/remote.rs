@@ -134,6 +134,11 @@ pub fn request_json_with_evidence(
     // Page targets first, page-level controls (scroll, WAIT, DONE, BLOCKED)
     // last: a model reads the list top down.
     let (targets, controls): (Vec<_>, Vec<_>) = space.actions().partition(|a| a.target().is_some());
+    // DRAG pairs go as one compact block (sources, destinations, pairs), not
+    // one entry per pair: every source pairs with every destination.
+    let (drags, targets): (Vec<_>, Vec<_>) = targets
+        .into_iter()
+        .partition(|a| a.kind() == ActionKind::Drag);
     let actions: Vec<Value> = targets
         .into_iter()
         .chain(controls)
@@ -154,6 +159,9 @@ pub fn request_json_with_evidence(
                 .filter(|near| !echoes_goal(near, goal.as_str()))
             {
                 action["near_text"] = json!(near);
+            }
+            if let Some(key) = a.key() {
+                action["key"] = json!(key);
             }
             if let Some(dest) = a.dest() {
                 action["dest"] =
@@ -195,6 +203,9 @@ pub fn request_json_with_evidence(
         })
         .collect();
     let mut request = json!({"goal": goal.as_str(), "actions": actions, "history": history});
+    if !drags.is_empty() {
+        request["drag"] = drag_block(&drags, goal.as_str());
+    }
     if let Some(page) = page {
         request["page"] = json!({"url": page.url, "title": page.title, "text": page.text});
     }
@@ -236,6 +247,50 @@ fn echoes_goal(near: &str, goal: &str) -> bool {
     let goal: std::collections::BTreeSet<String> = words(goal).into_iter().collect();
     let shared = near.iter().filter(|w| goal.contains(*w)).count();
     shared * 5 >= near.len() * 4
+}
+
+/// `{"sources": [...], "destinations": [...], "pairs": ["src>dst", ...]}`
+/// for the offered DRAG pairs. Sources carry role, box, and near text like
+/// any target; destinations carry label and box.
+fn drag_block(drags: &[&aui_core::ObservedAction], goal: &str) -> Value {
+    let mut sources: Vec<Value> = Vec::new();
+    let mut destinations: Vec<Value> = Vec::new();
+    let mut pairs = Vec::new();
+    for a in drags {
+        let (Some(src), Some(dest)) = (a.target(), a.dest()) else {
+            continue;
+        };
+        // A release on a surface cell is that surface's `id@col,row`.
+        let dest_key = match dest.cell {
+            Some([col, row]) => format!("{}@{col},{row}", dest.id.as_str()),
+            None => dest.id.as_str().to_owned(),
+        };
+        pairs.push(format!("{}>{dest_key}", src.as_str()));
+        if !sources.iter().any(|s| s["id"] == src.as_str()) {
+            let mut source = json!({
+                "id": src.as_str(),
+                "label": label_without_goal_echo(a.label(), goal),
+            });
+            if let Some(role) = a.role() {
+                source["role"] = json!(role.as_str());
+            }
+            if let Some(bounds) = a.bounds() {
+                source["box"] = json!(bounds);
+            }
+            if let Some(near) = a.near_text().filter(|near| !echoes_goal(near, goal)) {
+                source["near_text"] = json!(near);
+            }
+            sources.push(source);
+        }
+        if !destinations.iter().any(|d| d["id"] == dest_key.as_str()) {
+            destinations.push(json!({
+                "id": dest_key,
+                "label": label_without_goal_echo(&dest.label, goal),
+                "box": dest.bounds,
+            }));
+        }
+    }
+    json!({"sources": sources, "destinations": destinations, "pairs": pairs})
 }
 
 /// Separator observe puts between a markup name and its row's text

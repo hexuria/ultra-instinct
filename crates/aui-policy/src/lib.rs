@@ -38,7 +38,7 @@ pub use remote::{
     RemoteTransport, ScriptedRemote, UnconfiguredRemote,
 };
 pub use text::{
-    ground_select, is_secret_field, DeterministicTextResolver, TextContext, TextError,
+    form_value, ground_select, is_secret_field, DeterministicTextResolver, TextContext, TextError,
     TextResolution, TextResolver,
 };
 pub use types::{

@@ -1648,3 +1648,58 @@ fn drag_runs_end_to_end_through_the_two_ended_ticket() {
     assert_eq!(log[0].0.as_str(), "card");
     assert!(matches!(&log[0].1, aui_agent::Input::Drag { to } if to.as_str() == "bin"));
 }
+
+/// Picks SELECT_TEXT on the paragraph, then DONE.
+struct SelectsThenDone;
+
+impl BrowserPolicy for SelectsThenDone {
+    fn decide(
+        &mut self,
+        space: &ActionSpace,
+        _goal: &AgentGoal,
+        history: &[HistoryEntry],
+    ) -> Result<PolicyOutcome, PolicyError> {
+        let id = if history.is_empty() {
+            "SELECT_TEXT:para"
+        } else {
+            "DONE"
+        };
+        let action = space.get_str(id).expect("offered");
+        Ok(PolicyOutcome::Choice(PolicyDecision {
+            action_id: action.id().clone(),
+            kind: action.kind(),
+            target_label: action.label().to_owned(),
+            confidence_millis: 1_000,
+            operation_ranked: Vec::new(),
+            target_ranked: Vec::new(),
+        }))
+    }
+}
+
+#[test]
+fn a_selection_verifies_by_the_selected_text() {
+    let page = || {
+        manifold(
+            r#"
+            viewport w=800 h=600
+            region id=para role=text label="Nibh interdum curabitur" x=10 y=10 w=300 h=40 actions=select_text sources=dom
+            "#,
+        )
+    };
+    let run = |browser: MockBrowser| {
+        let mut agent = AgentBuilder::new(browser, SelectsThenDone)
+            .max_steps(1)
+            .build("Highlight the text in the paragraph");
+        agent.predict().unwrap();
+        agent.act().unwrap().verification
+    };
+    assert_eq!(
+        run(MockBrowser::new(page()).with_selection_on_select("Nibh interdum curabitur")),
+        VerificationKind::Success
+    );
+    assert_eq!(
+        run(MockBrowser::new(page())),
+        VerificationKind::WrongEffect,
+        "nothing selected"
+    );
+}

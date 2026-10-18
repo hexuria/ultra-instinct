@@ -97,8 +97,10 @@ pub fn execute_ticketed<B: BrowserRuntime + ?Sized>(
     // destination never drives a drag, and a destination never rides a
     // non-drag input.
     match (input, &ticket.dest) {
-        (Input::Drag { to }, Some(dest)) if *to == dest.id => {}
-        (Input::Drag { .. }, _) | (_, Some(_)) => {
+        (Input::Drag { to }, Some(dest)) if *to == dest.id && dest.cell.is_none() => {}
+        (Input::DragToCell { to, cell }, Some(dest))
+            if *to == dest.id && dest.cell == Some(*cell) => {}
+        (Input::Drag { .. } | Input::DragToCell { .. }, _) | (_, Some(_)) => {
             return Err(ExecError::Ticket(TicketInvalid::TicketMismatch))
         }
         _ => {}
@@ -109,6 +111,14 @@ pub fn execute_ticketed<B: BrowserRuntime + ?Sized>(
         _ => None,
     };
     if cell != ticket.cell {
+        return Err(ExecError::Ticket(TicketInvalid::TicketMismatch));
+    }
+    // A key ticket presses exactly its key; no other input carries a key.
+    let key = match input {
+        Input::Key(key) => Some(key.as_str()),
+        _ => None,
+    };
+    if key != ticket.key.as_deref() {
         return Err(ExecError::Ticket(TicketInvalid::TicketMismatch));
     }
     let fresh = browser

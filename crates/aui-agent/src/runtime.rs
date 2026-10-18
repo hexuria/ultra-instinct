@@ -42,6 +42,13 @@ pub enum Input {
     ScrollIn,
     /// Press on the target, move to `to`'s center, release there.
     Drag { to: RegionId },
+    /// Press on the target and release on grid cell `[col, row]` of the
+    /// surface `to`, placed from its fresh box.
+    DragToCell { to: RegionId, cell: [u16; 2] },
+    /// Focus the target and press one key (from `aui_core::KEY_NAMES`).
+    Key(String),
+    /// Select all the target's text: a trusted triple-click at its center.
+    SelectText,
     /// A trusted click at the center of grid cell `[col, row]` of a drawing
     /// surface, placed from the surface's fresh box.
     ClickAt { cell: [u16; 2] },
@@ -56,7 +63,9 @@ impl Input {
             Self::Select(_) => Action::Select,
             Self::Hover => Action::Hover,
             Self::ScrollIn => Action::Scroll,
-            Self::Drag { .. } => Action::Drag,
+            Self::Drag { .. } | Self::DragToCell { .. } => Action::Drag,
+            Self::Key(_) => Action::Key,
+            Self::SelectText => Action::SelectText,
         }
     }
 
@@ -68,6 +77,9 @@ impl Input {
             | Self::Hover
             | Self::ScrollIn
             | Self::Drag { .. }
+            | Self::DragToCell { .. }
+            | Self::Key(_)
+            | Self::SelectText
             | Self::ClickAt { .. } => None,
             Self::Type(text) | Self::Select(text) => Some(text),
         }
@@ -126,6 +138,13 @@ pub trait BrowserRuntime {
     /// `None` when the runtime cannot read it; verification then falls back
     /// to the manifold diff.
     fn read_value(&mut self, _target: &RegionId) -> Option<FieldValue> {
+        None
+    }
+
+    /// The page's selected text (`window.getSelection()`), `None` when the
+    /// runtime cannot read it. A selection changes no element, so this is
+    /// how a SELECT_TEXT step verifies.
+    fn selected_text(&mut self) -> Option<String> {
         None
     }
 
@@ -207,6 +226,9 @@ impl<T: CdpTransport> BrowserRuntime for BrowserSession<T> {
             Input::Hover => BrowserSession::hover(self, target),
             Input::ScrollIn => BrowserSession::scroll_region(self, target),
             Input::Drag { to } => BrowserSession::drag(self, target, to),
+            Input::DragToCell { to, cell } => BrowserSession::drag_to_cell(self, target, to, *cell),
+            Input::Key(key) => BrowserSession::press_key(self, target, key),
+            Input::SelectText => BrowserSession::triple_click(self, target),
             Input::ClickAt { cell } => {
                 let (fx, fy) = aui_core::cell_center_fraction(*cell);
                 BrowserSession::pointer_click_at(self, target, fx, fy).map(|_| ())
@@ -275,6 +297,10 @@ impl<T: CdpTransport> BrowserRuntime for BrowserSession<T> {
         let (value, text) = self.field_value(target).ok()??;
         Some(FieldValue { value, text })
     }
+
+    fn selected_text(&mut self) -> Option<String> {
+        BrowserSession::selected_text(self).ok()
+    }
 }
 
 fn wants_autocomplete_settle(role: Option<Role>, input: &Input) -> bool {
@@ -332,6 +358,9 @@ pub struct MockBrowser {
     screenshot: Option<Screenshot>,
     screenshots_taken: u32,
     page_text: Option<String>,
+    /// What `getSelection()` reports after a SELECT_TEXT dispatch.
+    selection_on_select: Option<String>,
+    selection: Option<String>,
 }
 
 impl MockBrowser {
@@ -356,10 +385,18 @@ impl MockBrowser {
             screenshot: None,
             screenshots_taken: 0,
             page_text: None,
+            selection_on_select: None,
+            selection: None,
         }
     }
 
     /// The page reads this visible text on request.
+    /// The selection the page reports once a SELECT_TEXT runs.
+    pub fn with_selection_on_select(mut self, text: impl Into<String>) -> Self {
+        self.selection_on_select = Some(text.into());
+        self
+    }
+
     pub fn with_page_text(mut self, text: impl Into<String>) -> Self {
         self.page_text = Some(text.into());
         self
@@ -482,6 +519,9 @@ impl BrowserRuntime for MockBrowser {
         if let Some(next) = self.on_press_page.take() {
             self.page = next;
         }
+        if matches!(input, Input::SelectText) {
+            self.selection = self.selection_on_select.clone();
+        }
         Ok(())
     }
 
@@ -501,6 +541,10 @@ impl BrowserRuntime for MockBrowser {
 
     fn read_value(&mut self, target: &RegionId) -> Option<FieldValue> {
         self.values.get(target).cloned()
+    }
+
+    fn selected_text(&mut self) -> Option<String> {
+        Some(self.selection.clone().unwrap_or_default())
     }
 
     fn screenshot(&mut self) -> Option<Screenshot> {

@@ -102,6 +102,12 @@ impl Rect {
         }
     }
 
+    /// `point` lies inside this rect (edges included).
+    pub fn contains_point(self, point: Point) -> bool {
+        (self.x..=self.right()).contains(&point.x())
+            && (self.y..=self.bottom()).contains(&point.y())
+    }
+
     pub fn is_zero_area(self) -> bool {
         self.width == 0.0 || self.height == 0.0
     }
