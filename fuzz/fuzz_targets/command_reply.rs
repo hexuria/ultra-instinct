@@ -6,5 +6,5 @@ use libfuzzer_sys::fuzz_target;
 // stdout — another trust boundary. parse_command_reply must only return Err,
 // never panic.
 fuzz_target!(|data: &[u8]| {
-    let _ = aui_policy::parse_command_reply(data);
+    let _ = ultra_instinct_policy::parse_command_reply(data);
 });

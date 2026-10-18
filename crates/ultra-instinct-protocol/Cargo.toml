@@ -1,0 +1,12 @@
+[package]
+name = "ultra-instinct-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Observe, locate, inspect, act, and verify messages"
+
+[dependencies]
+ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.0"}

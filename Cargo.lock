@@ -33,165 +33,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
-name = "aui-agent"
-version = "0.1.0"
-dependencies = [
- "aui-browser",
- "aui-core",
- "aui-guard",
- "aui-observe",
- "aui-policy",
- "aui-protocol",
- "proptest",
- "serde_json",
-]
-
-[[package]]
-name = "aui-browser"
-version = "0.1.0"
-dependencies = [
- "aui-cdp",
- "aui-core",
- "aui-geometry",
- "aui-observe",
- "aui-resonance",
- "proptest",
- "serde",
- "serde_json",
- "serde_stacker",
-]
-
-[[package]]
-name = "aui-cdp"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "tungstenite",
-]
-
-[[package]]
-name = "aui-cli"
-version = "0.1.0"
-dependencies = [
- "aui-agent",
- "aui-browser",
- "aui-core",
- "aui-dojo",
- "aui-guard",
- "aui-mcp",
- "aui-observe",
- "aui-policy",
- "aui-protocol",
- "aui-remote",
- "aui-resonance",
- "serde_json",
-]
-
-[[package]]
-name = "aui-core"
-version = "0.1.0"
-
-[[package]]
-name = "aui-dojo"
-version = "0.1.0"
-dependencies = [
- "aui-core",
- "proptest",
- "serde_json",
-]
-
-[[package]]
-name = "aui-geometry"
-version = "0.1.0"
-dependencies = [
- "aui-core",
-]
-
-[[package]]
-name = "aui-guard"
-version = "0.1.0"
-dependencies = [
- "aui-core",
- "aui-protocol",
- "aui-resonance",
- "proptest",
-]
-
-[[package]]
-name = "aui-hyper"
-version = "0.1.0"
-dependencies = [
- "proptest",
-]
-
-[[package]]
-name = "aui-mcp"
-version = "0.1.0"
-dependencies = [
- "aui-agent",
- "aui-browser",
- "aui-cdp",
- "aui-core",
- "aui-guard",
- "aui-observe",
- "aui-protocol",
- "aui-resonance",
- "base64 0.22.1",
- "proptest",
- "serde_json",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "aui-observe"
-version = "0.1.0"
-dependencies = [
- "aui-core",
- "proptest",
-]
-
-[[package]]
-name = "aui-policy"
-version = "0.1.0"
-dependencies = [
- "aui-core",
- "instinct-core",
- "instinct-lexicon",
- "instinct-text",
- "serde_json",
-]
-
-[[package]]
-name = "aui-protocol"
-version = "0.1.0"
-dependencies = [
- "aui-core",
-]
-
-[[package]]
-name = "aui-remote"
-version = "0.1.0"
-dependencies = [
- "aui-core",
- "aui-policy",
- "reqwest",
- "serde_json",
- "typesafe-sdk",
-]
-
-[[package]]
-name = "aui-resonance"
-version = "0.1.0"
-dependencies = [
- "aui-core",
- "aui-geometry",
- "aui-hyper",
- "proptest",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1767,6 +1608,165 @@ dependencies = [
  "serde_path_to_error",
  "tokio",
  "url",
+]
+
+[[package]]
+name = "ultra-instinct"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "ultra-instinct-agent",
+ "ultra-instinct-browser",
+ "ultra-instinct-core",
+ "ultra-instinct-dojo",
+ "ultra-instinct-guard",
+ "ultra-instinct-mcp",
+ "ultra-instinct-observe",
+ "ultra-instinct-policy",
+ "ultra-instinct-protocol",
+ "ultra-instinct-remote",
+ "ultra-instinct-resonance",
+]
+
+[[package]]
+name = "ultra-instinct-agent"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde_json",
+ "ultra-instinct-browser",
+ "ultra-instinct-core",
+ "ultra-instinct-guard",
+ "ultra-instinct-observe",
+ "ultra-instinct-policy",
+ "ultra-instinct-protocol",
+]
+
+[[package]]
+name = "ultra-instinct-browser"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+ "serde_stacker",
+ "ultra-instinct-cdp",
+ "ultra-instinct-core",
+ "ultra-instinct-geometry",
+ "ultra-instinct-observe",
+ "ultra-instinct-resonance",
+]
+
+[[package]]
+name = "ultra-instinct-cdp"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tungstenite",
+]
+
+[[package]]
+name = "ultra-instinct-core"
+version = "0.1.0"
+
+[[package]]
+name = "ultra-instinct-dojo"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde_json",
+ "ultra-instinct-core",
+]
+
+[[package]]
+name = "ultra-instinct-geometry"
+version = "0.1.0"
+dependencies = [
+ "ultra-instinct-core",
+]
+
+[[package]]
+name = "ultra-instinct-guard"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "ultra-instinct-core",
+ "ultra-instinct-protocol",
+ "ultra-instinct-resonance",
+]
+
+[[package]]
+name = "ultra-instinct-hyper"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
+name = "ultra-instinct-mcp"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "proptest",
+ "serde_json",
+ "tracing-subscriber",
+ "ultra-instinct-agent",
+ "ultra-instinct-browser",
+ "ultra-instinct-cdp",
+ "ultra-instinct-core",
+ "ultra-instinct-guard",
+ "ultra-instinct-observe",
+ "ultra-instinct-protocol",
+ "ultra-instinct-resonance",
+]
+
+[[package]]
+name = "ultra-instinct-observe"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "ultra-instinct-core",
+]
+
+[[package]]
+name = "ultra-instinct-policy"
+version = "0.1.0"
+dependencies = [
+ "instinct-core",
+ "instinct-lexicon",
+ "instinct-text",
+ "serde_json",
+ "ultra-instinct-core",
+]
+
+[[package]]
+name = "ultra-instinct-protocol"
+version = "0.1.0"
+dependencies = [
+ "ultra-instinct-core",
+]
+
+[[package]]
+name = "ultra-instinct-remote"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde_json",
+ "typesafe-sdk",
+ "ultra-instinct-core",
+ "ultra-instinct-policy",
+]
+
+[[package]]
+name = "ultra-instinct-resonance"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "tracing",
+ "tracing-subscriber",
+ "ultra-instinct-core",
+ "ultra-instinct-geometry",
+ "ultra-instinct-hyper",
 ]
 
 [[package]]

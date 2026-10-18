@@ -15,18 +15,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
-name = "aui-browser"
+name = "ultra-instinct-browser"
 version = "0.1.0"
 dependencies = [
- "aui-cdp",
- "aui-core",
- "aui-geometry",
- "aui-observe",
+ "ultra-instinct-cdp",
+ "ultra-instinct-core",
+ "ultra-instinct-geometry",
+ "ultra-instinct-observe",
  "serde_json",
 ]
 
 [[package]]
-name = "aui-cdp"
+name = "ultra-instinct-cdp"
 version = "0.1.0"
 dependencies = [
  "serde_json",
@@ -34,62 +34,62 @@ dependencies = [
 ]
 
 [[package]]
-name = "aui-core"
+name = "ultra-instinct-core"
 version = "0.1.0"
 
 [[package]]
-name = "aui-fuzz"
+name = "ultra-instinct-fuzz"
 version = "0.0.0"
 dependencies = [
- "aui-browser",
- "aui-core",
- "aui-mcp",
- "aui-policy",
+ "ultra-instinct-browser",
+ "ultra-instinct-core",
+ "ultra-instinct-mcp",
+ "ultra-instinct-policy",
  "libfuzzer-sys",
  "serde_json",
 ]
 
 [[package]]
-name = "aui-geometry"
+name = "ultra-instinct-geometry"
 version = "0.1.0"
 dependencies = [
- "aui-core",
+ "ultra-instinct-core",
 ]
 
 [[package]]
-name = "aui-guard"
+name = "ultra-instinct-guard"
 version = "0.1.0"
 dependencies = [
- "aui-core",
- "aui-protocol",
- "aui-resonance",
+ "ultra-instinct-core",
+ "ultra-instinct-protocol",
+ "ultra-instinct-resonance",
 ]
 
 [[package]]
-name = "aui-mcp"
+name = "ultra-instinct-mcp"
 version = "0.1.0"
 dependencies = [
- "aui-browser",
- "aui-core",
- "aui-guard",
- "aui-observe",
- "aui-protocol",
- "aui-resonance",
+ "ultra-instinct-browser",
+ "ultra-instinct-core",
+ "ultra-instinct-guard",
+ "ultra-instinct-observe",
+ "ultra-instinct-protocol",
+ "ultra-instinct-resonance",
  "serde_json",
 ]
 
 [[package]]
-name = "aui-observe"
+name = "ultra-instinct-observe"
 version = "0.1.0"
 dependencies = [
- "aui-core",
+ "ultra-instinct-core",
 ]
 
 [[package]]
-name = "aui-policy"
+name = "ultra-instinct-policy"
 version = "0.1.0"
 dependencies = [
- "aui-core",
+ "ultra-instinct-core",
  "instinct-core",
  "instinct-lexicon",
  "instinct-text",
@@ -97,18 +97,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "aui-protocol"
+name = "ultra-instinct-protocol"
 version = "0.1.0"
 dependencies = [
- "aui-core",
+ "ultra-instinct-core",
 ]
 
 [[package]]
-name = "aui-resonance"
+name = "ultra-instinct-resonance"
 version = "0.1.0"
 dependencies = [
- "aui-core",
- "aui-geometry",
+ "ultra-instinct-core",
+ "ultra-instinct-geometry",
  "tracing",
 ]
 

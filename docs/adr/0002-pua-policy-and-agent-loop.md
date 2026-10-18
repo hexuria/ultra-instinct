@@ -16,12 +16,12 @@ loop.
 
 1. **Pin** `hexuria/instinct` at git rev `a42d16b6f5ccc3273939c8e3d3f462d78765bfea`
    via workspace deps (`instinct-core`, `instinct-text`, `instinct-lexicon`).
-2. **New crate `aui-policy`**: `BrowserPolicy`, `InstinctPolicy`,
+2. **New crate `ultra-instinct-policy`**: `BrowserPolicy`, `InstinctPolicy`,
    `EscalatingPolicy`, `TextResolver` / `DeterministicTextResolver`.
    Hard-invalid targets are excluded by `ActionSpace::from_manifold` before Instinct
    scores. Instinct abstain is first-class; never silently execute top-ranked after
    abstain. No float `0.55` gate in policy.
-3. **New crate `aui-agent`**: owns observe → ActionSpace → policy → guard
+3. **New crate `ultra-instinct-agent`**: owns observe → ActionSpace → policy → guard
    → ActionTicket → revalidate/consume → press → observe → diff/verify →
    history. `MockBrowser` enables offline e2e. Stale world since prediction
    discards the prediction (Ready), not a permanent task failure.

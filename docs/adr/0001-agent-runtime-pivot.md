@@ -45,13 +45,13 @@ deterministic decision kernel. HGRA stays frozen under `experiments/`.
    relevant as the interceptor ablation until the agent fully owns execution.
 7. **Crate target (incremental, not theater):**
    ```
-   aui-core      (manifold + ActionSpace)     — reuse
-   aui-browser  (observe + ticketed execute) — expand
-   aui-policy   (Instinct + escalation)           — new (Phase 2)
-   aui-guard    (hard integrity + tickets)   — slim toward gates
-   aui-agent    (loop)                       — new (Phase 4)
-   aui-mcp      (adapter)                    — optional
-   aui-cli      (run/observe/step)           — expand
+   ultra-instinct-core      (manifold + ActionSpace)     — reuse
+   ultra-instinct-browser  (observe + ticketed execute) — expand
+   ultra-instinct-policy   (Instinct + escalation)           — new (Phase 2)
+   ultra-instinct-guard    (hard integrity + tickets)   — slim toward gates
+   ultra-instinct-agent    (loop)                       — new (Phase 4)
+   ultra-instinct-mcp      (adapter)                    — optional
+   ultra-instinct      (run/observe/step)           — expand
    experiments/hgra   — frozen
    ```
    Existing geometry / observe / resonance / protocol crates stay until their
@@ -62,8 +62,8 @@ deterministic decision kernel. HGRA stays frozen under `experiments/`.
 
 | jev-ultrafast | Ultra-Instinct now | Direction |
 |---|---|---|
-| `agent.py` | *(missing)* | **new** `aui-agent` |
-| `browser.py` + `snapshot.js` | `aui-browser` DOM/AX fusion | **reuse/expand**; do not port JS wholesale |
+| `agent.py` | *(missing)* | **new** `ultra-instinct-agent` |
+| `browser.py` + `snapshot.js` | `ultra-instinct-browser` DOM/AX fusion | **reuse/expand**; do not port JS wholesale |
 | `model.py` action_space | `ActionSpace` in core (Phase 1) | **new types from manifold** |
 | `model.py` choose | Instinct policy (Phase 2) + optional escalation | **new**; pin Instinct `a42d16b…` |
 | `model.py` field_text | `TextResolver` (Phase 5) | **new**; not Instinct |

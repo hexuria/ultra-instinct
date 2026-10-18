@@ -1,0 +1,22 @@
+[package]
+name = "ultra-instinct-guard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Allow / refuse / escalate decisions for ultra-instinct"
+
+[dependencies]
+ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.0"}
+ultra-instinct-protocol = { path = "../ultra-instinct-protocol", version = "0.1.0"}
+ultra-instinct-resonance = { path = "../ultra-instinct-resonance", version = "0.1.0"}
+
+[dev-dependencies]
+proptest = "1.11"
+
+[features]
+default = []
+# Experimental: compile HGRA matcher tests.
+hgra = ["ultra-instinct-resonance/hgra"]

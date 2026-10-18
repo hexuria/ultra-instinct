@@ -42,8 +42,8 @@ Toolchain: Rust 1.99.0. Versions are 0.1.0 and `publish = false`. Public API
 is unstable until 1.0. HGRA is an experiment under `experiments/hgra/` and is
 not on any default path.
 
-Crates are `aui-*` (Autonomous Ultra Instinct, e.g. `aui-agent`,
-`aui-browser`). The binary is `ultra-instinct`, with `aui` as a short
+Crates are `ultra-instinct-*` (Autonomous Ultra Instinct, e.g. `ultra-instinct-agent`,
+`ultra-instinct-browser`). The binary is `ultra-instinct`, with `aui` as a short
 alias for the same CLI.
 
 ## Install
@@ -77,18 +77,18 @@ to it, for example: "use screen-driver to check the checkout page in dark mode".
 
 ```bash
 # Live: attach to a Chrome started with --remote-debugging-port
-cargo run -p aui-cli -- run --cdp http://127.0.0.1:9222 \
+cargo run -p ultra-instinct -- run --cdp http://127.0.0.1:9222 \
   --url https://example.com --goal 'Type "rust" into Search'
 
 # Offline: predict-only dry run on a manifold (a --fixture *.cdp.json replay
 # runs the full loop, but must script every observe/input/observe CDP call)
-cargo run -p aui-cli -- run --goal "Delete" --fixture fixtures/modal-confirm.manifold
+cargo run -p ultra-instinct -- run --goal "Delete" --fixture fixtures/modal-confirm.manifold
 # Full offline agent loop (type / click / select CDP replays)
-cargo run -p aui-cli -- run --goal 'Type "rust" into Search' \
+cargo run -p ultra-instinct -- run --goal 'Type "rust" into Search' \
   --fixture fixtures/agent-type-search.cdp.json
-cargo run -p aui-cli -- run --goal "Click Go" \
+cargo run -p ultra-instinct -- run --goal "Click Go" \
   --fixture fixtures/agent-click-go.cdp.json
-cargo run -p aui-cli -- run --goal 'Select "Business" in Cabin class' \
+cargo run -p ultra-instinct -- run --goal 'Select "Business" in Cabin class' \
   --fixture fixtures/agent-select-cabin.cdp.json
 ```
 
@@ -101,7 +101,7 @@ target; a model only extracts a TYPE_TEXT / SELECT value that must occur in the
 goal, else deterministic fallback, else abstain. Tests use scripted models.
 
 ```bash
-cargo run -p aui-cli --features model-text -- run --cdp http://127.0.0.1:9222 \
+cargo run -p ultra-instinct --features model-text -- run --cdp http://127.0.0.1:9222 \
   --goal "type rust ownership in the Search box" --text-model-cmd ./my-text-model.sh
 ```
 
@@ -111,7 +111,7 @@ Without `--text-model-cmd`, `TEXT_MODEL_API_KEY` turns on the built-in HTTP mode
 
 ```bash
 TEXT_MODEL_API=anthropic TEXT_MODEL=claude-haiku-5-5 TEXT_MODEL_API_KEY=... \
-  cargo run -p aui-cli --features model-text -- run --cdp http://127.0.0.1:9222 \
+  cargo run -p ultra-instinct --features model-text -- run --cdp http://127.0.0.1:9222 \
   --goal "type rust ownership in the Search box"
 ```
 
@@ -141,19 +141,19 @@ one site: see [`RESULTS.md`](RESULTS.md) and the
 
 ```bash
 cargo test --workspace
-cargo run -p aui-cli -- run --goal "Delete" --fixture fixtures/modal-confirm.manifold
+cargo run -p ultra-instinct -- run --goal "Delete" --fixture fixtures/modal-confirm.manifold
 # Full offline agent loop (type / click / select CDP replays)
-cargo run -p aui-cli -- run --goal 'Type "rust" into Search' \
+cargo run -p ultra-instinct -- run --goal 'Type "rust" into Search' \
   --fixture fixtures/agent-type-search.cdp.json
-cargo run -p aui-cli -- run --goal "Click Go" \
+cargo run -p ultra-instinct -- run --goal "Click Go" \
   --fixture fixtures/agent-click-go.cdp.json
-cargo run -p aui-cli -- run --goal 'Select "Business" in Cabin class' \
+cargo run -p ultra-instinct -- run --goal 'Select "Business" in Cabin class' \
   --fixture fixtures/agent-select-cabin.cdp.json
-cargo run -p aui-cli -- observe --fixture fixtures/sign-in.cdp.json
-cargo run -p aui-cli -- guard \
+cargo run -p ultra-instinct -- observe --fixture fixtures/sign-in.cdp.json
+cargo run -p ultra-instinct -- guard \
   --fixture fixtures/sign-in.cdp.json \
   --action click --target "Sign in" --role button --json
-cargo run -p aui-cli -- verify \
+cargo run -p ultra-instinct -- verify \
   --fixture fixtures/welcome.cdp.json --expect-text Welcome
 ```
 

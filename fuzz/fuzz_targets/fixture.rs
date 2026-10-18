@@ -8,9 +8,9 @@ use libfuzzer_sys::fuzz_target;
 // its own output.
 fuzz_target!(|data: &[u8]| {
     let text = String::from_utf8_lossy(data);
-    if let Ok(manifold) = aui_core::parse_fixture(&text) {
-        if let Ok(written) = aui_core::write_fixture(&manifold) {
-            aui_core::parse_fixture(&written).expect("write_fixture output must re-parse");
+    if let Ok(manifold) = ultra_instinct_core::parse_fixture(&text) {
+        if let Ok(written) = ultra_instinct_core::write_fixture(&manifold) {
+            ultra_instinct_core::parse_fixture(&written).expect("write_fixture output must re-parse");
         }
     }
 });

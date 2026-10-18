@@ -14,7 +14,7 @@ nothing statistical. Use it to read transcripts and find bugs.
   reply box whose "Send" twins the Compose "Send". The thread toolbar has a
   hidden and an offscreen "Archive" twin. `settings.html` has a disabled and
   an enabled "Save". `help.html` is the link target that changes URL and title.
-- `crates/aui-cli/examples/live_drive.rs`: the harness. It needs the
+- `crates/ultra-instinct/examples/live_drive.rs`: the harness. It needs the
   `jev` feature (add `hgra` when remasuring with `ULTRA_INSTINCT_MATCHER=hgra`).
   Thread tasks (`t6`–`t8`) start already on `#thread/q3` (blank tab via
   `/json/new`, then `Page.navigate` to the full URL so the hash and query
@@ -38,9 +38,9 @@ not offered.
 python3 bench/server.py --port 8765 &
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
   --remote-debugging-port=9333 --remote-debugging-address=127.0.0.1 \
-  --user-data-dir=/tmp/aui-live/chrome-profile --window-size=1280,800 &
-cargo build --release -p aui-cli --features "jev,hgra" --bin ultra-instinct
-cargo build --release -p aui-cli --features "jev,hgra" --example live_drive
+  --user-data-dir=/tmp/ultra-instinct-live/chrome-profile --window-size=1280,800 &
+cargo build --release -p ultra-instinct --features "jev,hgra" --bin ultra-instinct
+cargo build --release -p ultra-instinct --features "jev,hgra" --example live_drive
 set -a && source /path/to/bench/.env && set +a   # TYPESAFE_API_KEY; never echo
 ULTRA_INSTINCT_JEV=1 \
   ./target/release/examples/live_drive --bin target/release/ultra-instinct \
@@ -48,7 +48,7 @@ ULTRA_INSTINCT_JEV=1 \
 ```
 
 Flags: `--site` (default `http://127.0.0.1:8765`; pass `/acme-mail/site` as above), `--cdp` (default
-`http://127.0.0.1:9333`), `--out` (default `/tmp/aui-live`), `--only
+`http://127.0.0.1:9333`), `--out` (default `/tmp/ultra-instinct-live`), `--only
 <task id>`, `--screenshot-only` (inbox and thread at 1280 and 1440 wide,
 Compose open, settings, help).
 
