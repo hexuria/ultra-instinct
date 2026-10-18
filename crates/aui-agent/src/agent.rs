@@ -547,9 +547,23 @@ where
     }
 
     /// TYPE_TEXT actions whose field still holds the value the active
-    /// clause successfully typed into it. A later clause may type another
-    /// value into the same field.
+    /// clause successfully typed into it, with no visible change from any
+    /// other action since. A later clause may type another value into the
+    /// same field, and so may a step after the page answered (a submitted
+    /// guess, a cleared form).
     fn already_typed(&self, space: &ActionSpace) -> Vec<ActionId> {
+        let page_answered_after = |step: u32| {
+            self.history.iter().any(|later| {
+                later.step > step
+                    && later.kind != ActionKind::TypeText
+                    && matches!(
+                        later.verification,
+                        VerificationKind::StateChanged
+                            | VerificationKind::Navigation
+                            | VerificationKind::Success
+                    )
+            })
+        };
         self.history
             .iter()
             .filter(|record| {
@@ -559,6 +573,7 @@ where
                         .typed_steps
                         .get(&record.step)
                         .is_some_and(|t| t.clause == self.clause_index)
+                    && !page_answered_after(record.step)
             })
             .filter_map(|record| {
                 let offered = space.get(&record.action_id)?;
@@ -837,6 +852,7 @@ where
                 context_fingerprint: offered.target_fingerprint(),
                 page_text: None,
                 input_type: offered.state().input_type.clone(),
+                field_context: offered.near_text().map(str::to_owned),
             };
             let resolved = match self.text.resolve(&ctx) {
                 Ok(resolution) => {
@@ -892,6 +908,7 @@ where
                     None
                 },
                 input_type: offered.state().input_type.clone(),
+                field_context: offered.near_text().map(str::to_owned),
             };
             let resolution = self.text.resolve(&ctx).map_err(|e| match e {
                 // A resolver that declines (model refused, no fallback value)

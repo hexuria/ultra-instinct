@@ -62,6 +62,27 @@ benchmark name, task name, or page class appears in `crates/`.
      CLICK: the control inside is.
    - Row text that echoes the goal is dropped from a label in the request.
 
+3. **Work out the answer.**
+   - Derived text (ADR 0009) is on by default in the CLI whenever a text
+     model is configured; `--no-derived-text` turns it off. The library
+     default stays off. Secret fields are never derived.
+   - The text model gets the field's near text ("6 + 0 =") and the page's
+     reading text: rendered text plus the contents of rendered text areas,
+     which `innerText` leaves out.
+   - Stricter: a goal-grounded value may not be a described phrase (two or
+     more lower-case words led by a determiner, unquoted: "your answer").
+   - Stricter: a quoted literal right after a press verb (`press "Submit"`)
+     names a control, not a value, in the deterministic resolver and in the
+     "quoted value wins" rule.
+   - A derived value longer than 64 characters is typed only when it occurs
+     word for word in the page text (a passage to copy).
+   - A field may be typed again once another action has changed the page
+     since it was typed (a submitted guess).
+   - Near text also reads the text to the right on the same row.
+   - A malformed JEV answer (probabilities that contradict the choice, a
+     missing head) is asked once more; transport errors keep the SDK's own
+     retries.
+
 ## Consequences
 
 - Observe costs one more CDP call: six on the compact path. The call budget
@@ -76,4 +97,9 @@ benchmark name, task name, or page class appears in `crates/`.
   - `aui-policy` remote tests: near text and row text that echo the goal,
     target-first order.
   - `aui-core` action-space tests: unnamed wrappers.
-  - `aui-remote` typesafe tests: DONE and BLOCKED second looks.
+  - `aui-remote` typesafe tests: DONE and BLOCKED second looks, malformed
+    answers.
+  - `aui-policy` text / model-text tests: press-verb literals, goal
+    phrases, field context, copied passages.
+  - `aui-agent` `mock_loop`: retyping after the page answered.
+  - `aui-core` action-space tests: near text on the right.

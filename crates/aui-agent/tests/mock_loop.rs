@@ -1330,6 +1330,78 @@ fn a_field_already_holding_the_typed_value_is_not_offered_again() {
     assert_eq!(typed.len(), 1, "typed once, then moved on: {outcome:?}");
 }
 
+/// Types, then clicks Submit, then reports whether TYPE_TEXT is offered.
+struct TypeSubmitLook(std::rc::Rc<std::cell::RefCell<Vec<bool>>>);
+
+impl BrowserPolicy for TypeSubmitLook {
+    fn decide(
+        &mut self,
+        space: &ActionSpace,
+        _goal: &AgentGoal,
+        _history: &[HistoryEntry],
+    ) -> Result<PolicyOutcome, PolicyError> {
+        let mut seen = self.0.borrow_mut();
+        seen.push(space.get_str("TYPE_TEXT:guess").is_some());
+        let id = match seen.len() {
+            1 => "TYPE_TEXT:guess",
+            2 => "CLICK:go",
+            _ => "DONE",
+        };
+        let action = space.get_str(id).expect("offered");
+        Ok(PolicyOutcome::Choice(PolicyDecision {
+            action_id: action.id().clone(),
+            kind: action.kind(),
+            target_label: action.label().to_owned(),
+            confidence_millis: 1_000,
+            operation_ranked: Vec::new(),
+            target_ranked: Vec::new(),
+        }))
+    }
+}
+
+fn guess_page(value: Option<&str>, feedback: &str) -> InteractionManifold {
+    let mut page = manifold(&format!(
+        "viewport w=800 h=600\n\
+         region id=guess role=text_field label=\"Guess\" x=10 y=10 w=200 h=24 actions=type sources=dom\n\
+         region id=go role=button label=\"Submit\" x=10 y=50 w=80 h=24 actions=click sources=dom\n\
+         region id=fb role=text label=\"{feedback}\" x=10 y=90 w=200 h=20 actions= sources=dom\n"
+    ));
+    let region = page
+        .get_str("guess")
+        .unwrap()
+        .clone()
+        .with_state(ElementState {
+            value: value.map(str::to_owned),
+            ..ElementState::default()
+        });
+    page.replace(region);
+    page
+}
+
+#[test]
+fn a_field_may_be_typed_again_after_the_page_answered() {
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut browser = MockBrowser::new(guess_page(None, "Pick a number"));
+    browser.set_on_press(guess_page(Some("5"), "Pick a number"));
+    let mut agent = AgentBuilder::new(browser, TypeSubmitLook(seen.clone()))
+        .max_steps(5)
+        .build(r#"Type "5" into Guess and press Submit"#);
+    agent.predict().unwrap();
+    agent.act().unwrap();
+    agent
+        .browser_mut()
+        .set_on_press(guess_page(Some("5"), "Higher"));
+    agent.predict().unwrap();
+    let submit = agent.act().unwrap();
+    assert_eq!(submit.verification, VerificationKind::StateChanged);
+    agent.predict().unwrap();
+    assert_eq!(
+        *seen.borrow(),
+        [true, false, true],
+        "held value: hidden; after the page answered: offered again"
+    );
+}
+
 #[test]
 fn a_later_clause_may_type_another_value_into_the_same_field() {
     let mut browser = MockBrowser::new(name_field(None));

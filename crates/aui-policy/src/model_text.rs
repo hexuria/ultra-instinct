@@ -64,6 +64,8 @@ pub struct TextModelRequest {
     /// model may read or work out the value from it when the goal has none.
     /// Untrusted data, never instructions.
     pub page_text: Option<String>,
+    /// [`TextContext::field_context`]: what names an unlabeled field.
+    pub field_context: Option<String>,
 }
 
 /// What the model answered.
@@ -139,6 +141,9 @@ pub enum ModelRefusal {
     Ungrounded,
     /// Value is just the field label (the field reference, not a value).
     LabelEcho,
+    /// Value is a plain phrase lifted from the goal ("your answer"): it
+    /// describes the field, it is not a value.
+    GoalPhrase,
     /// A derived value was proposed for a secret field.
     SecretField,
     /// A derived value was proposed without page text to derive it from.
@@ -157,6 +162,7 @@ impl fmt::Display for ModelRefusal {
             Self::ControlCharacters => f.write_str("model value contains control characters"),
             Self::Ungrounded => f.write_str("model value is not grounded in the goal"),
             Self::LabelEcho => f.write_str("model value only echoes the field label"),
+            Self::GoalPhrase => f.write_str("model value is a phrase from the goal, not a value"),
             Self::SecretField => f.write_str("derived value refused for a secret field"),
             Self::NoPageEvidence => f.write_str("derived value refused without page text"),
         }
@@ -271,6 +277,7 @@ impl<M: TextModel, F: TextResolver> ModelTextResolver<M, F> {
             context_fingerprint: context.fingerprint(),
             max_chars: self.max_chars,
             page_text: context.page_text.clone().filter(|_| self.allow_derived),
+            field_context: context.field_context.clone(),
         };
         self.model_calls += 1;
         let reply = self.model.complete(&request).map_err(ModelRefusal::Model)?;
@@ -285,16 +292,18 @@ impl<M: TextModel, F: TextResolver> ModelTextResolver<M, F> {
 }
 
 /// Guards on a derived value: page text was there to derive it from, the
-/// field is not secret, and the value is short.
+/// field is not secret, and the value is short, unless it is copied word
+/// for word from the page text (a passage to copy is not invented).
 fn derived_guard(context: &TextContext, text: &str) -> Result<(), ModelRefusal> {
-    if context.page_text.is_none() {
+    let Some(page_text) = &context.page_text else {
         return Err(ModelRefusal::NoPageEvidence);
-    }
+    };
     if crate::text::is_secret_field(context.input_type.as_deref(), &context.field_label) {
         return Err(ModelRefusal::SecretField);
     }
     let chars = text.chars().count();
-    if chars > DERIVED_MAX_CHARS {
+    let fold = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if chars > DERIVED_MAX_CHARS && !fold(page_text).contains(&fold(text)) {
         return Err(ModelRefusal::TooLong {
             chars,
             max: DERIVED_MAX_CHARS,
@@ -398,8 +407,41 @@ pub fn vet(
         if !label.is_empty() && value == label && goal.matches(&label).count() <= 1 {
             return Err(ModelRefusal::LabelEcho);
         }
+        if is_goal_phrase(text, &request.goal) {
+            return Err(ModelRefusal::GoalPhrase);
+        }
     }
     Ok(text.to_owned())
+}
+
+/// Words that open a description of something rather than name it.
+const DETERMINERS: [&str; 10] = [
+    "a", "an", "its", "my", "that", "the", "their", "this", "your", "our",
+];
+
+/// A described thing the goal does not quote: two or more plain lower-case
+/// words led by a determiner ("your answer", "the text"). That is how a
+/// goal describes a field, not a value it names. A quoted value, a name, a
+/// number, or a bare phrase ("rust ownership") is not one.
+fn is_goal_phrase(text: &str, goal: &str) -> bool {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() < 2
+        || !DETERMINERS.contains(&words[0])
+        || !words
+            .iter()
+            .all(|w| w.chars().all(|c| c.is_ascii_lowercase() || c == '\''))
+    {
+        return false;
+    }
+    let quoted = ['"', '\'', '\u{201c}', '\u{2018}'].iter().any(|open| {
+        let close = match open {
+            '\u{201c}' => '\u{201d}',
+            '\u{2018}' => '\u{2019}',
+            other => *other,
+        };
+        goal.contains(&format!("{open}{text}{close}"))
+    });
+    !quoted
 }
 
 fn strip_matching_quotes(s: &str) -> &str {
@@ -515,6 +557,9 @@ impl TextModel for CommandTextModel {
             "context_fingerprint": request.context_fingerprint,
             "max_chars": request.max_chars,
         });
+        if let Some(context) = &request.field_context {
+            line["field_context"] = serde_json::json!(context);
+        }
         if let Some(page_text) = &request.page_text {
             line["page_text"] = serde_json::json!(page_text);
         }
@@ -598,6 +643,7 @@ mod tests {
             context_fingerprint: 7,
             page_text: None,
             input_type: None,
+            field_context: None,
         }
     }
 
@@ -651,6 +697,69 @@ mod tests {
         assert_eq!(
             r.last_source(),
             Some(&TextSource::Abstained(ModelRefusal::Ungrounded))
+        );
+    }
+
+    #[test]
+    fn a_phrase_lifted_from_the_goal_is_not_a_value() {
+        let goal = "Solve the math problem and type your answer into the textbox.";
+        let mut resolver = ModelTextResolver::new(ScriptedTextModel::new().reply("your answer"))
+            .without_fallback();
+        let err = resolver.resolve(&ctx(goal, "", "text_field")).unwrap_err();
+        assert!(
+            matches!(err, TextError::Abstain(ref m) if m.contains("not a value")),
+            "{err:?}"
+        );
+        assert!(is_goal_phrase("your answer", goal));
+        assert!(
+            !is_goal_phrase("lunch plans", r#"Type "lunch plans" in the box"#),
+            "quoted"
+        );
+        assert!(!is_goal_phrase("New York", "Fly to New York"), "a name");
+        assert!(
+            !is_goal_phrase("nathan", "Enter the username nathan"),
+            "one word"
+        );
+        assert!(!is_goal_phrase("room 12", "Book room 12"), "a number");
+        assert!(!is_goal_phrase(
+            "rust ownership",
+            "type rust ownership in the Search box"
+        ));
+        assert!(is_goal_phrase("the text", "Copy the text into the box"));
+        assert!(
+            !is_goal_phrase("the text", r#"Type "the text" here"#),
+            "quoted"
+        );
+    }
+
+    #[test]
+    fn the_field_context_reaches_the_model() {
+        let model = ScriptedTextModel::new().reply("6");
+        let mut resolver = ModelTextResolver::new(model)
+            .allow_derived(true)
+            .without_fallback();
+        let mut context = page_ctx("Solve the math problem and type your answer.", "", None);
+        context.field_context = Some("6 + 0 =".into());
+        resolver.resolve(&context).unwrap();
+        assert_eq!(
+            resolver.model().requests()[0].field_context.as_deref(),
+            Some("6 + 0 =")
+        );
+    }
+
+    #[test]
+    fn a_long_derived_value_is_typed_only_when_copied_from_the_page() {
+        let passage = "Vulputate adipiscing nunc pharetra libero curabitur non purus nec interdum";
+        let goal = "Copy the text in the textarea below and paste it into the textbox.";
+        let mut context = page_ctx(goal, "", None);
+        context.page_text = Some(format!("Copy it.\n[text area]\n{passage}"));
+        let mut copied = derived_resolver(passage);
+        assert_eq!(copied.resolve(&context).unwrap().text, passage);
+        let invented = "x".repeat(DERIVED_MAX_CHARS + 1);
+        let mut resolver = derived_resolver(&invented);
+        assert!(
+            resolver.resolve(&context).is_err(),
+            "long and not on the page"
         );
     }
 
@@ -768,6 +877,7 @@ mod tests {
             context_fingerprint: 1,
             max_chars: 4,
             page_text: None,
+            field_context: None,
         };
         let reply = |t: &str| TextModelReply {
             text: t.into(),

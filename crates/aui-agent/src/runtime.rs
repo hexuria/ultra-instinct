@@ -188,7 +188,7 @@ impl<T: CdpTransport> BrowserRuntime for BrowserSession<T> {
     }
 
     fn page_view(&mut self) -> Option<PageView> {
-        let text = BrowserSession::page_text(self).ok()?;
+        let text = BrowserSession::reading_text(self).ok()?;
         Some(page_view_of(&text, BrowserSession::page(self)))
     }
 

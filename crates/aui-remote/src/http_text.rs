@@ -53,7 +53,9 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(20);
 const SYSTEM: &str = "You fill one browser field for a web agent. Reply with exactly one JSON \
 object: {\"context_fingerprint\": <the request's context_fingerprint, echoed unchanged>, \"text\": \
 \"<the value to type>\"} — or {\"declined\": \"<why>\"} when the goal supplies no fitting value. \
-Never invent a value the goal does not contain or clearly imply.";
+Never invent a value the goal does not contain or clearly imply. Words that only describe the \
+field (\"your answer\", \"the text\") are not a value. field_context, when present, is text \
+near this field on the page: it may name the field, or be unrelated (a table cell beside it).";
 
 /// Sent with `page_text` only: when the goal itself names no value.
 const DERIVED_RULE: &str = "When the goal names no value for this field but asks for one \
@@ -330,9 +332,12 @@ impl TextModel for HttpTextModel {
             "context_fingerprint": request.context_fingerprint.to_string(),
             "max_chars": request.max_chars,
         });
-        // Present only under `--allow-derived-text`: the goal gives no value,
-        // so the value may be read or worked out from the page.
         let mut prompt = prompt;
+        if let Some(context) = &request.field_context {
+            prompt["field_context"] = json!(context);
+        }
+        // Present only when derived text is on: the goal gives no value, so
+        // the value may be read or worked out from the page.
         if let Some(page_text) = &request.page_text {
             prompt["page_text"] = json!(page_text);
             prompt["derived_rule"] = json!(DERIVED_RULE);

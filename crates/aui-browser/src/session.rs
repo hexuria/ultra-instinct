@@ -103,6 +103,18 @@ pub struct BrowserSession<T: CdpTransport> {
     stale: bool,
 }
 
+/// [`BrowserSession::reading_text`]: rendered text plus text-area values.
+const READING_TEXT_JS: &str = r#"(function(){
+var text=document.body?document.body.innerText:'';
+var areas=[];
+var all=document.querySelectorAll('textarea');
+for(var i=0;i<all.length;i++){
+  var a=all[i];
+  if(a.getClientRects().length&&String(a.value).trim()!=='')areas.push('[text area]\n'+a.value);
+}
+return areas.length?text+'\n'+areas.join('\n'):text;
+})()"#;
+
 impl<T: CdpTransport> BrowserSession<T> {
     pub fn new(transport: T) -> Self {
         Self {
@@ -689,6 +701,14 @@ impl<T: CdpTransport> BrowserSession<T> {
     /// `document.body.innerText` — visible page text, no markup.
     pub fn page_text(&mut self) -> Result<String, BrowserError> {
         self.eval_string("document.body ? document.body.innerText : ''")
+    }
+
+    /// What a reader sees as text: [`Self::page_text`] plus the contents of
+    /// every rendered text area, which `innerText` leaves out (a passage to
+    /// copy, an agreement to scroll through). Each follows a `[text area]`
+    /// line. Text areas are never password fields.
+    pub fn reading_text(&mut self) -> Result<String, BrowserError> {
+        self.eval_string(READING_TEXT_JS)
     }
 
     /// PNG screenshot of the viewport, base64 (`Page.captureScreenshot`).

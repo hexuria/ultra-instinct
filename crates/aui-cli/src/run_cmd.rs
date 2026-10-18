@@ -8,7 +8,7 @@
 //! ultra-instinct run ... --policy jev                 # feature `jev`: JEV decides every step (default)
 //! ultra-instinct run ... --policy jev --no-screenshot # JEV without the viewport screenshot
 //! ultra-instinct run ... --policy jev --no-page-text  # JEV / Clef without the page's text
-//! ultra-instinct run ... --allow-derived-text         # feature `model-text`: type values read off the page
+//! ultra-instinct run ... --no-derived-text            # feature `model-text`: never type values read off the page
 //! ultra-instinct run ... --policy clef                # feature `clef`: Cloudflare Clef (27B) decides
 //! ultra-instinct run ... --policy clef-flash          # feature `clef`: Cloudflare Clef-Flash (9B) decides
 //! ultra-instinct run ... --policy instinct            # offline; `pua` is a deprecated alias
@@ -79,10 +79,13 @@ struct RunArgs {
     /// `--no-page-text`: remote policies decide without the page's text.
     #[cfg_attr(not(feature = "jev"), allow(dead_code))]
     no_page_text: bool,
-    /// `--allow-derived-text`: the text model may type a value read or
-    /// worked out from the page when the goal gives none (guarded).
+    /// `--allow-derived-text`: require derived text (an error without a
+    /// text model). Derived text is on by default whenever one is configured.
     #[cfg_attr(not(feature = "model-text"), allow(dead_code))]
     allow_derived_text: bool,
+    /// `--no-derived-text`: the text model types only values the goal names.
+    #[cfg_attr(not(feature = "model-text"), allow(dead_code))]
+    no_derived_text: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -110,6 +113,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     let mut no_screenshot = false;
     let mut no_page_text = false;
     let mut allow_derived_text = false;
+    let mut no_derived_text = false;
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
@@ -161,6 +165,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
                 arg,
                 &inline,
             )?,
+            "--no-derived-text" => switch(&mut no_derived_text, "--no-derived-text", arg, &inline)?,
             "--max-steps" => {
                 let raw = value("--max-steps")?;
                 let n: u32 = raw.parse().map_err(|_| CliError::BadNumber {
@@ -208,6 +213,11 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     if url.is_some() && cdp.is_none() {
         return Err(CliError::UnknownFlag("--url requires --cdp".into()));
     }
+    if allow_derived_text && no_derived_text {
+        return Err(CliError::UnknownFlag(
+            "--allow-derived-text and --no-derived-text contradict each other".into(),
+        ));
+    }
     Ok(RunArgs {
         goal,
         cdp,
@@ -225,6 +235,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
         no_screenshot,
         no_page_text,
         allow_derived_text,
+        no_derived_text,
     })
 }
 
@@ -592,7 +603,9 @@ fn drive_model_text<B: BrowserRuntime, P: BrowserPolicy>(
     model: Box<dyn aui_policy::TextModel>,
     args: &RunArgs,
 ) -> Result<String, CliError> {
-    let resolver = aui_policy::ModelTextResolver::new(model).allow_derived(args.allow_derived_text);
+    // Derived text (a value read or worked out from the page, guarded) is on
+    // whenever a text model is configured, unless `--no-derived-text`.
+    let resolver = aui_policy::ModelTextResolver::new(model).allow_derived(!args.no_derived_text);
     let mut agent = builder.text_resolver(resolver).build(args.goal.clone());
     let outcome = agent.run();
     let mut out = format!(
@@ -839,6 +852,17 @@ mod tests {
         .unwrap();
         assert!(parsed.allow_derived_text);
         assert!(parse(&a(&["--goal", "Go", "--fixture", "x", "--no-page-text=1"])).is_err());
+        let parsed = parse(&a(&["--goal", "Go", "--fixture", "x", "--no-derived-text"])).unwrap();
+        assert!(parsed.no_derived_text && !parsed.allow_derived_text);
+        assert!(parse(&a(&[
+            "--goal",
+            "Go",
+            "--fixture",
+            "x",
+            "--allow-derived-text",
+            "--no-derived-text"
+        ]))
+        .is_err());
     }
 
     #[test]

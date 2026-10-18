@@ -19,6 +19,9 @@ pub struct TextContext {
     pub page_text: Option<String>,
     /// The field's INPUT `type`, lowercased (`password`, `email`, …).
     pub input_type: Option<String>,
+    /// Observed text that names the field when its label does not (its near
+    /// text: "6 + 0 =", "Date:"). Evidence; not fingerprinted.
+    pub field_context: Option<String>,
 }
 
 impl TextContext {
@@ -175,7 +178,12 @@ pub struct DeterministicTextResolver;
 impl TextResolver for DeterministicTextResolver {
     fn resolve(&mut self, context: &TextContext) -> Result<TextResolution, TextError> {
         let goal = context.goal.as_str();
-        let literals = quoted_literals(goal);
+        let literals = value_literals(goal);
+        // Every quoted literal names a control to press: the goal quotes
+        // no value for this field.
+        if literals.is_empty() && !quoted_literals(goal).is_empty() {
+            return Err(TextError::Missing);
+        }
         if !literals.is_empty() {
             let untyped: Vec<_> = literals
                 .into_iter()
@@ -241,10 +249,28 @@ impl TextResolver for DeterministicTextResolver {
 /// value the user gave, which beats anything read off the page.
 #[cfg(feature = "model-text")]
 pub(crate) fn untyped_quoted_value(context: &TextContext) -> Option<String> {
-    quoted_literals(context.goal.as_str())
+    value_literals(context.goal.as_str())
         .into_iter()
         .map(|(_, literal)| literal)
         .find(|literal| !context.typed.contains(literal))
+}
+
+/// Verbs whose quoted object is a control to press, not a value to type
+/// (`press "Submit"`, `click "Search"`).
+const PRESS_VERBS: [&str; 5] = ["click", "hit", "press", "push", "tap"];
+
+/// Quoted goal literals that are values: those not right after a press
+/// verb. `type "Ana" then press "Submit"` has one value, "Ana".
+fn value_literals(goal: &str) -> Vec<(usize, String)> {
+    quoted_literals(goal)
+        .into_iter()
+        .filter(|(opening_quote, _)| {
+            let before = &goal[..*opening_quote];
+            ascii_words(before)
+                .last()
+                .is_none_or(|word| !PRESS_VERBS.contains(&word.as_str()))
+        })
+        .collect()
 }
 
 fn quoted_literals(goal: &str) -> Vec<(usize, String)> {
@@ -373,6 +399,7 @@ mod tests {
             context_fingerprint: 1,
             page_text: None,
             input_type: None,
+            field_context: None,
         };
         let res = r.resolve(&ctx).unwrap();
         assert_eq!(res.text, "Zürich");
@@ -389,6 +416,7 @@ mod tests {
             context_fingerprint: 2,
             page_text: None,
             input_type: None,
+            field_context: None,
         };
         assert_eq!(r.resolve(&ctx).unwrap().text, "hello world");
     }
@@ -404,6 +432,7 @@ mod tests {
             context_fingerprint: 4,
             page_text: None,
             input_type: None,
+            field_context: None,
         };
         assert_eq!(r.resolve(&ctx), Err(TextError::Missing));
     }
@@ -419,6 +448,7 @@ mod tests {
             context_fingerprint: 3,
             page_text: None,
             input_type: None,
+            field_context: None,
         };
         assert_eq!(r.resolve(&ctx), Err(TextError::Missing));
     }
@@ -432,6 +462,7 @@ mod tests {
             context_fingerprint: 5,
             page_text: None,
             input_type: None,
+            field_context: None,
         };
         DeterministicTextResolver
             .resolve(&context)
@@ -480,6 +511,33 @@ mod tests {
     }
 
     #[test]
+    fn a_quoted_control_to_press_is_not_a_value() {
+        assert_eq!(
+            resolve(r#"Type "Ana" into Name and press "Submit""#, "Name", &[]).unwrap(),
+            "Ana"
+        );
+        assert_eq!(
+            resolve(
+                r#"Type "Ana" into Name and press "Submit""#,
+                "Name",
+                &["Ana"]
+            )
+            .unwrap_err(),
+            TextError::Abstain("no quoted literal left for this field".into())
+        );
+        assert_eq!(
+            resolve(
+                r#"Find the 1st word, type that into the textbox and press "Submit"."#,
+                "",
+                &[]
+            )
+            .unwrap_err(),
+            TextError::Missing,
+            "only a control is quoted"
+        );
+    }
+
+    #[test]
     fn resolver_abstains_when_every_quoted_literal_was_typed() {
         let goal = r#"Set "first" then "second"."#;
         assert_eq!(
@@ -524,6 +582,7 @@ mod tests {
             context_fingerprint: 9,
             page_text: None,
             input_type: None,
+            field_context: None,
         };
         let fingerprint = context.fingerprint();
         context.typed.push("already typed".into());

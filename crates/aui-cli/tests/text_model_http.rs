@@ -321,6 +321,7 @@ fn ask() -> TextModelRequest {
         context_fingerprint: 42,
         max_chars: 60,
         page_text: None,
+        field_context: None,
     }
 }
 

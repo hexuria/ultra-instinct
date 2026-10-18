@@ -570,7 +570,8 @@ const NEAR_TEXT_MAX_CHARS: usize = 80;
 
 /// Observed text that names an unnamed target the way a sighted reader would
 /// read it: the parent's own text ("Date: [ ]"), else the nearest text to the
-/// left on the same row, else the nearest text directly above. Text several
+/// left on the same row, else to the right on it ("[Odd] 4 [Even]"), else
+/// the nearest text directly above. Text several
 /// regions share (another "Reply") tells nothing apart and is skipped.
 /// Geometry only; `None` when no text is that close.
 fn near_text(
@@ -611,7 +612,23 @@ fn near_text(
             })
             .min_by(|a, b| a.0.total_cmp(&b.0))
     };
-    let region = parent.or_else(|| left.map(|(_, r)| r).or_else(|| above().map(|(_, r)| r)))?;
+    let right = || {
+        manifold
+            .regions()
+            .filter(|r| named(r))
+            .filter_map(|r| {
+                let rect = r.rect();
+                let same_row = rect.y() < t.bottom() && t.y() < rect.bottom();
+                let gap = rect.x() - t.right();
+                (same_row && (0.0..=NEAR_TEXT_ROW_GAP_PX).contains(&gap)).then_some((gap, r))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+    };
+    let region = parent.or_else(|| {
+        left.map(|(_, r)| r)
+            .or_else(|| right().map(|(_, r)| r))
+            .or_else(|| above().map(|(_, r)| r))
+    })?;
     let text: String = region
         .label()
         .split_whitespace()
@@ -810,6 +827,27 @@ mod tests {
             space.get_str("CLICK:lonely").is_some(),
             "a nameless box with no control inside stays"
         );
+    }
+
+    #[test]
+    fn a_button_with_nothing_on_its_left_reads_the_text_on_its_right() {
+        let m = parse_fixture(
+            r#"
+            viewport w=800 h=600
+            region id=odd1 role=button label="Odd" x=22 y=64 w=25 h=15 actions=click sources=dom
+            region id=n1 role=text label="4" x=80 y=64 w=10 h=15 actions= sources=dom
+            region id=even1 role=button label="Even" x=112 y=64 w=30 h=15 actions=click sources=dom
+            region id=odd2 role=button label="Odd" x=22 y=98 w=25 h=15 actions=click sources=dom
+            region id=n2 role=text label="-5" x=80 y=98 w=14 h=15 actions= sources=dom
+            region id=even2 role=button label="Even" x=112 y=98 w=30 h=15 actions=click sources=dom
+            "#,
+        )
+        .unwrap();
+        let space = ActionSpace::from_manifold(&m);
+        let near = |id: &str| space.get_str(id).unwrap().near_text().map(str::to_owned);
+        assert_eq!(near("CLICK:odd1").as_deref(), Some("4"), "right of it");
+        assert_eq!(near("CLICK:even1").as_deref(), Some("4"), "left of it");
+        assert_eq!(near("CLICK:odd2").as_deref(), Some("-5"));
     }
 
     #[test]

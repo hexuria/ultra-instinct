@@ -456,6 +456,11 @@ fn without_control(request: &Value, kind: &str) -> Value {
     request
 }
 
+/// The model's answer broke the answer contract (not a transport failure).
+fn malformed_answer(err: &str) -> bool {
+    err.starts_with("answer:") || err.starts_with("typesafe answer")
+}
+
 /// jev's `validate_choice`: the choice must be an offered criteria key, the
 /// probabilities must cover exactly the offered set, be finite in [0,1],
 /// sum to ≈1, and the choice must be the argmax.
@@ -581,25 +586,43 @@ impl TypesafeTransport {
             ),
             None => None,
         };
-        let sent_image = image.is_some();
         let css_size = screenshot.and_then(Screenshot::css_size);
-        let response = match self.ask(&built, image, css_size) {
-            Err(err) if sent_image && refused_request(&err) => {
-                eprintln!(
-                    "typesafe: image request refused ({err}); continuing without screenshots"
-                );
-                self.screenshots = false;
-                self.ask(&built, None, None)
+        // A malformed answer (probabilities that do not match the choice, a
+        // missing head) is asked once more: a fresh decision on the same
+        // menu, never a repaired one.
+        let mut image = image;
+        let mut retried = false;
+        let (response, reply) = loop {
+            let sent_image = image.is_some();
+            let response = match self.ask(&built, image.take(), css_size) {
+                Err(err) if sent_image && refused_request(&err) => {
+                    eprintln!(
+                        "typesafe: image request refused ({err}); continuing without screenshots"
+                    );
+                    self.screenshots = false;
+                    self.ask(&built, None, None)
+                }
+                other => other,
             }
-            other => other,
-        }
-        .map_err(|err| format!("typesafe call: {err}"))?;
-
-        let reply = compose_reply(&built.criteria_keys, |head| {
-            response
-                .choice(head)
-                .map_err(|err| format!("typesafe answer {head}: {err}"))
-        })?;
+            .map_err(|err| format!("typesafe call: {err}"))?;
+            let composed = compose_reply(&built.criteria_keys, |head| {
+                response
+                    .choice(head)
+                    .map_err(|err| format!("typesafe answer {head}: {err}"))
+            });
+            match composed {
+                Ok(reply) => break (response, reply),
+                Err(err) if !retried && malformed_answer(&err) => {
+                    eprintln!("typesafe: {err}; asking once more");
+                    retried = true;
+                    image = match screenshot.filter(|_| self.screenshots) {
+                        Some(shot) => Image::from_base64(shot.base64()).ok(),
+                        None => None,
+                    };
+                }
+                Err(err) => return Err(err),
+            }
+        };
         let satisfied = check_done
             .then(|| response.noul(DONE_CHECK_HEAD).ok().map(|a| a.noul))
             .flatten()
@@ -858,6 +881,17 @@ mod tests {
             None,
             "a click is never re-asked"
         );
+    }
+
+    #[test]
+    fn only_a_broken_answer_is_asked_again() {
+        assert!(malformed_answer("answer: choice is not the argmax"));
+        assert!(malformed_answer("typesafe answer click_target: missing"));
+        assert!(
+            !malformed_answer("typesafe call: 502 Bad Gateway"),
+            "transport errors keep the SDK's retries"
+        );
+        assert!(!malformed_answer("request: no operations offered"));
     }
 
     #[test]

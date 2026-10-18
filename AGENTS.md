@@ -79,15 +79,21 @@ crate.
 >    literals successfully typed earlier, then picks an untyped quoted literal
 >    whose preceding three goal words share a word with the field label, else
 >    the first untyped literal, else abstains (parity with the bench A3q helper).
+>    A literal right after a press verb (`press "Submit"`) names a control,
+>    not a value (ADR 0011).
 > 7a. **Model text is payload-only and grounded** (feature `model-text`,
 >    ADR 0006). The model fills the payload of an action Instinct already chose;
 >    replies must echo the context fingerprint, pass shape checks, and occur
->    in the goal clause, else deterministic fallback, else abstain. One opt-in
->    exception (`--allow-derived-text`, ADR 0009): a value read or worked out
+>    in the goal clause and not be a described phrase ("your answer"), else
+>    deterministic fallback, else abstain. One exception (ADR 0009; on by
+>    default in the CLI whenever a text model is configured, off with
+>    `--no-derived-text`, ADR 0011): a value read or worked out
 >    from page text may be typed when the goal quotes no untyped value, the
 >    field is not secret (password / hidden / file inputs; PIN /
 >    CVV / card / one-time-code labels), and the value is one line of ≤ 64
->    chars; every derived value is printed. CI uses scripted models only; no
+>    chars, or copied word for word from the page text; every derived value
+>    is printed. The model sees the page's reading text (rendered text plus
+>    text-area contents) and the field's near text. CI uses scripted models only; no
 >    provider SDK or key handling in the tree.
 > 7b. **Harder page types** (ADR 0007). Observe pierces open shadow roots and
 >    same-origin iframes (`pierce: true`). ComboBox / ListBox / Option are
