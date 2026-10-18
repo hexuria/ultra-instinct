@@ -83,6 +83,32 @@ benchmark name, task name, or page class appears in `crates/`.
      missing head) is asked once more; transport errors keep the SDK's own
      retries.
 
+4. **New ways to act.** Every one is still an offered id; no reply carries
+   a coordinate or a key name of its own.
+   - Date, time, and month fields take the resolved text in their own value
+     format (`03/07/2016` → `2016-03-07`, `8:16 PM` → `20:16`): their native
+     setter drops anything else. Text that does not parse stays as it is.
+   - DRAG destinations are every viable region (up to 96 per source, nearest
+     first), sent once as a compact `drag` block (sources, destinations,
+     pairs) instead of one entry per pair.
+   - A source drawn on a surface can be dropped on any cell of it:
+     `DRAG:<src>><surface>@c,r`. The surface must take points or be the
+     drawing the source sits in. The ticket's `TicketDest` binds the cell; the
+     executor releases at that cell's center from the fresh surface box.
+   - SVG shapes claim DRAG when they, or their drawing, listen to the pointer.
+   - A pair that names its source as its own destination is a broken answer:
+     asked once more, then an abstain.
+   - `KEY:<id>#<key>` presses one key from the closed `KEY_NAMES` set on a
+     region that takes keys: sliders and slider handles take the arrows,
+     Home / End, Page Up / Down; text fields take Enter (sent with its `\r`
+     text so the form submits); comboboxes take Down / Up / Enter / Escape.
+     `gate_key` binds the key; the executor presses exactly that key after
+     focusing the target.
+   - `SELECT_TEXT:<id>` selects a text block (three words or more of its own,
+     not a control or field) with a trusted triple-click. A selection changes
+     no element, so it verifies by `getSelection()`: success when it holds
+     some of the target's text, wrong effect when it holds none.
+
 ## Consequences
 
 - Observe costs one more CDP call: six on the compact path. The call budget
@@ -102,4 +128,11 @@ benchmark name, task name, or page class appears in `crates/`.
   - `aui-policy` text / model-text tests: press-verb literals, goal
     phrases, field context, copied passages.
   - `aui-agent` `mock_loop`: retyping after the page answered.
-  - `aui-core` action-space tests: near text on the right.
+  - `aui-core` action-space tests: near text on the right, uncapped drag
+    destinations, drawing cells, keys per role.
+  - `aui-guard` `ticket_props`: drag to a cell, the drawing a shape sits in,
+    key tickets.
+  - `aui-agent` `props`: cell and key substitution; `mock_loop`: selection
+    verification.
+  - `aui-policy` text tests: date / time / month value formats.
+  - `aui-remote` typesafe tests: the compact drag block, self pairs.

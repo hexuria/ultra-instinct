@@ -64,10 +64,12 @@ crate.
 >    neighborhood (ancestors, same-parent siblings, children, root peers within
 >    `NEIGHBOR_RADIUS_PX` = 160, inclusive). MCP `seen_world` stays whole-page
 >    (`WorldSnapshot::of`). A DRAG ticket binds two ends: the source world as
->    above and a `TicketDest` with the destination's own neighborhood; a
->    surface-point ticket binds its grid `cell`. The executor refuses a
->    swapped destination, another cell, or a two-end / cell ticket on any other
->    input (`TicketMismatch`), and re-checks the drop target (ADR 0010).
+>    above and a `TicketDest` with the destination's own neighborhood (and,
+>    for a drop on a surface point, its grid `cell`); a surface-point ticket
+>    binds its grid `cell`; a KEY ticket binds its one key. The executor
+>    refuses a swapped destination, another cell, another key, or a two-end /
+>    cell / key ticket on any other input (`TicketMismatch`), and re-checks
+>    the drop target (ADR 0010, 0011).
 > 7. **Text is not Instinct.** `TYPE_TEXT` / `SELECT` payloads come from a
 >    `TextResolver`, checked against their context fingerprint, before the
 >    ticket is consumed, so executor revalidation always runs after resolver
@@ -128,8 +130,12 @@ crate.
 >    `--no-page-text`), per-target `box` / `near_text`, and the run's
 >    `progress` (clauses, which are satisfied, values typed; secrets masked).
 >    Evidence never widens the reply. New kinds (ADR 0010) are still offered
->    ids: `HOVER:<id>`, `SCROLL_IN:<id>`, `DRAG:<src>><dst>` (capped pairs), and
->    surface cells `CLICK:<surface>@c,r` (8×8). JEV's DONE carries a
+>    ids: `HOVER:<id>`, `SCROLL_IN:<id>`, `DRAG:<src>><dst>` (up to 8
+>    sources × 96 destinations, sent as one compact `drag` block) including
+>    `DRAG:<src>><surface>@c,r` onto a cell of the drawing a source sits on,
+>    surface cells `CLICK:<surface>@c,r` (8×8), `KEY:<id>#<key>` from the
+>    closed `KEY_NAMES` set, and `SELECT_TEXT:<id>` (a trusted triple-click,
+>    verified by the page's selection) (ADR 0011). JEV's DONE carries a
 >    same-call `goal_satisfied` self-check; DONE below 0.7 (0.5 once every
 >    clause is satisfied) is re-asked without DONE, and BLOCKED below 0.6 is
 >    re-asked without BLOCKED (ADR 0011): at most three calls, a second
