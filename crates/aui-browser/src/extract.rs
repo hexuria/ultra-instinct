@@ -5,6 +5,8 @@
 //! `contentDocument` (iframe). That matches `DOM.getDocument` with
 //! `pierce: true`. Closed shadow trees and cross-origin iframes stay invisible.
 
+use std::collections::BTreeSet;
+
 use serde_json::Value;
 
 use aui_core::{Action, Rect, Role};
@@ -33,6 +35,11 @@ pub(crate) struct DomElement {
     /// A text-less box kept only if the compact walk confirms a click hint;
     /// otherwise observe drops it (and spends no per-node call on it).
     pub needs_hint: bool,
+    /// An HTML `canvas` or `svg` root. It claims `point` only with click
+    /// evidence (a listener, markup, or a pointer cursor it sets itself).
+    pub surface: bool,
+    /// The label is only the words of its class or id ("more", "trash").
+    pub named_by_markup: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -87,6 +94,18 @@ pub(crate) fn dom_elements(document_json: &str) -> Result<Vec<DomElement>, Brows
 }
 
 pub(crate) fn dom_document(document_json: &str) -> Result<DomDocument, BrowserError> {
+    dom_document_with(document_json, &BTreeSet::new(), &BTreeSet::new())
+}
+
+/// [`dom_document`] with page evidence: `listeners` holds the backend ids
+/// Chrome reports as responding to clicks (see [`clickable_backends`]);
+/// `hidden` holds the `data-hu-k` of elements the compact walk found not
+/// rendered (`display: none`), whose text names nothing.
+pub(crate) fn dom_document_with(
+    document_json: &str,
+    listeners: &BTreeSet<i64>,
+    hidden: &BTreeSet<u32>,
+) -> Result<DomDocument, BrowserError> {
     let value = parse_json_deep(document_json)?;
     let root = value.get("root").ok_or_else(|| {
         BrowserError::Cdp(CdpError::BadJson {
@@ -94,8 +113,46 @@ pub(crate) fn dom_document(document_json: &str) -> Result<DomDocument, BrowserEr
         })
     })?;
     let mut out = DomDocument::default();
-    walk_dom(root, &mut out);
+    walk_dom(root, listeners, hidden, &mut out);
     drop_ambiguous_hu_k(&mut out);
+    Ok(out)
+}
+
+/// Backend ids `DOMSnapshot.captureSnapshot` marks `isClickable`: Chrome's
+/// own record of nodes with click, mouse, or pointer listeners (a handler
+/// added by script with `addEventListener` included) and of links. Every
+/// document in the snapshot counts (same-origin iframes are documents too).
+pub(crate) fn clickable_backends(snapshot_json: &str) -> Result<BTreeSet<i64>, BrowserError> {
+    let value = parse_json(snapshot_json)?;
+    let documents = value
+        .get("documents")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            BrowserError::Cdp(CdpError::BadJson {
+                message: "DOMSnapshot.captureSnapshot result has no documents".into(),
+            })
+        })?;
+    let mut out = BTreeSet::new();
+    for document in documents {
+        let nodes = document.get("nodes");
+        let backends = nodes
+            .and_then(|n| n.get("backendNodeId"))
+            .and_then(Value::as_array);
+        let clickable = nodes
+            .and_then(|n| n.get("isClickable"))
+            .and_then(|c| c.get("index"))
+            .and_then(Value::as_array);
+        let (Some(backends), Some(clickable)) = (backends, clickable) else {
+            continue;
+        };
+        out.extend(
+            clickable
+                .iter()
+                .filter_map(Value::as_u64)
+                .filter_map(|i| backends.get(usize::try_from(i).ok()?))
+                .filter_map(Value::as_i64),
+        );
+    }
     Ok(out)
 }
 
@@ -275,18 +332,34 @@ pub(crate) fn call_threw(call_json: &str) -> Result<bool, BrowserError> {
 enum DomWork<'a> {
     Visit(&'a Value, Option<i64>),
     Pop,
+    /// Leave an element: restore the element chain.
+    PopNode,
 }
 
-fn walk_dom(root: &Value, out: &mut DomDocument) {
+/// Longest row text added to a markup-named label.
+const ROW_CONTEXT_MAX_CHARS: usize = 60;
+
+fn walk_dom(
+    root: &Value,
+    listeners: &BTreeSet<i64>,
+    hidden: &BTreeSet<u32>,
+    out: &mut DomDocument,
+) {
     let mut kept_ancestors: Vec<i64> = Vec::new();
     // Parallel to `kept_ancestors`: that kept element is a click control.
     let mut kept_controls: Vec<bool> = Vec::new();
+    // Every element above the current node, outermost first.
+    let mut chain: Vec<&Value> = Vec::new();
     let mut stack = vec![DomWork::Visit(root, None)];
     while let Some(work) = stack.pop() {
         let (node, parent_backend) = match work {
             DomWork::Pop => {
                 kept_ancestors.pop();
                 kept_controls.pop();
+                continue;
+            }
+            DomWork::PopNode => {
+                chain.pop();
                 continue;
             }
             DomWork::Visit(node, parent_backend) => (node, parent_backend),
@@ -315,8 +388,25 @@ fn walk_dom(root: &Value, out: &mut DomDocument) {
             // An icon drawn inside a button or link is that control's face,
             // not a target of its own.
             let face = svg_part && kept_controls.iter().any(|&control| control);
-            if let Some(mut element) = element_from(node).filter(|_| !face) {
+            let listener = node
+                .get("backendNodeId")
+                .and_then(Value::as_i64)
+                .is_some_and(|backend| listeners.contains(&backend));
+            if let Some(mut element) = element_from(node, listener, hidden).filter(|_| !face) {
                 element.ancestors = kept_ancestors.iter().rev().copied().collect();
+                // "more" or "trash" repeats in every row: the row's own text
+                // (the nearest ancestor with any) says which one this is.
+                if element.named_by_markup {
+                    if let Some(row) = chain
+                        .iter()
+                        .rev()
+                        .map(|n| subtree_text(n, hidden))
+                        .find(|t| !t.is_empty())
+                    {
+                        let row: String = row.chars().take(ROW_CONTEXT_MAX_CHARS).collect();
+                        element.label = format!("{} · {row}", element.label);
+                    }
+                }
                 if element.needs_hint {
                     // Not a kept element (nor anyone's kept ancestor) until
                     // observe confirms its click hint.
@@ -334,6 +424,10 @@ fn walk_dom(root: &Value, out: &mut DomDocument) {
         // pop last.
         if pushed_kept {
             stack.push(DomWork::Pop);
+        }
+        if node_type == 1 {
+            chain.push(node);
+            stack.push(DomWork::PopNode);
         }
         // Same-origin iframe document. Cross-origin frames omit
         // `contentDocument`.
@@ -355,7 +449,8 @@ fn walk_dom(root: &Value, out: &mut DomDocument) {
     }
 }
 
-fn element_from(node: &Value) -> Option<DomElement> {
+/// `listener`: Chrome reports a click listener on this node (`isClickable`).
+fn element_from(node: &Value, listener: bool, hidden: &BTreeSet<u32>) -> Option<DomElement> {
     let name = node.get("nodeName").and_then(Value::as_str).unwrap_or("");
     if matches!(
         name.to_ascii_uppercase().as_str(),
@@ -382,37 +477,43 @@ fn element_from(node: &Value) -> Option<DomElement> {
     // (a list row whose label is an inner element), named by that text.
     let drag_marked = !svg_shape && !surface && drag_markup(&attributes);
     if drag_marked && label.is_empty() {
-        label = subtree_text(node);
+        label = subtree_text(node, hidden);
     }
-    // A text-less box the page made clickable (a colored square, a card, a
-    // board cell) is a region only when a click hint confirms it.
-    let hint_box = !svg_shape
-        && !surface
-        && !drag_marked
-        && !keep_element(name, role_attr.as_deref(), &label)
-        && is_textual(name)
-        && label.is_empty();
-    if !svg_shape
-        && !surface
-        && !drag_marked
-        && !hint_box
-        && !keep_element(name, role_attr.as_deref(), &label)
-    {
+    let kept = keep_element(name, role_attr.as_deref(), &label);
+    // A box the page made clickable (a colored square, a card, a board
+    // cell, an icon) is a region when Chrome reports a click listener on
+    // it, or when a click hint confirms it.
+    let plain_box = !svg_shape && !surface && !drag_marked && !kept && is_box(name);
+    let listener_box = plain_box && listener;
+    let hint_box = plain_box && !listener;
+    if !svg_shape && !surface && !drag_marked && !plain_box && !kept {
         return None;
     }
     // Named like a button, from its content (text in child elements); a
-    // box with none falls back to its `title`, then its inline background
-    // colour (a colored square).
-    if hint_box {
-        label = Some(subtree_text(node))
+    // box with none falls back to its `title`, then the words of its class or
+    // id ("trash", "open search"), then its inline background colour (a
+    // colored square).
+    let mut named_by_markup = false;
+    let mut from_markup = |attributes: &std::collections::BTreeMap<String, String>| {
+        let words = markup_words(attributes);
+        named_by_markup = words.is_some();
+        words
+    };
+    if plain_box && label.is_empty() {
+        label = Some(subtree_text(node, hidden))
             .filter(|text| !text.is_empty())
-            .or_else(|| {
-                attributes
-                    .get("title")
-                    .map(|t| t.trim().to_owned())
-                    .filter(|t| !t.is_empty())
-            })
+            .or_else(|| attribute_text(&attributes, "title"))
+            .or_else(|| from_markup(&attributes))
             .or_else(|| inline_style(&attributes, "background-color"))
+            .unwrap_or_default();
+    }
+    // An icon-only control (a link or button with no text) is named by its
+    // title, alt text, or markup words. Form fields are named by their own
+    // labels in the accessibility tree.
+    if kept && label.is_empty() && names_from_markup(name) {
+        label = attribute_text(&attributes, "title")
+            .or_else(|| attribute_text(&attributes, "alt"))
+            .or_else(|| from_markup(&attributes))
             .unwrap_or_default();
     }
     let role = if svg_shape || surface {
@@ -441,10 +542,13 @@ fn element_from(node: &Value) -> Option<DomElement> {
         .and_then(|raw| raw.parse::<u32>().ok());
     let mut actions = dom_actions(name, role);
     let marked_clickable = attribute_click_hint(&attributes);
-    if svg_shape || surface || marked_clickable {
+    if svg_shape || marked_clickable || listener {
         add_click(&mut actions);
     }
-    if surface {
+    // A surface takes point clicks only with click evidence: a display-only
+    // canvas (a chart, a visualiser) is not a target. A pointer cursor it
+    // sets itself also counts, in observe.
+    if surface && (marked_clickable || listener) {
         actions.push(Action::Point);
     }
     if opens_on_hover(&attributes, role) && !actions.contains(&Action::Hover) {
@@ -454,6 +558,7 @@ fn element_from(node: &Value) -> Option<DomElement> {
         add_drag(&mut actions);
     }
     let needs_hint = hint_box && !marked_clickable;
+    debug_assert!(!(listener_box && needs_hint));
     Some(DomElement {
         node_id,
         backend_node_id,
@@ -467,6 +572,8 @@ fn element_from(node: &Value) -> Option<DomElement> {
         ancestors: Vec::new(),
         hu_k,
         needs_hint,
+        surface,
+        named_by_markup,
     })
 }
 
@@ -500,11 +607,108 @@ fn surface_label(node: &Value, name: &str, aria: Option<String>) -> String {
         .unwrap_or_else(|| if name == "svg" { "drawing" } else { "canvas" }.to_owned())
 }
 
-fn is_textual(name: &str) -> bool {
+/// Plain elements a page commonly makes clickable by script: text boxes,
+/// table cells and rows, and inline icon tags. Mirrored by `BOXES` in the
+/// compact walk, which collects their evidence.
+fn is_box(name: &str) -> bool {
     matches!(
         name.to_ascii_uppercase().as_str(),
-        "LABEL" | "SPAN" | "P" | "DIV" | "LI"
+        "LABEL"
+            | "SPAN"
+            | "P"
+            | "DIV"
+            | "LI"
+            | "TD"
+            | "TH"
+            | "TR"
+            | "I"
+            | "B"
+            | "EM"
+            | "STRONG"
+            | "SMALL"
+            | "FIGURE"
+            | "SECTION"
+            | "ARTICLE"
     )
+}
+
+/// Kept controls whose empty label may come from markup: links, buttons,
+/// images, and anything else that is not a form field.
+fn names_from_markup(name: &str) -> bool {
+    !matches!(
+        name.to_ascii_uppercase().as_str(),
+        "INPUT" | "TEXTAREA" | "SELECT" | "OPTION"
+    )
+}
+
+/// One attribute's trimmed value, when it is not blank.
+fn attribute_text(
+    attributes: &std::collections::BTreeMap<String, String>,
+    name: &str,
+) -> Option<String> {
+    attributes
+        .get(name)
+        .map(|t| t.trim().to_owned())
+        .filter(|t| !t.is_empty())
+}
+
+/// Class-name words that say how an element looks or where it sits, not
+/// what it does.
+const LAYOUT_WORDS: [&str; 26] = [
+    "active",
+    "block",
+    "clearfix",
+    "col",
+    "container",
+    "disabled",
+    "fa",
+    "fas",
+    "far",
+    "flex",
+    "float",
+    "glyphicon",
+    "grid",
+    "hidden",
+    "icon",
+    "icons",
+    "inline",
+    "inner",
+    "js",
+    "left",
+    "outer",
+    "right",
+    "row",
+    "selected",
+    "ui",
+    "wrapper",
+];
+/// Most markup words in a name.
+const MARKUP_WORDS_MAX: usize = 3;
+
+/// An element's own name in markup: the words of its `class`, else of its
+/// `id` (`fa fa-trash` → "trash", `mark-o` → "mark o"). Words are letters
+/// only, at most 20 long, without layout words.
+fn markup_words(attributes: &std::collections::BTreeMap<String, String>) -> Option<String> {
+    let words = |raw: &str| -> Option<String> {
+        let mut out: Vec<String> = Vec::new();
+        for word in raw
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .map(str::to_ascii_lowercase)
+        {
+            let plain =
+                (1..=20).contains(&word.len()) && word.chars().all(|c| c.is_ascii_alphabetic());
+            if plain && !LAYOUT_WORDS.contains(&word.as_str()) && !out.contains(&word) {
+                out.push(word);
+            }
+            if out.len() == MARKUP_WORDS_MAX {
+                break;
+            }
+        }
+        (!out.is_empty()).then(|| out.join(" "))
+    };
+    ["class", "id"]
+        .into_iter()
+        .find_map(|key| attributes.get(key).and_then(|raw| words(raw)))
 }
 
 /// What a shape is called: its `<title>`, `aria-label`, its own text (SVG
@@ -604,8 +808,9 @@ fn drag_markup(attributes: &std::collections::BTreeMap<String, String>) -> bool 
 /// Longest label taken from an element's descendants.
 const SUBTREE_TEXT_MAX_CHARS: usize = 80;
 
-/// All text under `node`, in document order, whitespace folded and capped.
-fn subtree_text(node: &Value) -> String {
+/// All shown text under `node`, in document order, whitespace folded and
+/// capped. Subtrees in `hidden` (not rendered: `display: none`) are skipped.
+fn subtree_text(node: &Value, hidden: &BTreeSet<u32>) -> String {
     let mut parts: Vec<&str> = Vec::new();
     let mut seen = 0usize;
     let mut stack: Vec<&Value> = vec![node];
@@ -622,6 +827,9 @@ fn subtree_text(node: &Value) -> String {
         }
         let name = n.get("nodeName").and_then(Value::as_str).unwrap_or("");
         if name.eq_ignore_ascii_case("SCRIPT") || name.eq_ignore_ascii_case("STYLE") {
+            continue;
+        }
+        if hu_k_of(n).is_some_and(|k| hidden.contains(&k)) {
             continue;
         }
         if let Some(children) = n.get("children").and_then(Value::as_array) {
@@ -831,6 +1039,17 @@ fn direct_text(node: &Value) -> String {
     parts.join(" ")
 }
 
+/// The node's `data-hu-k`, read without building its attribute map.
+fn hu_k_of(node: &Value) -> Option<u32> {
+    let attributes = node.get("attributes").and_then(Value::as_array)?;
+    attributes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .find(|[name, _]| name.as_str() == Some(crate::compact::HU_K_ATTR))
+        .and_then(|[_, value]| value.as_str()?.parse().ok())
+}
+
 fn attr_map(node: &Value) -> std::collections::BTreeMap<String, String> {
     let mut map = std::collections::BTreeMap::new();
     let Some(attributes) = node.get("attributes").and_then(Value::as_array) else {
@@ -1027,7 +1246,8 @@ mod pierce_tests {
         assert_eq!(
             shapes,
             [
-                (2, "drawing", Role::Image, true),
+                // A bare svg root has no click evidence: no click, no points.
+                (2, "drawing", Role::Image, false),
                 (10, "red circle", Role::Image, true),
                 (11, "blue rect", Role::Image, true),
                 (12, "Triangle", Role::Image, true),
@@ -1043,7 +1263,7 @@ mod pierce_tests {
           "children": [
             {"nodeId": 10, "backendNodeId": 10, "nodeType": 1, "nodeName": "DIV", "attributes": ["onclick", "pick()", "style", "background-color: red;"]},
             {"nodeId": 20, "backendNodeId": 20, "nodeType": 1, "nodeName": "SPAN", "attributes": ["style", "background-color: green"]},
-            {"nodeId": 30, "backendNodeId": 30, "nodeType": 1, "nodeName": "SECTION", "attributes": []},
+            {"nodeId": 30, "backendNodeId": 30, "nodeType": 1, "nodeName": "UL", "attributes": []},
             {"nodeId": 40, "backendNodeId": 40, "nodeType": 1, "nodeName": "DIV", "attributes": [],
              "children": [
                {"nodeId": 41, "backendNodeId": 41, "nodeType": 1, "nodeName": "SPAN", "attributes": [],
@@ -1075,8 +1295,196 @@ mod pierce_tests {
             pending,
             [(20, "green"), (40, "Alexina Lunch?"), (50, "Search")],
             "waits for a compact hint, named by content, title, or color; \
-             non-textual tags never"
+             tags that are not boxes never"
         );
+    }
+
+    #[test]
+    fn a_box_with_a_click_listener_is_kept_and_named_by_its_markup() {
+        // Board cells, icon spans, and a table cell whose handlers were added
+        // by script: markup shows nothing; Chrome's snapshot does.
+        let json = r##"{"root": {"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
+          "children": [
+            {"nodeId": 10, "backendNodeId": 10, "nodeType": 1, "nodeName": "SPAN", "attributes": ["id", "ttt-0"]},
+            {"nodeId": 20, "backendNodeId": 20, "nodeType": 1, "nodeName": "SPAN", "attributes": ["class", "reply"]},
+            {"nodeId": 30, "backendNodeId": 30, "nodeType": 1, "nodeName": "I", "attributes": ["class", "fa fa-trash"]},
+            {"nodeId": 40, "backendNodeId": 40, "nodeType": 1, "nodeName": "TD", "attributes": [],
+             "children": [{"nodeId": 41, "backendNodeId": 41, "nodeType": 3, "nodeName": "#text", "nodeValue": "15"}]},
+            {"nodeId": 50, "backendNodeId": 50, "nodeType": 1, "nodeName": "SPAN", "attributes": ["class", "like"]},
+            {"nodeId": 60, "backendNodeId": 60, "nodeType": 1, "nodeName": "UL", "attributes": ["class", "menu"]}
+          ]}}"##;
+        let listeners = BTreeSet::from([10, 20, 30, 40, 60]);
+        let doc = dom_document_with(json, &listeners, &BTreeSet::new()).unwrap();
+        let kept: Vec<(i64, &str, bool)> = doc
+            .elements
+            .iter()
+            .map(|e| {
+                (
+                    e.node_id,
+                    e.label.as_str(),
+                    e.actions.contains(&Action::Click),
+                )
+            })
+            .collect();
+        assert_eq!(
+            kept,
+            [
+                (10, "ttt", true),
+                (20, "reply", true),
+                (30, "trash", true),
+                (40, "15", true)
+            ],
+            "listener boxes are kept with CLICK; a list container is not a box"
+        );
+        let pending: Vec<i64> = doc.hint_boxes.iter().map(|e| e.node_id).collect();
+        assert_eq!(pending, [50], "no listener: still waits for a compact hint");
+    }
+
+    #[test]
+    fn a_markup_named_icon_carries_its_rows_text() {
+        let row = |id: i64, who: &str| {
+            format!(
+                r##"{{"nodeId": {id}, "backendNodeId": {id}, "nodeType": 1, "nodeName": "DIV", "attributes": ["class", "post"],
+                  "children": [
+                    {{"nodeId": {a}, "backendNodeId": {a}, "nodeType": 1, "nodeName": "B", "attributes": [],
+                      "children": [{{"nodeId": {t}, "backendNodeId": {t}, "nodeType": 3, "nodeName": "#text", "nodeValue": "{who}"}}]}},
+                    {{"nodeId": {c}, "backendNodeId": {c}, "nodeType": 1, "nodeName": "DIV", "attributes": ["class", "controls"],
+                      "children": [{{"nodeId": {i}, "backendNodeId": {i}, "nodeType": 1, "nodeName": "SPAN", "attributes": ["class", "more"]}}]}}
+                  ]}}"##,
+                a = id + 1,
+                t = id + 2,
+                c = id + 3,
+                i = id + 4
+            )
+        };
+        let json = format!(
+            r##"{{"root": {{"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document", "children": [{}, {}]}}}}"##,
+            row(10, "Gabie @cierra"),
+            row(20, "Conner @a")
+        );
+        let doc = dom_document_with(&json, &BTreeSet::from([14, 24]), &BTreeSet::new()).unwrap();
+        let icons: Vec<(i64, &str)> = doc
+            .elements
+            .iter()
+            .filter(|e| e.named_by_markup)
+            .map(|e| (e.node_id, e.label.as_str()))
+            .collect();
+        assert_eq!(
+            icons,
+            [(14, "more · Gabie @cierra"), (24, "more · Conner @a")],
+            "the nearest ancestor with text says which row"
+        );
+    }
+
+    #[test]
+    fn text_that_is_not_rendered_names_nothing() {
+        // A collapsed menu inside the row: its items are display:none.
+        let json = r##"{"root": {"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
+          "children": [{"nodeId": 2, "backendNodeId": 2, "nodeType": 1, "nodeName": "DIV", "attributes": [],
+            "children": [
+              {"nodeId": 3, "backendNodeId": 3, "nodeType": 1, "nodeName": "SPAN", "attributes": ["class", "more"]},
+              {"nodeId": 4, "backendNodeId": 4, "nodeType": 1, "nodeName": "UL", "attributes": ["data-hu-k", "7"],
+               "children": [{"nodeId": 5, "backendNodeId": 5, "nodeType": 3, "nodeName": "#text", "nodeValue": "Copy link"}]},
+              {"nodeId": 6, "backendNodeId": 6, "nodeType": 3, "nodeName": "#text", "nodeValue": "Conner @a"}
+            ]}]}}"##;
+        let doc = dom_document_with(json, &BTreeSet::from([3]), &BTreeSet::from([7])).unwrap();
+        let icon = doc.elements.iter().find(|e| e.node_id == 3).unwrap();
+        assert_eq!(icon.label, "more · Conner @a");
+    }
+
+    #[test]
+    fn an_icon_only_link_is_named_by_title_alt_or_markup_words() {
+        let json = r##"{"root": {"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
+          "children": [
+            {"nodeId": 10, "backendNodeId": 10, "nodeType": 1, "nodeName": "A", "attributes": ["href", "#", "class", "icon star-outline"]},
+            {"nodeId": 20, "backendNodeId": 20, "nodeType": 1, "nodeName": "BUTTON", "attributes": ["title", "Close"]},
+            {"nodeId": 30, "backendNodeId": 30, "nodeType": 1, "nodeName": "IMG", "attributes": ["alt", "Logo", "class", "brand"]},
+            {"nodeId": 40, "backendNodeId": 40, "nodeType": 1, "nodeName": "INPUT", "attributes": ["class", "search-box"]}
+          ]}}"##;
+        let doc = dom_document(json).unwrap();
+        let labels: Vec<(i64, &str)> = doc
+            .elements
+            .iter()
+            .map(|e| (e.node_id, e.label.as_str()))
+            .collect();
+        assert_eq!(
+            labels,
+            [(10, "star outline"), (20, "Close"), (30, "Logo"), (40, "")],
+            "form fields keep their accessibility label"
+        );
+    }
+
+    #[test]
+    fn a_canvas_claims_points_only_with_click_evidence() {
+        let json = r##"{"root": {"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
+          "children": [
+            {"nodeId": 10, "backendNodeId": 10, "nodeType": 1, "nodeName": "CANVAS", "attributes": ["id", "click-canvas"]},
+            {"nodeId": 20, "backendNodeId": 20, "nodeType": 1, "nodeName": "CANVAS", "attributes": []},
+            {"nodeId": 30, "backendNodeId": 30, "nodeType": 1, "nodeName": "CANVAS", "attributes": ["tabindex", "0"]}
+          ]}}"##;
+        let doc = dom_document_with(json, &BTreeSet::from([20]), &BTreeSet::new()).unwrap();
+        let points: Vec<(i64, bool, bool)> = doc
+            .elements
+            .iter()
+            .map(|e| {
+                (
+                    e.node_id,
+                    e.actions.contains(&Action::Click),
+                    e.actions.contains(&Action::Point),
+                )
+            })
+            .collect();
+        assert_eq!(
+            points,
+            [(10, false, false), (20, true, true), (30, true, true)],
+            "a display-only canvas is not a target"
+        );
+        assert!(doc.elements.iter().all(|e| e.surface));
+    }
+
+    #[test]
+    fn markup_words_skip_layout_words_digits_and_repeats() {
+        let words = |pairs: &[(&str, &str)]| {
+            let attributes = pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect();
+            markup_words(&attributes)
+        };
+        assert_eq!(words(&[("class", "fa fa-trash")]).as_deref(), Some("trash"));
+        assert_eq!(
+            words(&[("id", "open-search")]).as_deref(),
+            Some("open search")
+        );
+        assert_eq!(
+            words(&[("class", "hidden active"), ("id", "next_page")]).as_deref(),
+            Some("next page"),
+            "a class of only layout words falls through to the id"
+        );
+        assert_eq!(
+            words(&[("class", "btn btn btn-x2 col-6")]).as_deref(),
+            Some("btn")
+        );
+        assert_eq!(
+            words(&[("class", "one two three four")]).as_deref(),
+            Some("one two three")
+        );
+        assert_eq!(words(&[("class", "x9 42")]), None);
+    }
+
+    #[test]
+    fn clickable_backends_reads_every_snapshot_document() {
+        let snapshot = r#"{"documents": [
+            {"nodes": {"backendNodeId": [1, 5, 9, 12], "isClickable": {"index": [1, 3]}}},
+            {"nodes": {"backendNodeId": [40, 41], "isClickable": {"index": [0, 7]}}},
+            {"nodes": {"backendNodeId": [50]}}
+          ], "strings": []}"#;
+        assert_eq!(
+            clickable_backends(snapshot).unwrap(),
+            BTreeSet::from([5, 12, 40]),
+            "an index past the node list is ignored"
+        );
+        assert!(clickable_backends(r#"{"strings": []}"#).is_err());
     }
 
     #[test]

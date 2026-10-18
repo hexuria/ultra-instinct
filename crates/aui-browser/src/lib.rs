@@ -887,7 +887,7 @@ mod compact_observe {
     }
 
     #[test]
-    fn compact_observe_uses_five_calls_total() {
+    fn compact_observe_uses_six_calls_total() {
         let script = ScriptBuilder::new().observe_compact(&page()).to_json();
         let mut session = BrowserSession::new(ReplayTransport::parse(&script).unwrap());
         let manifold = session.observe().unwrap();
@@ -899,10 +899,70 @@ mod compact_observe {
                 "Runtime.evaluate",
                 "Page.getLayoutMetrics",
                 "DOM.getDocument",
+                "DOMSnapshot.captureSnapshot",
                 "Accessibility.getFullAXTree",
                 "Page.getNavigationHistory",
             ]
         );
+    }
+
+    #[test]
+    fn a_script_listener_makes_a_box_clickable_and_a_canvas_a_surface() {
+        let cell = |node, backend, x| {
+            DomSpec::button(node, backend, "", (x, 100.0, 40.0, 40.0))
+                .with_tag("SPAN")
+                .with_attr("id", &format!("cell-{backend}"))
+        };
+        let page = PageSpec::new(
+            vec![
+                cell(10, 100, 10.0),
+                cell(20, 200, 60.0),
+                DomSpec::button(30, 300, "", (200.0, 0.0, 160.0, 210.0)).with_tag("CANVAS"),
+                DomSpec::button(40, 400, "", (400.0, 0.0, 160.0, 210.0)).with_tag("CANVAS"),
+            ],
+            vec![],
+            "https://example.test/",
+            "Board",
+        )
+        .listener(100)
+        .listener(400);
+        let script = ScriptBuilder::new().observe_compact(&page).to_json();
+        let mut session = BrowserSession::new(ReplayTransport::parse(&script).unwrap());
+        let manifold = session.observe().unwrap();
+        let cell = manifold.get_str("n100").expect("listener cell kept");
+        assert_eq!(cell.label(), "cell");
+        assert!(cell.actions().contains(&aui_core::Action::Click));
+        assert!(
+            manifold.get_str("n200").is_none(),
+            "no listener, no hint: no region"
+        );
+        let points = |id: &str| {
+            manifold
+                .get_str(id)
+                .is_some_and(|r| r.actions().contains(&aui_core::Action::Point))
+        };
+        assert!(
+            !points("n300"),
+            "a display-only canvas takes no point clicks"
+        );
+        assert!(points("n400"), "a canvas with a click listener does");
+    }
+
+    #[test]
+    fn a_canvas_with_its_own_pointer_cursor_is_a_surface() {
+        let page = PageSpec::new(
+            vec![DomSpec::button(30, 300, "", (200.0, 0.0, 160.0, 210.0))
+                .with_tag("CANVAS")
+                .with_compact_state(serde_json::json!({"ck": 1}))],
+            vec![],
+            "https://example.test/",
+            "Draw",
+        );
+        let script = ScriptBuilder::new().observe_compact(&page).to_json();
+        let mut session = BrowserSession::new(ReplayTransport::parse(&script).unwrap());
+        let region = session.observe().unwrap().get_str("n300").unwrap().clone();
+        assert!(region.actions().contains(&aui_core::Action::Click));
+        assert!(region.actions().contains(&aui_core::Action::Point));
     }
 
     #[test]
@@ -1280,7 +1340,7 @@ mod compact_observe {
             .unwrap()
             .retain(|attr| attr != &serde_json::json!("data-hu-k"));
         calls.insert(
-            4,
+            5,
             serde_json::json!({
                 "method": "DOM.getBoxModel",
                 "params": {"nodeId": 20},
@@ -1288,7 +1348,7 @@ mod compact_observe {
             }),
         );
         calls.insert(
-            5,
+            6,
             serde_json::json!({
                 "method": "DOM.getBoxModel",
                 "params": {"backendNodeId": 200},
@@ -1296,11 +1356,11 @@ mod compact_observe {
             }),
         );
         calls.insert(
-            7,
+            8,
             serde_json::json!({"method": "CSS.enable", "params": {}, "result": {}}),
         );
         calls.insert(
-            8,
+            9,
             serde_json::json!({
                 "method": "CSS.getComputedStyleForNode",
                 "params": {"nodeId": 20},
@@ -1318,7 +1378,7 @@ mod compact_observe {
             }),
         );
         calls.insert(
-            9,
+            10,
             serde_json::json!({
                 "method": "DOM.getNodeForLocation",
                 "params": {"x": 480, "y": 216},
@@ -1331,7 +1391,7 @@ mod compact_observe {
         assert!(manifold.get_str("n100").is_some());
         assert!(manifold.get_str("n200").is_some());
         let methods = session.transport().logged_methods();
-        assert_eq!(methods.len(), 10);
+        assert_eq!(methods.len(), 11);
         for method in [
             "DOM.getBoxModel",
             "CSS.getComputedStyleForNode",

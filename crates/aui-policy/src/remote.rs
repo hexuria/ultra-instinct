@@ -142,7 +142,10 @@ pub fn request_json_with_evidence(
             if let Some(bounds) = a.bounds() {
                 action["box"] = json!(bounds);
             }
-            if let Some(near) = a.near_text() {
+            if let Some(near) = a
+                .near_text()
+                .filter(|near| !echoes_goal(near, goal.as_str()))
+            {
                 action["near_text"] = json!(near);
             }
             if let Some(dest) = a.dest() {
@@ -202,6 +205,30 @@ pub fn request_json_with_evidence(
         });
     }
     request.to_string()
+}
+
+/// Fewest words a near text has before it can echo the goal: a short label
+/// ("Date:") may share its words with the goal and still name the field.
+const ECHO_MIN_WORDS: usize = 3;
+
+/// The near text is the goal sentence shown on the page (an instruction
+/// line beside an unnamed field): at least [`ECHO_MIN_WORDS`] words, four
+/// in five of them goal words. It names nothing, and it reads as a match
+/// for every unnamed target near it, so it is not sent.
+fn echoes_goal(near: &str, goal: &str) -> bool {
+    let words = |text: &str| -> Vec<String> {
+        text.split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .map(str::to_lowercase)
+            .collect()
+    };
+    let near = words(near);
+    if near.len() < ECHO_MIN_WORDS {
+        return false;
+    }
+    let goal: std::collections::BTreeSet<String> = words(goal).into_iter().collect();
+    let shared = near.iter().filter(|w| goal.contains(*w)).count();
+    shared * 5 >= near.len() * 4
 }
 
 /// Parse and validate a reply against the offered space.
@@ -423,6 +450,22 @@ mod tests {
             .unwrap()
             .iter()
             .any(|a| a["id"] == "CLICK:a"));
+    }
+
+    #[test]
+    fn near_text_that_repeats_the_goal_is_not_evidence() {
+        let goal = "Enter 03/07/2016 as the date and hit submit.";
+        assert!(echoes_goal("Enter as the date and hit submit.", goal));
+        assert!(echoes_goal("Select Randee>Tisha", "Select Randee>Tisha"));
+        assert!(!echoes_goal("Date:", goal), "a short label names the field");
+        assert!(
+            !echoes_goal("6 + 0 =", "Solve the math problem"),
+            "page content"
+        );
+        assert!(
+            !echoes_goal("Arrival date of the flight", goal),
+            "one goal word in five is not an echo"
+        );
     }
 
     #[test]

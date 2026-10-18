@@ -34,7 +34,7 @@
 //! frame) is dropped by `extract` and those elements fall back per node.
 //! A walk that throws (hostile page globals) falls back entirely.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -50,7 +50,9 @@ use crate::error::BrowserError;
 /// `style_from_computed` consumes, and `h` the `data-hu-k` of the element
 /// under the content center (null when nothing is there). `s`, `h`, and
 /// control state (`v`, `c`, `x`, `sel`, `o`, `it`, `hr`) and the click hint `ck` are collected only for boxed
-/// elements that can become regions (the JS mirror of `extract::keep_element`).
+/// elements that can become regions: controls, roles, surfaces, shapes,
+/// drag-marked elements, and every plain box (`extract::is_box`), since a
+/// box's click listener is read after the walk.
 /// An absent `s` or `h` means "not collected" and the consumer falls back to
 /// the per-node call.
 pub(crate) const COMPACT_JS: &str = r#"(function(){
@@ -142,13 +144,8 @@ function hitAt(doc,tx,ty){
 // get style and hit evidence. Everything else carries a rect only; a region
 // whose element lacks evidence takes the per-node fallback.
 var KEEP={BUTTON:1,A:1,INPUT:1,TEXTAREA:1,SELECT:1,OPTION:1,NAV:1,IMG:1,H1:1,H2:1,H3:1,H4:1,H5:1,H6:1,DIALOG:1};
-var TEXTUAL={LABEL:1,SPAN:1,P:1,DIV:1,LI:1};
-function directText(el){
-  for(var c=el.firstChild;c;c=c.nextSibling){
-    if(c.nodeType===3&&c.nodeValue&&c.nodeValue.trim()!=='')return true;
-  }
-  return false;
-}
+// Mirrors `extract::is_box`.
+var BOXES={LABEL:1,SPAN:1,P:1,DIV:1,LI:1,TD:1,TH:1,TR:1,I:1,B:1,EM:1,STRONG:1,SMALL:1,FIGURE:1,SECTION:1,ARTICLE:1};
 // A script-made click target: an `onclick` handler property, or a pointer
 // cursor the element sets itself (not one inherited from a clickable
 // ancestor, which already owns the click).
@@ -194,16 +191,17 @@ function candidate(el){
   if(dragMarked(el))return true;
   if(el.hasAttribute('role'))return true;
   if(KEEP[name])return true;
-  if(!TEXTUAL[name])return false;
-  var aria=el.getAttribute('aria-label');
-  // A text-less box counts only with a click hint (extract::needs_hint).
-  return (aria!==null&&aria.trim()!=='')||directText(el)||clickHint(el)||scrollable(el);
+  // Every box: whether Chrome reports a click listener on it is known only
+  // after this walk (DOMSnapshot), so each carries its evidence.
+  return !!BOXES[name];
 }
 function visit(el,doc,off){
   if(el.nodeType!==1)return;
   var k=next++;
   el.setAttribute(ATTR,String(k));
   var rec={r:null};
+  // Not rendered at all (display:none here or above): its text names nothing.
+  if(el.getClientRects&&el.getClientRects().length===0)rec.nr=1;
   var r=contentRect(el,off);
   if(r){
     rec.r=r;
@@ -294,6 +292,8 @@ pub(crate) struct CompactNode {
     /// The element sets a move / grab cursor itself (not inherited from its
     /// parent): it can be dragged.
     pub drag_hint: bool,
+    /// Not rendered at all: no client rects (`display: none`).
+    pub unrendered: bool,
 }
 
 /// Compact hit-test evidence for one element.
@@ -317,6 +317,16 @@ pub(crate) struct CompactSnapshot {
 impl CompactSnapshot {
     pub fn node(&self, k: u32) -> Option<&CompactNode> {
         self.nodes.get(&k)
+    }
+
+    /// Keys of elements that are not rendered at all (`display: none` on
+    /// them or an ancestor). A zero-size box is still rendered.
+    pub fn unrendered(&self) -> BTreeSet<u32> {
+        self.nodes
+            .iter()
+            .filter(|(_, node)| node.unrendered)
+            .map(|(k, _)| *k)
+            .collect()
     }
 }
 
@@ -387,6 +397,7 @@ pub(crate) fn parse(eval_result_json: &str) -> Result<CompactSnapshot, BrowserEr
         let click_hint = record.get("ck").is_some_and(|ck| ck.as_i64() == Some(1));
         let scrollable = record.get("sc").is_some_and(|sc| sc.as_i64() == Some(1));
         let drag_hint = record.get("dg").is_some_and(|dg| dg.as_i64() == Some(1));
+        let unrendered = record.get("nr").is_some_and(|nr| nr.as_i64() == Some(1));
         out.nodes.insert(
             k,
             CompactNode {
@@ -397,6 +408,7 @@ pub(crate) fn parse(eval_result_json: &str) -> Result<CompactSnapshot, BrowserEr
                 click_hint,
                 scrollable,
                 drag_hint,
+                unrendered,
             },
         );
     }

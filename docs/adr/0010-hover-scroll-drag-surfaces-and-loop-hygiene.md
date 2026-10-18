@@ -78,6 +78,8 @@ benchmark and suite names there.
   one.
 - Handlers bound with `addEventListener` that show no cursor and no markup
   stay unseen. That is deliberate: guessing would be tuning to a benchmark.
+  (Superseded by ADR 0011: Chrome's own `isClickable` record is read, not
+  guessed.)
 - Drawing (dragging between two surface points) is not offered, nor is
   dragging a shape to a surface point.
 - Instinct never picks HOVER, SCROLL_IN or DRAG: those are remote-only kinds

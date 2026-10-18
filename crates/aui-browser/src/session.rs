@@ -172,12 +172,26 @@ impl<T: CdpTransport> BrowserSession<T> {
         }
     }
 
+    /// Backend ids of nodes Chrome reports as responding to clicks, from one
+    /// `DOMSnapshot.captureSnapshot`: handlers a page adds by script are
+    /// invisible in markup and styles. Empty when the transport cannot run
+    /// it (a replay script that never scripted the step, a protocol error).
+    fn click_listeners(&mut self) -> Result<BTreeSet<i64>, BrowserError> {
+        let params = json!({"computedStyles": []}).to_string();
+        match self.call("DOMSnapshot.captureSnapshot", &params) {
+            Ok(body) => extract::clickable_backends(&body),
+            Err(BrowserError::Cdp(CdpError::NoScriptedResponse { .. }))
+            | Err(BrowserError::Cdp(CdpError::Protocol { .. })) => Ok(BTreeSet::new()),
+            Err(other) => Err(other),
+        }
+    }
+
     /// Fuse DOM + accessibility into a fresh manifold.
     ///
-    /// Cost: one `Runtime.evaluate` running the compact walk plus four
+    /// Cost: one `Runtime.evaluate` running the compact walk plus five
     /// constant calls (`Page.getLayoutMetrics`, `DOM.getDocument`,
-    /// `Accessibility.getFullAXTree`, `Page.getNavigationHistory`),
-    /// independent of page size. Elements the walk could not tag —
+    /// `DOMSnapshot.captureSnapshot`, `Accessibility.getFullAXTree`,
+    /// `Page.getNavigationHistory`), independent of page size. Elements the walk could not tag —
     /// cross-origin iframe content, closed shadow roots, or every element
     /// when the eval is unavailable — keep the per-node fallback
     /// (`DOM.getBoxModel`, `CSS.getComputedStyleForNode`,
@@ -193,7 +207,12 @@ impl<T: CdpTransport> BrowserSession<T> {
             "DOM.getDocument",
             &json!({"depth": -1, "pierce": true}).to_string(),
         )?;
-        let dom = extract::dom_document(&document)?;
+        let listeners = self.click_listeners()?;
+        let hidden = compact
+            .as_ref()
+            .map(compact::CompactSnapshot::unrendered)
+            .unwrap_or_default();
+        let dom = extract::dom_document_with(&document, &listeners, &hidden)?;
         let ax_tree = self.call("Accessibility.getFullAXTree", &json!({}).to_string())?;
         let ax_nodes = extract::ax_elements(&ax_tree)?;
 
@@ -227,6 +246,9 @@ impl<T: CdpTransport> BrowserSession<T> {
                 // a pointer cursor) are offered like links.
                 if node.is_some_and(|n| n.click_hint) {
                     extract::add_click(&mut raw.actions);
+                    if element.surface && !raw.actions.contains(&Action::Point) {
+                        raw.actions.push(Action::Point);
+                    }
                 }
                 // A box whose own content scrolls can be scrolled in place.
                 if node.is_some_and(|n| n.scrollable) && !raw.actions.contains(&Action::Scroll) {

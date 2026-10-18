@@ -99,12 +99,16 @@ crate.
 >    options change from the first poll and stabilize; input is never
 >    re-dispatched. A plain element the page made clickable (an `onclick`
 >    attribute or handler property, `tabindex` ≥ 0, or a pointer cursor it
->    sets itself rather than inherits) is offered CLICK (ADR 0009). Also kept
+>    sets itself rather than inherits) is offered CLICK (ADR 0009), and so is
+>    a plain box Chrome reports `isClickable` (one `DOMSnapshot` call: listeners
+>    added by script, ADR 0011). Also kept
 >    (ADR 0010): SVG shapes (named by title / text / fill; not an icon inside
 >    a click control), `LI` with text,
 >    text-less boxes only with a click hint, `canvas` / `svg` surfaces (claim
->    `point`), scrollable boxes (claim `scroll`), popup owners (claim
->    `hover`), and drag-marked elements (claim `drag`). Observe
+>    `point` only with click evidence), scrollable boxes (claim `scroll`), popup owners (claim
+>    `hover`), and drag-marked elements (claim `drag`). Icon-only controls
+>    are named by title / alt / class or id words plus their row's rendered
+>    text; unrendered text names nothing. Observe
 >    also records control state (value, checked,
 >    expanded, select options) as evidence only: it is not in the region
 >    fingerprint, and password values are never read. Do not claim cross-origin

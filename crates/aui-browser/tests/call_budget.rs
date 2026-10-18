@@ -76,11 +76,12 @@ fn observe_small_page_stays_under_call_budget() {
     ));
     session.observe().unwrap();
     let calls = session.transport().calls;
-    // The scripted legacy path uses 25 calls; the unscripted compact
-    // Runtime.evaluate attempt adds one before falling back.
+    // The scripted legacy path uses 26 calls (25 plus the click-listener
+    // snapshot); the unscripted compact Runtime.evaluate attempt adds one
+    // before falling back.
     assert!(
-        calls == 26,
-        "observe issued {calls} CDP calls on a 5-control legacy page (expected 26)"
+        calls == 27,
+        "observe issued {calls} CDP calls on a 5-control legacy page (expected 27)"
     );
 }
 
@@ -91,11 +92,12 @@ fn observe_dense_page_stays_under_call_budget() {
     ));
     session.observe().unwrap();
     let calls = session.transport().calls;
-    // The scripted legacy path uses 205 calls; the unscripted compact
-    // Runtime.evaluate attempt adds one before falling back.
+    // The scripted legacy path uses 206 calls (205 plus the click-listener
+    // snapshot); the unscripted compact Runtime.evaluate attempt adds one
+    // before falling back.
     assert!(
-        calls == 206,
-        "observe issued {calls} CDP calls on a 50-control legacy page (expected 206)"
+        calls == 207,
+        "observe issued {calls} CDP calls on a 50-control legacy page (expected 207)"
     );
 }
 
@@ -104,13 +106,9 @@ fn observe_compact_call_count_is_independent_of_page_size() {
     let small_calls = compact_observe_calls(&small_page());
     let dense_calls = compact_observe_calls(&dense_page());
 
-    assert_eq!(
-        small_calls, 5,
-        "compact observe should use five fixed calls"
-    );
-    assert_eq!(
-        dense_calls, 5,
-        "compact observe should use five fixed calls"
-    );
+    // The walk, layout, document, click-listener snapshot, accessibility
+    // tree, and history.
+    assert_eq!(small_calls, 6, "compact observe should use six fixed calls");
+    assert_eq!(dense_calls, 6, "compact observe should use six fixed calls");
     assert_eq!(small_calls, dense_calls);
 }

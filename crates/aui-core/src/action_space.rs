@@ -259,6 +259,12 @@ impl ActionSpace {
     /// controls (`SCROLL_*`, `WAIT`, `DONE`, `BLOCKED`) are always offered.
     pub fn from_manifold(manifold: &InteractionManifold) -> Self {
         let mut actions = BTreeMap::new();
+        // A label several targets share ("Reply" under every message) does
+        // not say which one is meant: those targets carry near text too.
+        let mut label_count = BTreeMap::<&str, usize>::new();
+        for region in manifold.regions().filter(|r| region_is_viable_target(r)) {
+            *label_count.entry(region.label().trim()).or_default() += 1;
+        }
 
         for region in manifold.regions() {
             if !region_is_viable_target(region) {
@@ -276,8 +282,9 @@ impl ActionSpace {
                     continue;
                 }
                 let mut observed = target_action(kind, region);
-                if observed.label.trim().is_empty() {
-                    observed.near_text = near_text(manifold, region);
+                let label = observed.label.trim();
+                if label.is_empty() || label_count.get(label).is_some_and(|&n| n > 1) {
+                    observed.near_text = near_text(manifold, region, &label_count);
                 }
                 actions.insert(observed.id.clone(), observed);
             }
@@ -548,11 +555,19 @@ const NEAR_TEXT_MAX_CHARS: usize = 80;
 
 /// Observed text that names an unnamed target the way a sighted reader would
 /// read it: the parent's own text ("Date: [ ]"), else the nearest text to the
-/// left on the same row, else the nearest text directly above. Geometry only;
-/// `None` when no text is that close.
-fn near_text(manifold: &InteractionManifold, target: &InteractionRegion) -> Option<String> {
+/// left on the same row, else the nearest text directly above. Text several
+/// regions share (another "Reply") tells nothing apart and is skipped.
+/// Geometry only; `None` when no text is that close.
+fn near_text(
+    manifold: &InteractionManifold,
+    target: &InteractionRegion,
+    label_count: &BTreeMap<&str, usize>,
+) -> Option<String> {
     let named = |region: &InteractionRegion| {
-        region.id() != target.id() && !region.label().trim().is_empty()
+        let label = region.label().trim();
+        region.id() != target.id()
+            && !label.is_empty()
+            && label_count.get(label).is_none_or(|&n| n <= 1)
     };
     let parent = target
         .parent()
@@ -750,6 +765,31 @@ mod tests {
             Some([33, 55, 120, 15])
         );
         assert_eq!(space.get_str("DONE").unwrap().bounds(), None);
+    }
+
+    #[test]
+    fn targets_sharing_a_label_say_which_row_they_belong_to() {
+        let m = parse_fixture(
+            r#"
+            viewport w=800 h=600
+            region id=ana role=text label="Ana: lunch?" x=10 y=10 w=200 h=20 actions= sources=dom
+            region id=r1 role=button label="Reply" x=10 y=40 w=50 h=20 actions=click sources=dom
+            region id=f1 role=button label="Forward" x=70 y=40 w=60 h=20 actions=click sources=dom
+            region id=ben role=text label="Ben: notes" x=10 y=110 w=200 h=20 actions= sources=dom
+            region id=r2 role=button label="Reply" x=10 y=140 w=50 h=20 actions=click sources=dom
+            region id=f2 role=button label="Forward" x=70 y=140 w=60 h=20 actions=click sources=dom
+            "#,
+        )
+        .unwrap();
+        let space = ActionSpace::from_manifold(&m);
+        let near = |id: &str| space.get_str(id).unwrap().near_text().map(str::to_owned);
+        assert_eq!(near("CLICK:r1").as_deref(), Some("Ana: lunch?"));
+        assert_eq!(near("CLICK:r2").as_deref(), Some("Ben: notes"));
+        assert_eq!(
+            near("CLICK:f2").as_deref(),
+            Some("Ben: notes"),
+            "the Reply on its left is shared text, not a name"
+        );
     }
 
     #[test]

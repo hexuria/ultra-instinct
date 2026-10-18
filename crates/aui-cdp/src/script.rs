@@ -9,7 +9,7 @@
 //! DOM nodes use tags that observe always keeps (`BUTTON`, `A`, `INPUT`,
 //! `NAV`, `H1`), so the getBoxModel order is the document order.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{json, Value};
 
@@ -290,6 +290,9 @@ pub struct PageSpec {
     /// get a default static stacking style. Enables stacking-map fixtures
     /// without relying on hit-test overrides.
     pub style_overrides: BTreeMap<i64, Vec<(String, String)>>,
+    /// Backend ids `DOMSnapshot.captureSnapshot` reports `isClickable` (a
+    /// click listener added by script).
+    pub listeners: BTreeSet<i64>,
 }
 
 impl PageSpec {
@@ -351,7 +354,14 @@ impl PageSpec {
             },
             hit_overrides: BTreeMap::new(),
             style_overrides: BTreeMap::new(),
+            listeners: BTreeSet::new(),
         }
+    }
+
+    /// Chrome reports a click listener on `backend`.
+    pub fn listener(mut self, backend: i64) -> Self {
+        self.listeners.insert(backend);
+        self
     }
 
     /// Cover `target_backend`'s center with `hit_backend` (hit-test overlay).
@@ -400,6 +410,7 @@ impl ScriptBuilder {
                 "children": children
             }}),
         ));
+        self.calls.push(snapshot_call(page));
         let nodes: Vec<Value> = page.ax.iter().enumerate().map(ax_json).collect();
         self.calls.push(result(
             "Accessibility.getFullAXTree",
@@ -413,7 +424,9 @@ impl ScriptBuilder {
         // Non-kept hosts (iframe, unlabeled DIV, document wrappers) are walked
         // for descendants but must not consume a getBoxModel slot.
         for node in flat {
-            if dom_node_kept(node) && node.tag != "#document" && node.tag != "#document-fragment" {
+            let kept =
+                dom_node_kept(node) || (page.listeners.contains(&node.backend) && is_box(node.tag));
+            if kept && node.tag != "#document" && node.tag != "#document-fragment" {
                 self.calls.push(box_call(node.rect));
             }
         }
@@ -543,6 +556,7 @@ impl ScriptBuilder {
                 "children": children
             }}),
         ));
+        self.calls.push(snapshot_call(page));
         let ax_nodes: Vec<Value> = page.ax.iter().enumerate().map(ax_json).collect();
         self.calls.push(result(
             "Accessibility.getFullAXTree",
@@ -870,6 +884,49 @@ fn default_stacking_style() -> Vec<(String, String)> {
         ("will-change".into(), "auto".into()),
         ("pointer-events".into(), "auto".into()),
     ]
+}
+
+/// `DOMSnapshot.captureSnapshot` for `page`: one document listing every
+/// element backend, with `isClickable` on the page's listeners.
+fn snapshot_call(page: &PageSpec) -> Value {
+    let mut flat = Vec::new();
+    for node in &page.dom {
+        flatten(node, &mut flat);
+    }
+    let backends: Vec<i64> = flat.iter().map(|node| node.backend).collect();
+    let clickable: Vec<usize> = backends
+        .iter()
+        .enumerate()
+        .filter(|(_, backend)| page.listeners.contains(backend))
+        .map(|(i, _)| i)
+        .collect();
+    result(
+        "DOMSnapshot.captureSnapshot",
+        json!({"documents": [{"nodes": {"backendNodeId": backends, "isClickable": {"index": clickable}}}], "strings": []}),
+    )
+}
+
+/// Mirrors `extract::is_box` in aui-browser.
+fn is_box(tag: &str) -> bool {
+    matches!(
+        tag.to_ascii_uppercase().as_str(),
+        "LABEL"
+            | "SPAN"
+            | "P"
+            | "DIV"
+            | "LI"
+            | "TD"
+            | "TH"
+            | "TR"
+            | "I"
+            | "B"
+            | "EM"
+            | "STRONG"
+            | "SMALL"
+            | "FIGURE"
+            | "SECTION"
+            | "ARTICLE"
+    )
 }
 
 fn dom_node_kept(node: &DomSpec) -> bool {

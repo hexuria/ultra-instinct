@@ -2,4 +2,4 @@
 # says why; splitting the crate is usually the better answer.
 # Current usage: aui-browser 4927, aui-cdp 1853, every other crate < 3.1k (2026-10-06).
 default 6000
-aui-browser 6700 # owned per-agent CDP tab lifecycle
+aui-browser 7400 # owned per-agent CDP tab lifecycle; click-listener and label evidence (ADR 0011), most of it inline tests
