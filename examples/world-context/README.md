@@ -28,7 +28,7 @@ ULTRA_INSTINCT_MATCHER=hgra ./examples/world-context/smoke.sh
 ## Rank traces
 
 ```sh
-RUST_LOG=aui_resonance=debug ULTRA_INSTINCT_MATCHER=hgra ./examples/world-context/smoke.sh
+RUST_LOG=ultra_instinct_resonance=debug ULTRA_INSTINCT_MATCHER=hgra ./examples/world-context/smoke.sh
 ```
 
-Emits one `candidate` debug line per region (semantic, hypervector, total, …) and a `rank_top` summary. Off unless `RUST_LOG` enables `aui_resonance`.
+Emits one `candidate` debug line per region (semantic, hypervector, total, …) and a `rank_top` summary. Off unless `RUST_LOG` enables `ultra_instinct_resonance`.

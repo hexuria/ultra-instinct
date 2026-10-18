@@ -17,14 +17,14 @@ still exported.
 
 ## Decision
 
-1. **One executor boundary.** `aui_agent::execute_ticketed(browser,
+1. **One executor boundary.** `ultra_instinct_agent::execute_ticketed(browser,
    ledger, ticket, input)` is the only path from a ticket to page input. In
    order: ledger (one-shot) → input kind must equal `ticket.action` →
    **fresh observe** → `revalidate` (world fingerprint + target role / label /
    fingerprint) → hard gate on the fresh region → mark consumed **before**
    dispatch → dispatch to `ticket.target_id`. `BrowserRuntime::dispatch` is raw
    and documented as executor-only.
-2. **Hard gate, not ranking, on the agent path.** `aui_guard::gate`
+2. **Hard gate, not ranking, on the agent path.** `ultra_instinct_guard::gate`
    checks action claim, disabled, hidden / zero-area, occluded, front layer
    (behind an open dialog), offscreen, and issues an `ActionTicket` whose
    `action` is the real one (Click / Type / Select). No matcher, no float
@@ -86,7 +86,7 @@ still exported.
 Deleted (no constructor or reader anywhere in the workspace, MCP, CLI, bench,
 or examples):
 
-- `aui-protocol`: `ComputerTask`, `ComputerResult`, `Intent`,
+- `ultra-instinct-protocol`: `ComputerTask`, `ComputerResult`, `Intent`,
   `Constraints`, `ExpectedOutcome`, `FallbackReason`, `ReportedExecutor`,
   `ProtocolError::EmptyExpectedText`, and the unused `Request` enum.
   `contract.rs` → `values.rs` keeping `MatcherConfidence`, `ProtocolError`,
@@ -94,12 +94,12 @@ or examples):
 
 Deprecated (still reachable, kept to avoid breaking callers):
 
-- `aui_guard::consume_ticket` — not one-shot; use
+- `ultra_instinct_guard::consume_ticket` — not one-shot; use
   `consume_ticket_once` or `execute_ticketed`.
-- `aui_mcp::TOOL_ACT` / MCP + CLI `act` — alias of guard that never
+- `ultra_instinct_mcp::TOOL_ACT` / MCP + CLI `act` — alias of guard that never
   clicks; the historical bench arms A5/A6 still call it over MCP.
 
-Not deleted (still reachable): `aui-resonance` Weighted matcher and the
+Not deleted (still reachable): `ultra-instinct-resonance` Weighted matcher and the
 float guard thresholds — they back the MCP / CLI `guard`, `locate`, combo
 bench, and world-context tests. The agent path no longer touches them.
 `LoopPhase` / `LOOP_ORDER` — MCP `tool_for_phase` maps them.

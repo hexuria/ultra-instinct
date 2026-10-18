@@ -1,33 +1,34 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/aui-core",
-    "crates/aui-geometry",
-    "crates/aui-observe",
-    "crates/aui-resonance",
-    "crates/aui-cdp",
-    "crates/aui-browser",
-    "crates/aui-protocol",
-    "crates/aui-guard",
-    "crates/aui-policy",
-    "crates/aui-agent",
-    "crates/aui-mcp",
-    "crates/aui-remote",
-    "crates/aui-cli",
-    "crates/aui-dojo",
-    # Experimental. Not on the product path. Build with -p aui-hyper --features unused
-    # or via aui-resonance's `hgra` feature.
-    "experiments/hgra/aui-hyper",
+    "crates/ultra-instinct-core",
+    "crates/ultra-instinct-geometry",
+    "crates/ultra-instinct-observe",
+    "crates/ultra-instinct-resonance",
+    "crates/ultra-instinct-cdp",
+    "crates/ultra-instinct-browser",
+    "crates/ultra-instinct-protocol",
+    "crates/ultra-instinct-guard",
+    "crates/ultra-instinct-policy",
+    "crates/ultra-instinct-agent",
+    "crates/ultra-instinct-mcp",
+    "crates/ultra-instinct-remote",
+    "crates/ultra-instinct",
+    "crates/ultra-instinct-dojo",
+    # Experimental. Not on the product path. Build with -p ultra-instinct-hyper --features unused
+    # or via ultra-instinct-resonance's `hgra` feature.
+    "experiments/hgra/ultra-instinct-hyper",
 ]
 # Deleted from the product graph (see docs/DECISIONS.md product pivot):
-# aui-browser-use, aui-cua, aui-macos, aui-executor
+# ultra-instinct-browser-use, ultra-instinct-cua, ultra-instinct-macos, ultra-instinct-executor
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-publish = false
+publish = true
 rust-version = "1.99"
+repository = "https://github.com/hexuria/ultra-instinct"
 
 
 [workspace.dependencies]

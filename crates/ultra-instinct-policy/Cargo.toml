@@ -1,0 +1,26 @@
+[package]
+name = "ultra-instinct-policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Browser policy: Instinct finite decisions + optional escalation. Hard invalidity stays in guard."
+
+[features]
+default = []
+# Optional remote/Jev-shaped fallback. Not required to build or run Instinct-only agents.
+remote = ["dep:serde_json"]
+# Model-backed TextResolver for TYPE_TEXT / SELECT payloads. Injectable
+# `TextModel`; CI uses scripted models. Deterministic resolver stays default.
+model-text = ["dep:serde_json"]
+
+[dependencies]
+ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.0"}
+instinct-core = { workspace = true }
+instinct-text = { workspace = true }
+instinct-lexicon = { workspace = true }
+serde_json = { version = "1", optional = true }
+
+[dev-dependencies]

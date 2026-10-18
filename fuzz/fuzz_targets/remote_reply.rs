@@ -1,6 +1,6 @@
 #![no_main]
 
-use aui_core::{parse_fixture, ActionSpace};
+use ultra_instinct_core::{parse_fixture, ActionSpace};
 use libfuzzer_sys::fuzz_target;
 
 // Remote-model replies cross a trust boundary: a model could emit off-menu
@@ -13,5 +13,5 @@ fuzz_target!(|data: &[u8]| {
     let manifold = parse_fixture(SPACE_FIXTURE).expect("seed fixture must parse");
     let space = ActionSpace::from_manifold(&manifold);
     let reply = String::from_utf8_lossy(data);
-    let _ = aui_policy::parse_reply(&space, &reply);
+    let _ = ultra_instinct_policy::parse_reply(&space, &reply);
 });

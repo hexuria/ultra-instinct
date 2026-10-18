@@ -10,9 +10,9 @@
 The read-only audit found two places where the code said less, or more, than
 the ticket boundary in ADR 0003 actually guarantees:
 
-- **R1.** `aui_agent::execute_ticketed` marks a ticket consumed
+- **R1.** `ultra_instinct_agent::execute_ticketed` marks a ticket consumed
   **before** dispatch (ADR 0003 §1), but the host helper
-  `aui_guard::consume_ticket_once` pressed first and marked consumed
+  `ultra_instinct_guard::consume_ticket_once` pressed first and marked consumed
   only after `press` returned `Ok`. A press that failed after reaching the page
   left the lease unconsumed, so the host could replay the same ticket — and
   its doc comment claimed the opposite ("mark consumed even if press fails").

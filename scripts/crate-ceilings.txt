@@ -1,5 +1,5 @@
 # Max lines of Rust under <crate>/src per crate. Raise a ceiling only in a PR that
 # says why; splitting the crate is usually the better answer.
-# Current usage: aui-browser 4927, aui-cdp 1853, every other crate < 3.1k (2026-10-06).
+# Current usage: ultra-instinct-browser 4927, ultra-instinct-cdp 1853, every other crate < 3.1k (2026-10-06).
 default 6000
-aui-browser 7800 # owned per-agent CDP tab lifecycle; click-listener, label, paint, and act evidence (ADR 0011), most of it inline tests
+ultra-instinct-browser 7800 # owned per-agent CDP tab lifecycle; click-listener, label, paint, and act evidence (ADR 0011), most of it inline tests

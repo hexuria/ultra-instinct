@@ -58,10 +58,10 @@ name for a model-backed resolver; it was a stub.
    any target drift. A stale ticket discards the prediction; the next predict
    builds a new `TextContext` and asks the model again with the new
    fingerprint (tested).
-6. **Feature-gated, default unchanged.** `aui-policy/model-text`
+6. **Feature-gated, default unchanged.** `ultra-instinct-policy/model-text`
    (optional `serde_json` for the command protocol),
-   `aui-agent/model-text` (`AgentBuilder::model_text(model)`), and
-   `aui-cli/model-text` (`run --text-model-cmd <program>`). Without the
+   `ultra-instinct-agent/model-text` (`AgentBuilder::model_text(model)`), and
+   `ultra-instinct/model-text` (`run --text-model-cmd <program>`). Without the
    feature nothing is compiled in; with it, `AgentBuilder::new` still uses
    `DeterministicTextResolver` until `model_text` / `text_resolver` is called.
 

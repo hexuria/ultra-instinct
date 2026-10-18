@@ -7,5 +7,5 @@ use libfuzzer_sys::fuzz_target;
 // field-validated parse without panicking.
 fuzz_target!(|data: &[u8]| {
     let line = String::from_utf8_lossy(data);
-    let _ = aui_dojo::parse_line(&line, 1);
+    let _ = ultra_instinct_dojo::parse_line(&line, 1);
 });

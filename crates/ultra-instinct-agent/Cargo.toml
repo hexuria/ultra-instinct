@@ -1,0 +1,29 @@
+[package]
+name = "ultra-instinct-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Observe → decide → guard → ticket → execute → verify agent loop"
+
+[features]
+default = []
+# Model-backed TextResolver (`AgentBuilder::model_text`). Off by default;
+# `DeterministicTextResolver` stays the default resolver even when enabled.
+model-text = ["ultra-instinct-policy/model-text"]
+# Arm D: Instinct → remote fallback (consumer-supplied transport; no Jev dependency).
+remote = ["ultra-instinct-policy/remote"]
+
+[dependencies]
+ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.0"}
+ultra-instinct-browser = { path = "../ultra-instinct-browser", version = "0.1.0"}
+ultra-instinct-guard = { path = "../ultra-instinct-guard", version = "0.1.0"}
+ultra-instinct-observe = { path = "../ultra-instinct-observe", version = "0.1.0"}
+ultra-instinct-policy = { path = "../ultra-instinct-policy", version = "0.1.0"}
+ultra-instinct-protocol = { path = "../ultra-instinct-protocol", version = "0.1.0"}
+
+[dev-dependencies]
+proptest = "1.11"
+serde_json = "1"

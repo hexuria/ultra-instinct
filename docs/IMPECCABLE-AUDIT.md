@@ -26,9 +26,9 @@ observe → ActionSpace (with_front_layer) → InstinctPolicy / RemotePolicy
   → settle → observe → diff / value check → history
 ```
 
-Files: `aui-agent/src/{agent,executor,runtime,verify_map}.rs`,
-`aui-guard/src/{gate,ticket,world}.rs`, `aui-policy/src/{instinct_policy,text,remote,goal}.rs`,
-`aui-protocol/src/ticket.rs`.
+Files: `ultra-instinct-agent/src/{agent,executor,runtime,verify_map}.rs`,
+`ultra-instinct-guard/src/{gate,ticket,world}.rs`, `ultra-instinct-policy/src/{instinct_policy,text,remote,goal}.rs`,
+`ultra-instinct-protocol/src/ticket.rs`.
 
 ## Findings and remediation
 
@@ -67,9 +67,9 @@ It retires with A5 / A6.
 
 ## Mutation testing
 
-Targets (R6): `crates/aui-guard/src/gate.rs`, `ticket.rs`,
-`crates/aui-agent/src/executor.rs`, and in
-`crates/aui-guard/src/world.rs` only `of_target` / `neighborhood_of` /
+Targets (R6): `crates/ultra-instinct-guard/src/gate.rs`, `ticket.rs`,
+`crates/ultra-instinct-agent/src/executor.rs`, and in
+`crates/ultra-instinct-guard/src/world.rs` only `of_target` / `neighborhood_of` /
 `nearby`. cargo-mutants 27.1.0, default test scope (the mutated file's
 package).
 
@@ -96,11 +96,11 @@ Run locally (output outside the tree; ~2–3 min on 8 cores):
 ```sh
 cargo install cargo-mutants --locked   # once
 cargo mutants --no-shuffle -j 3 --timeout 180 -o /tmp/hu-mut-a \
-  -f crates/aui-guard/src/gate.rs \
-  -f crates/aui-guard/src/ticket.rs \
-  -f crates/aui-agent/src/executor.rs
+  -f crates/ultra-instinct-guard/src/gate.rs \
+  -f crates/ultra-instinct-guard/src/ticket.rs \
+  -f crates/ultra-instinct-agent/src/executor.rs
 cargo mutants --no-shuffle -j 3 --timeout 180 -o /tmp/hu-mut-b \
-  -f crates/aui-guard/src/world.rs --re 'of_target|neighborhood_of|nearby'
+  -f crates/ultra-instinct-guard/src/world.rs --re 'of_target|neighborhood_of|nearby'
 ```
 
 Exit code 0 = all caught; 2 = missed mutants (see `mutants.out/missed.txt`);
@@ -112,9 +112,9 @@ Exit code 0 = all caught; 2 = missed mutants (see `mutants.out/missed.txt`);
 
 - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
   `cargo test --workspace` (287 passed, 36 ignored).
-- `cargo test -p aui-resonance --features hgra`,
-  `cargo check -p aui-cli --features jev`,
-  `cargo test -p aui-policy -p aui-agent --features aui-agent/remote,aui-policy/remote`.
+- `cargo test -p ultra-instinct-resonance --features hgra`,
+  `cargo check -p ultra-instinct --features jev`,
+  `cargo test -p ultra-instinct-policy -p ultra-instinct-agent --features ultra-instinct-agent/remote,ultra-instinct-policy/remote`.
 - cargo-mutants as above.
 
 ## Deliberately skipped
@@ -137,13 +137,13 @@ pin, same checks). One new bug found and fixed by the first fuzz run.
 | --- | --- |
 | PR gate reshaped per skill "CI shape": `repo-rules` (toolchain pin, forbid-unsafe, crate ceilings, architecture), `fmt`, `clippy --all-features`, per-crate `check` (--no-default-features / --all-features), `test` (nextest `ci` profile + feature matrix + doctests + JUnit), `docs`, `deny`, `zizmor`, `ci-ok` aggregate | `.github/workflows/ci.yml` |
 | `cargo nextest` with `retries = 0` — a flaky result fails the run; a test that passes only on retry has failed | `.config/nextest.toml` |
-| Dependency direction enforced: no async runtime / HTTP client / model SDK below `aui-cli` (typesafe-sdk stays inside cli's optional `jev` closure only) | `scripts/architecture.txt`, `scripts/check_architecture.py` |
+| Dependency direction enforced: no async runtime / HTTP client / model SDK below `ultra-instinct` (typesafe-sdk stays inside cli's optional `jev` closure only) | `scripts/architecture.txt`, `scripts/check_architecture.py` |
 | `cargo-fuzz` targets on untrusted input: `fixture` (parse/write/parse round-trip), `replay_cdp`, `mcp_rpc` (reply must be valid JSON), `remote_reply` (against a real ActionSpace), `command_reply`, `compact_snapshot` (compact observe parser) — dated nightly, nightly smoke | `fuzz/`, `scripts/fuzz-smoke.sh`, `.github/workflows/nightly.yml` |
 | Nightly tier: proptest 4096 cases (release), fuzz smoke, unsafe-audit tripwire, fresh advisories | `.github/workflows/nightly.yml` |
 | All actions pinned by SHA, `persist-credentials: false`, `permissions: contents: read`, concurrency groups on scheduled workflows, `${{ }}` expansions routed through `env` | all workflows; verified `zizmor --persona=auditor` = 0 findings |
 | `dependabot.yml` (weekly, grouped) — stagnation is a choice with rising cost | `.github/dependabot.yml` |
 | PR template carrying the Verification impact block | `.github/pull_request_template.md` |
-| Observe call-count budget tests (regression tripwire for the hot path): compact observe pinned at exactly 5 calls regardless of page size; legacy fallback at 26 calls / 5 controls, 206 calls / 50 controls (legacy + 1 compact attempt) | `crates/aui-browser/tests/call_budget.rs` |
+| Observe call-count budget tests (regression tripwire for the hot path): compact observe pinned at exactly 5 calls regardless of page size; legacy fallback at 26 calls / 5 controls, 206 calls / 50 controls (legacy + 1 compact attempt) | `crates/ultra-instinct-browser/tests/call_budget.rs` |
 
 **Bug found by the `fixture` fuzz target (first 30 s run):** `strip_comment`
 toggled `in_quotes` on an escaped `\"` inside a quoted label, so a label

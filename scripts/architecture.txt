@@ -1,7 +1,7 @@
 # Dependency direction for hexuria/ultra-instinct (AGENTS.md "Crates (product graph)").
 #
 # Format:
-#   <crate>: <allowed aui-* deps, space separated>
+#   <crate>: <allowed ultra-instinct-* deps, space separated>
 #       | <banned crates anywhere in the crate's dependency closure; `*` is a glob>
 #
 # Checked by scripts/check_architecture.py in CI:
@@ -10,38 +10,38 @@
 #   3. no banned crate appears anywhere in its resolved dependency closure (incl. dev-deps).
 #
 # The product path is blocking and single-threaded by design (AGENTS.md anti-drift #10):
-# no async runtime, HTTP client, or model SDK below aui-cli. typesafe-sdk and reqwest
-# live only in aui-remote, a leaf only aui-cli depends on (the optional `jev`, `clef`,
+# no async runtime, HTTP client, or model SDK below ultra-instinct. typesafe-sdk and reqwest
+# live only in ultra-instinct-remote, a leaf only ultra-instinct depends on (the optional `jev`, `clef`,
 # and `model-text` legs), so tokio / reqwest / hyper reach the workspace exclusively
 # through those gated edges.
-aui-core:
+ultra-instinct-core:
     | tokio axum sqlx reqwest hyper typesafe-sdk
-aui-geometry: aui-core
+ultra-instinct-geometry: ultra-instinct-core
     | tokio axum sqlx reqwest hyper typesafe-sdk
-aui-observe: aui-core
+ultra-instinct-observe: ultra-instinct-core
     | tokio axum sqlx reqwest hyper typesafe-sdk
-aui-resonance: aui-core aui-geometry aui-hyper
+ultra-instinct-resonance: ultra-instinct-core ultra-instinct-geometry ultra-instinct-hyper
     | tokio axum sqlx reqwest hyper typesafe-sdk
-aui-protocol: aui-core
+ultra-instinct-protocol: ultra-instinct-core
     | tokio axum sqlx reqwest hyper typesafe-sdk
-aui-cdp:
+ultra-instinct-cdp:
     | tokio axum sqlx reqwest hyper typesafe-sdk
-aui-browser: aui-cdp aui-core aui-geometry aui-observe aui-resonance
+ultra-instinct-browser: ultra-instinct-cdp ultra-instinct-core ultra-instinct-geometry ultra-instinct-observe ultra-instinct-resonance
     | tokio axum sqlx reqwest hyper typesafe-sdk
-aui-guard: aui-core aui-protocol aui-resonance
+ultra-instinct-guard: ultra-instinct-core ultra-instinct-protocol ultra-instinct-resonance
     | tokio axum sqlx reqwest hyper typesafe-sdk
-aui-policy: aui-core
+ultra-instinct-policy: ultra-instinct-core
     | tokio axum sqlx reqwest hyper typesafe-sdk
-aui-agent: aui-core aui-browser aui-guard aui-observe aui-policy aui-protocol
+ultra-instinct-agent: ultra-instinct-core ultra-instinct-browser ultra-instinct-guard ultra-instinct-observe ultra-instinct-policy ultra-instinct-protocol
     | tokio axum sqlx reqwest hyper typesafe-sdk
-aui-mcp: aui-protocol aui-core aui-resonance aui-browser aui-guard aui-observe aui-agent aui-cdp
+ultra-instinct-mcp: ultra-instinct-protocol ultra-instinct-core ultra-instinct-resonance ultra-instinct-browser ultra-instinct-guard ultra-instinct-observe ultra-instinct-agent ultra-instinct-cdp
     | tokio axum sqlx reqwest hyper typesafe-sdk
-aui-remote: aui-policy
+ultra-instinct-remote: ultra-instinct-policy
     | axum sqlx
-aui-cli: aui-core aui-resonance aui-browser aui-guard aui-observe aui-mcp aui-protocol aui-agent aui-policy aui-dojo aui-remote
+ultra-instinct: ultra-instinct-core ultra-instinct-resonance ultra-instinct-browser ultra-instinct-guard ultra-instinct-observe ultra-instinct-mcp ultra-instinct-protocol ultra-instinct-agent ultra-instinct-policy ultra-instinct-dojo ultra-instinct-remote
     | axum sqlx
-aui-dojo: aui-core
+ultra-instinct-dojo: ultra-instinct-core
     | tokio axum sqlx reqwest hyper typesafe-sdk
-# Frozen experiment (HGRA). Leaf crate: no aui-* edges, no async/network deps.
-aui-hyper:
+# Frozen experiment (HGRA). Leaf crate: no ultra-instinct-* edges, no async/network deps.
+ultra-instinct-hyper:
     | tokio axum sqlx reqwest hyper typesafe-sdk

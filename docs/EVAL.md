@@ -21,27 +21,27 @@ general performance evidence (n is tiny and the tasks are single-intent).
 cargo test --workspace
 
 # Just the owned loop
-cargo test -p aui-agent                    # all agent tests
-cargo test -p aui-agent --test adversarial # mock adversarial e2e (20)
-cargo test -p aui-agent --test replay_cdp  # real BrowserSession over a CDP replay (7)
-cargo test -p aui-agent --test props       # property tests (ticket substitution, stale, abstain)
-cargo test -p aui-agent --test mock_loop   # original ADR 0002 loop tests
-cargo test -p aui-guard gate               # hard gate unit tests
-cargo test -p aui-policy                   # Instinct policy, evidence, resolver
+cargo test -p ultra-instinct-agent                    # all agent tests
+cargo test -p ultra-instinct-agent --test adversarial # mock adversarial e2e (20)
+cargo test -p ultra-instinct-agent --test replay_cdp  # real BrowserSession over a CDP replay (7)
+cargo test -p ultra-instinct-agent --test props       # property tests (ticket substitution, stale, abstain)
+cargo test -p ultra-instinct-agent --test mock_loop   # original ADR 0002 loop tests
+cargo test -p ultra-instinct-guard gate               # hard gate unit tests
+cargo test -p ultra-instinct-policy                   # Instinct policy, evidence, resolver
 ```
 
 From the CLI, a CDP replay script runs the full loop offline:
 
 ```bash
-cargo run -p aui-cli -- run --goal 'Type "rust" into Search' \
+cargo run -p ultra-instinct -- run --goal 'Type "rust" into Search' \
   --fixture path/to/script.cdp.json            # ScriptBuilder JSON
-cargo run -p aui-cli -- run --goal "Delete" \
+cargo run -p ultra-instinct -- run --goal "Delete" \
   --fixture fixtures/modal-confirm.manifold    # static manifold: predict-only dry run
-cargo run -p aui-cli -- run --goal 'Type "rust" into Search' \
+cargo run -p ultra-instinct -- run --goal 'Type "rust" into Search' \
   --fixture fixtures/agent-type-search.cdp.json
-cargo run -p aui-cli -- run --goal 'Click Go' \
+cargo run -p ultra-instinct -- run --goal 'Click Go' \
   --fixture fixtures/agent-click-go.cdp.json
-cargo run -p aui-cli -- run --goal 'Select "Business" in Cabin class' \
+cargo run -p ultra-instinct -- run --goal 'Select "Business" in Cabin class' \
   --fixture fixtures/agent-select-cabin.cdp.json
 ```
 
@@ -51,8 +51,8 @@ background `Delete project` is behind the modal and is not offered.
 ## Arm D offline (Instinct → remote)
 
 ```bash
-cargo test -p aui-policy -p aui-agent \
-  --features aui-agent/remote,aui-policy/remote
+cargo test -p ultra-instinct-policy -p ultra-instinct-agent \
+  --features ultra-instinct-agent/remote,ultra-instinct-policy/remote
 ```
 
 `remote_e2e.rs`: twins make Instinct abstain → scripted remote picks `CLICK:b` →
@@ -67,7 +67,7 @@ abstain.
   --remote-debugging-port=9333 '--remote-allow-origins=*' \
   --user-data-dir=/tmp/hu-smoke about:blank &
 ULTRA_INSTINCT_CDP=http://127.0.0.1:9333 \
-  cargo test -p aui-agent --test live_smoke -- --ignored --nocapture
+  cargo test -p ultra-instinct-agent --test live_smoke -- --ignored --nocapture
 ```
 
 Or by hand: `ultra-instinct run --cdp http://127.0.0.1:9333 --url <page> --goal …`.
@@ -142,11 +142,11 @@ and execution on a live page.
 
 ```bash
 # Offline tests (what CI runs; scripted models, no network, no keys)
-cargo test -p aui-policy -p aui-agent -p aui-cli \
-  --features aui-policy/model-text,aui-agent/model-text,aui-cli/model-text
+cargo test -p ultra-instinct-policy -p ultra-instinct-agent -p ultra-instinct \
+  --features ultra-instinct-policy/model-text,ultra-instinct-agent/model-text,ultra-instinct/model-text
 
 # Live: plug any model in via a program you own (it holds its own API key)
-cargo run -p aui-cli --features model-text -- run \
+cargo run -p ultra-instinct --features model-text -- run \
   --cdp http://127.0.0.1:9222 --goal "type rust ownership in the Search box" \
   --text-model-cmd ./my-text-model.sh
 ```
@@ -159,12 +159,12 @@ stdin and prints `{"text":"…","context_fingerprint":<same number>}` or
 to abstain instead of falling back.
 
 Without the flag, `TEXT_MODEL_API_KEY` enables the built-in HTTP model
-(`crates/aui-cli/src/http_text.rs`): OpenAI-compatible chat completions,
+(`crates/ultra-instinct/src/http_text.rs`): OpenAI-compatible chat completions,
 Anthropic Messages, or Gemini `generateContent`, chosen by `TEXT_MODEL_API` or
 the `TEXT_MODEL_BASE_URL` host. Every wire shape is reduced to the same
 `{"text","context_fingerprint"}` / `{"declined"}` reply before vetting. Wire
 contracts are tested against a local server only
-(`crates/aui-cli/tests/text_model_http.rs`); no live provider numbers are claimed.
+(`crates/ultra-instinct/tests/text_model_http.rs`); no live provider numbers are claimed.
 - Harder page types (ADR 0007): same-origin iframe + open shadow pierced;
   autocomplete TYPE→option CLICK; virtualized visible window only.
   Still out: cross-origin iframe, closed shadow, off-window inventory.
@@ -175,7 +175,7 @@ contracts are tested against a local server only
 
 ## Offline arm C repeats (n = 3)
 
-Scripted: `cargo test -p aui-agent` three times on this tip. All three
+Scripted: `cargo test -p ultra-instinct-agent` three times on this tip. All three
 runs green (same deterministic offline suite). See RESULTS.md § "Agent + Instinct
 pivot (offline arm C)".
 

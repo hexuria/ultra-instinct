@@ -1,0 +1,27 @@
+[package]
+name = "ultra-instinct-browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "CDP browser session for ultra-instinct."
+
+[dependencies]
+ultra-instinct-cdp = { path = "../ultra-instinct-cdp", version = "0.1.0"}
+ultra-instinct-observe = { path = "../ultra-instinct-observe", version = "0.1.0"}
+ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.0"}
+ultra-instinct-geometry = { path = "../ultra-instinct-geometry", version = "0.1.0"}
+serde = "1"
+serde_json = { version = "1", features = ["unbounded_depth"] }
+serde_stacker = "0.1"
+
+[dev-dependencies]
+ultra-instinct-resonance = { path = "../ultra-instinct-resonance", version = "0.1.0"}
+proptest = "1.7"
+
+[features]
+# Fuzz-only entry points for ultra-instinct-fuzz (fuzz/fuzz_targets/). Not part of
+# the product surface; nothing on the agent path uses them.
+fuzz-support = []

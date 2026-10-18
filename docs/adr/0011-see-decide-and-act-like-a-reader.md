@@ -136,33 +136,33 @@ benchmark name, task name, or page class appears in `crates/`.
 
 - Observe costs one more CDP call: six on the compact path. The call budget
   test pins it.
-- `aui-browser` grows past its ceiling (7400 → 7800): listener, label,
+- `ultra-instinct-browser` grows past its ceiling (7400 → 7800): listener, label,
   paint, and act evidence, most of it inline tests.
 - Drawings rendered on a canvas stay unseen: no DOM, no shapes. A text-only
   model cannot read them; that needs an image.
 - A canvas whose listener sits on a parent element loses its point grid.
 - Owners:
-  - `aui-browser` extract tests: listener boxes, markup names, row context,
+  - `ultra-instinct-browser` extract tests: listener boxes, markup names, row context,
     unrendered text, canvas evidence, snapshot parsing.
-  - `aui-browser` observe tests: a listener box and canvas end to end;
+  - `ultra-instinct-browser` observe tests: a listener box and canvas end to end;
     `tests/call_budget.rs`.
-  - `aui-core` action-space tests: near text for shared labels.
-  - `aui-policy` remote tests: near text and row text that echo the goal,
+  - `ultra-instinct-core` action-space tests: near text for shared labels.
+  - `ultra-instinct-policy` remote tests: near text and row text that echo the goal,
     target-first order.
-  - `aui-core` action-space tests: unnamed wrappers.
-  - `aui-remote` typesafe tests: DONE and BLOCKED second looks, malformed
+  - `ultra-instinct-core` action-space tests: unnamed wrappers.
+  - `ultra-instinct-remote` typesafe tests: DONE and BLOCKED second looks, malformed
     answers.
-  - `aui-policy` text / model-text tests: press-verb literals, goal
+  - `ultra-instinct-policy` text / model-text tests: press-verb literals, goal
     phrases, field context, copied passages.
-  - `aui-agent` `mock_loop`: retyping after the page answered.
-  - `aui-core` action-space tests: near text on the right, uncapped drag
+  - `ultra-instinct-agent` `mock_loop`: retyping after the page answered.
+  - `ultra-instinct-core` action-space tests: near text on the right, uncapped drag
     destinations, drawing cells, keys per role.
-  - `aui-guard` `ticket_props`: drag to a cell, the drawing a shape sits in,
+  - `ultra-instinct-guard` `ticket_props`: drag to a cell, the drawing a shape sits in,
     key tickets.
-  - `aui-agent` `props`: cell and key substitution; `mock_loop`: selection
+  - `ultra-instinct-agent` `props`: cell and key substitution; `mock_loop`: selection
     verification.
-  - `aui-policy` text tests: date / time / month value formats.
-  - `aui-remote` typesafe tests: the compact drag block, self pairs.
-  - `aui-browser` colour tests and the painted-label observe test.
-  - `aui-remote` typesafe tests: when a second opinion is asked, and that
+  - `ultra-instinct-policy` text tests: date / time / month value formats.
+  - `ultra-instinct-remote` typesafe tests: the compact drag block, self pairs.
+  - `ultra-instinct-browser` colour tests and the painted-label observe test.
+  - `ultra-instinct-remote` typesafe tests: when a second opinion is asked, and that
     advice must name an offered action.

@@ -1,12 +1,12 @@
 # HGRA experiment
 
-Hyperdimensional ranking algebra (`aui-hyper`) and the `hgra` feature on
-`aui-resonance`. Not the product default. Promote only after it beats
+Hyperdimensional ranking algebra (`ultra-instinct-hyper`) and the `hgra` feature on
+`ultra-instinct-resonance`. Not the product default. Promote only after it beats
 `WeightedMatcher` on a large adversarial target-resolution suite.
 
 ```bash
-cargo test -p aui-hyper
-cargo test -p aui-resonance --features hgra
+cargo test -p ultra-instinct-hyper
+cargo test -p ultra-instinct-resonance --features hgra
 ```
 
 ## Scoring notes
@@ -17,9 +17,9 @@ cargo test -p aui-resonance --features hgra
   position, action; equal weight) against the region signature, not the mean of
   per-probe cosines.
 
-Before/after numbers and the ablation: `crates/aui-resonance/HGRA_REMEASURE.md`.
+Before/after numbers and the ablation: `crates/ultra-instinct-resonance/HGRA_REMEASURE.md`.
 Decision: `docs/DECISIONS.md`, "HGRA semantic parity and bundled query".
 
 ```bash
-cargo test -p aui-resonance --features hgra --test hgra_remeasure -- --nocapture
+cargo test -p ultra-instinct-resonance --features hgra --test hgra_remeasure -- --nocapture
 ```
