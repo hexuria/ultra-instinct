@@ -110,7 +110,21 @@ pub struct TypesafeTransport {
     model: Option<String>,
     screenshots: bool,
     page_text: bool,
+    /// Asked when JEV is unsure (see [`Advisor`]).
+    advisor: Option<Box<dyn Advisor>>,
 }
+
+/// A second decider asked when JEV is unsure: its answer was BLOCKED, an
+/// abstain, or an operation it gave less than [`UNSURE_BELOW`]. It gets the
+/// same closed request plus `first_opinion` (JEV's reply and probability)
+/// and answers with the closed reply; the transport keeps JEV's answer
+/// unless the advice names an offered id with its own kind.
+pub trait Advisor {
+    fn advise(&mut self, request_json: &str) -> Result<String, String>;
+}
+
+/// JEV's operation probability below which a second opinion is asked.
+pub const UNSURE_BELOW: f64 = 0.5;
 
 impl TypesafeTransport {
     /// `TYPESAFE_API_KEY` via the SDK; `TYPESAFE_MODEL` overrides the SDK's
@@ -138,7 +152,14 @@ impl TypesafeTransport {
             model,
             screenshots,
             page_text,
+            advisor: None,
         })
+    }
+
+    /// Ask `advisor` whenever JEV is unsure (see [`Advisor`]).
+    pub fn with_advisor(mut self, advisor: Box<dyn Advisor>) -> Self {
+        self.advisor = Some(advisor);
+        self
     }
 
     fn ask(
@@ -578,10 +599,85 @@ impl RemoteTransport for TypesafeTransport {
     ) -> Result<String, String> {
         let request: Value =
             serde_json::from_str(request_json).map_err(|err| format!("typesafe request: {err}"))?;
-        let (mut reply, satisfied, operation_p) = self.decide_once(&request, screenshot, true)?;
-        let Some(mut vetoed) = second_look(&reply, satisfied, operation_p, &request) else {
+        let (reply, operation_p) = self.jev_reply(&request, screenshot)?;
+        let Some(advisor) = self
+            .advisor
+            .as_mut()
+            .filter(|_| unsure(&reply, operation_p))
+        else {
             return Ok(reply);
         };
+        let mut ask = request.clone();
+        ask["first_opinion"] = json!({
+            "reply": serde_json::from_str::<Value>(&reply).unwrap_or(Value::Null),
+            "probability": operation_p,
+        });
+        match advisor.advise(&ask.to_string()) {
+            Ok(advice) => match offered_choice(&request, &advice) {
+                Some(choice) => {
+                    eprintln!("second opinion: {choice} (JEV: {reply})");
+                    Ok(choice)
+                }
+                None => Ok(reply),
+            },
+            Err(err) => {
+                eprintln!("second opinion unavailable ({err}); keeping JEV's answer");
+                Ok(reply)
+            }
+        }
+    }
+}
+
+/// JEV's answer needs a second opinion: BLOCKED, an abstain, or an
+/// operation it gave less than [`UNSURE_BELOW`].
+fn unsure(reply: &str, operation_p: Option<f64>) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(reply) else {
+        return false;
+    };
+    value.get("abstain").is_some()
+        || value["choice"]["kind"] == "BLOCKED"
+        || operation_p.is_some_and(|p| p < UNSURE_BELOW)
+}
+
+/// The advice as a closed reply, when it is exactly `{"choice": {"id",
+/// "kind"}}` naming an offered action with its own kind (a DRAG id must be
+/// one of the offered pairs). Anything else, an abstain included, is `None`:
+/// JEV's answer stands.
+fn offered_choice(request: &Value, advice: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(advice.trim()).ok()?;
+    let obj = value.as_object().filter(|o| o.len() == 1)?;
+    let choice = obj.get("choice")?.as_object()?;
+    if choice.keys().any(|k| k != "id" && k != "kind") {
+        return None;
+    }
+    let id = choice.get("id")?.as_str()?;
+    let kind = choice.get("kind")?.as_str()?;
+    let listed = request["actions"]
+        .as_array()?
+        .iter()
+        .any(|a| a["id"] == id && a["kind"] == kind);
+    let dragged = kind == "DRAG"
+        && id.strip_prefix("DRAG:").is_some_and(|pair| {
+            request["drag"]["pairs"]
+                .as_array()
+                .is_some_and(|pairs| pairs.iter().any(|p| p == pair))
+        });
+    (listed || dragged).then(|| json!({"choice": {"id": id, "kind": kind}}).to_string())
+}
+
+impl TypesafeTransport {
+    /// JEV's reply after its own second looks, with the operation head's
+    /// probability for the answer it gave.
+    fn jev_reply(
+        &mut self,
+        request: &Value,
+        screenshot: Option<&Screenshot>,
+    ) -> Result<(String, Option<f64>), String> {
+        let (mut reply, satisfied, operation_p) = self.decide_once(request, screenshot, true)?;
+        let Some(mut vetoed) = second_look(&reply, satisfied, operation_p, request) else {
+            return Ok((reply, operation_p));
+        };
+        let mut reply_p = operation_p;
         // JEV chose DONE but its own check says the goal is unmet, or chose
         // BLOCKED without conviction: ask again without that control on the
         // menu. A doubtful BLOCKED right after a refused DONE gets one more
@@ -596,30 +692,29 @@ impl RemoteTransport for TypesafeTransport {
             match self.decide_once(&again, screenshot, still_offers_done) {
                 Ok((next, satisfied, operation_p)) => {
                     match second_look(&next, satisfied, operation_p, &again) {
-                        None => return Ok(next),
+                        None => return Ok((next, operation_p)),
                         Some("DONE") => {
-                            return Ok(
-                                json!({"abstain": "self-check refused DONE twice"}).to_string()
-                            )
+                            let abstain = json!({"abstain": "self-check refused DONE twice"});
+                            return Ok((abstain.to_string(), None));
                         }
                         Some(next_veto) => {
                             reply = next;
+                            reply_p = operation_p;
                             vetoed = next_veto;
                         }
                     }
                 }
                 // A doubtful BLOCKED that cannot be re-asked still stands.
-                Err(_) if vetoed == "BLOCKED" => return Ok(reply),
+                Err(_) if vetoed == "BLOCKED" => return Ok((reply, reply_p)),
                 Err(err) => {
-                    return Ok(
-                        json!({"abstain": format!("done self-check refused DONE; {err}")})
-                            .to_string(),
-                    )
+                    let abstain =
+                        json!({"abstain": format!("done self-check refused DONE; {err}")});
+                    return Ok((abstain.to_string(), None));
                 }
             }
         }
         // Still a doubtful BLOCKED with nothing else to offer: it stands.
-        Ok(reply)
+        Ok((reply, reply_p))
     }
 }
 
@@ -1022,6 +1117,53 @@ mod tests {
             None,
             "a click is never re-asked"
         );
+    }
+
+    #[test]
+    fn a_second_opinion_is_asked_only_when_jev_is_unsure() {
+        let click = r#"{"choice":{"id":"CLICK:n1","kind":"CLICK"}}"#;
+        let blocked = r#"{"choice":{"id":"BLOCKED","kind":"BLOCKED"}}"#;
+        assert!(!unsure(click, Some(0.9)));
+        assert!(unsure(click, Some(0.42)));
+        assert!(!unsure(click, None), "no probability: JEV stands");
+        assert!(
+            unsure(blocked, Some(0.95)),
+            "BLOCKED ends the run: always checked"
+        );
+        assert!(unsure(r#"{"abstain":"refused"}"#, None));
+    }
+
+    #[test]
+    fn advice_must_name_an_offered_action_with_its_kind() {
+        let request = json!({
+            "actions": [
+                {"id": "CLICK:n1", "kind": "CLICK"},
+                {"id": "KEY:n2#Enter", "kind": "KEY"},
+                {"id": "DONE", "kind": "DONE"}
+            ],
+            "drag": {"pairs": ["n3>n4"]}
+        });
+        let pick = |advice: &str| offered_choice(&request, advice);
+        assert_eq!(
+            pick(r#"{"choice":{"id":"KEY:n2#Enter","kind":"KEY"}}"#).as_deref(),
+            Some(r#"{"choice":{"id":"KEY:n2#Enter","kind":"KEY"}}"#)
+        );
+        assert!(pick(r#"{"choice":{"id":"DRAG:n3>n4","kind":"DRAG"}}"#).is_some());
+        assert!(
+            pick(r#" {"choice":{"id":"CLICK:n1","kind":"CLICK"}} "#).is_some(),
+            "whitespace"
+        );
+        for bad in [
+            r#"{"choice":{"id":"CLICK:n9","kind":"CLICK"}}"#,
+            r#"{"choice":{"id":"CLICK:n1","kind":"KEY"}}"#,
+            r#"{"choice":{"id":"DRAG:n4>n3","kind":"DRAG"}}"#,
+            r#"{"choice":{"id":"CLICK:n1","kind":"CLICK","x":5}}"#,
+            r#"{"choice":{"id":"CLICK:n1","kind":"CLICK"},"why":"x"}"#,
+            r#"{"abstain":"no idea"}"#,
+            "CLICK:n1",
+        ] {
+            assert_eq!(pick(bad), None, "{bad}");
+        }
     }
 
     #[test]

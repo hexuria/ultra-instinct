@@ -11,6 +11,8 @@
 pub mod clef;
 #[cfg(feature = "model-text")]
 pub mod http_text;
+#[cfg(all(feature = "jev", feature = "model-text"))]
+pub mod second;
 #[cfg(feature = "jev")]
 pub mod typesafe;
 

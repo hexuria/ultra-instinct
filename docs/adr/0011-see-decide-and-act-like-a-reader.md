@@ -121,6 +121,17 @@ benchmark name, task name, or page class appears in `crates/`.
      line is part of the question, not an answer.
    - SELECT_TEXT counts a block's own words, not words from its name.
 
+6. **A second opinion.** With `--second-opinion` (features `jev` +
+   `model-text`), the configured text model is asked to choose when JEV's
+   final answer is BLOCKED, an abstain, or an operation it gave less than
+   0.5. It gets the same closed request plus `first_opinion` (JEV's reply and
+   probability), at medium reasoning effort. Its reply must be exactly
+   `{"choice": {"id", "kind"}}` naming an offered action with its own kind (a
+   DRAG id must be an offered pair); anything else, an abstain or an error
+   included, leaves JEV's answer standing. Every second opinion is printed.
+   The gate, ticket, and executor are unchanged: the advice is one more
+   offered id.
+
 ## Consequences
 
 - Observe costs one more CDP call: six on the compact path. The call budget
@@ -153,3 +164,5 @@ benchmark name, task name, or page class appears in `crates/`.
   - `aui-policy` text tests: date / time / month value formats.
   - `aui-remote` typesafe tests: the compact drag block, self pairs.
   - `aui-browser` colour tests and the painted-label observe test.
+  - `aui-remote` typesafe tests: when a second opinion is asked, and that
+    advice must name an offered action.

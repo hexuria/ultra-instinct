@@ -139,7 +139,10 @@ crate.
 >    same-call `goal_satisfied` self-check; DONE below 0.7 (0.5 once every
 >    clause is satisfied) is re-asked without DONE, and BLOCKED below 0.6 is
 >    re-asked without BLOCKED (ADR 0011): at most three calls, a second
->    refused DONE abstains. Targets come before page controls in the request;
+>    refused DONE abstains. With `--second-opinion` the text model is asked
+>    when JEV ends on BLOCKED, abstains, or gives its operation < 0.5; its
+>    reply must be exactly an offered id + kind, else JEV's answer stands.
+>    Targets come before page controls in the request;
 >    near text and row text that echo the goal are not sent.
 > 9. **HGRA stays frozen.** No matcher tuning on the agent path.
 > 10. **One blocking CDP socket per agent.** Parallelism means separate agents

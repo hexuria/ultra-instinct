@@ -86,6 +86,10 @@ struct RunArgs {
     /// `--no-derived-text`: the text model types only values the goal names.
     #[cfg_attr(not(feature = "model-text"), allow(dead_code))]
     no_derived_text: bool,
+    /// `--second-opinion`: ask the text model (`TEXT_MODEL_*`) to choose
+    /// when JEV is unsure (features `jev` + `model-text`).
+    #[cfg_attr(not(feature = "jev"), allow(dead_code))]
+    second_opinion: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -114,6 +118,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     let mut no_page_text = false;
     let mut allow_derived_text = false;
     let mut no_derived_text = false;
+    let mut second_opinion = false;
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
@@ -166,6 +171,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
                 &inline,
             )?,
             "--no-derived-text" => switch(&mut no_derived_text, "--no-derived-text", arg, &inline)?,
+            "--second-opinion" => switch(&mut second_opinion, "--second-opinion", arg, &inline)?,
             "--max-steps" => {
                 let raw = value("--max-steps")?;
                 let n: u32 = raw.parse().map_err(|_| CliError::BadNumber {
@@ -236,6 +242,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
         no_page_text,
         allow_derived_text,
         no_derived_text,
+        second_opinion,
     })
 }
 
@@ -522,11 +529,38 @@ fn drive_jev<T: CdpTransport>(
     let transport =
         crate::typesafe::TypesafeTransport::from_env(!args.no_screenshot, !args.no_page_text)
             .map_err(|err| CliError::Config(format!("typesafe: {err}")))?;
+    let transport = if args.second_opinion {
+        with_second_opinion(transport)?
+    } else {
+        transport
+    };
     drive_with(
         session,
         aui_policy::RemotePolicy::named("jev", transport),
         args,
     )
+}
+
+/// The JEV transport with the text model as its second opinion.
+#[cfg(all(feature = "jev", feature = "model-text"))]
+fn with_second_opinion(
+    transport: crate::typesafe::TypesafeTransport,
+) -> Result<crate::typesafe::TypesafeTransport, CliError> {
+    let advisor = crate::second::SecondOpinion::from_env()
+        .map_err(CliError::Config)?
+        .ok_or_else(|| {
+            CliError::Config("--second-opinion needs a text model (TEXT_MODEL_API_KEY)".into())
+        })?;
+    Ok(transport.with_advisor(Box::new(advisor)))
+}
+
+#[cfg(all(feature = "jev", not(feature = "model-text")))]
+fn with_second_opinion(
+    _transport: crate::typesafe::TypesafeTransport,
+) -> Result<crate::typesafe::TypesafeTransport, CliError> {
+    Err(CliError::UnknownFlag(
+        "--second-opinion requires building with --features jev,model-text".into(),
+    ))
 }
 
 #[cfg(not(feature = "jev"))]

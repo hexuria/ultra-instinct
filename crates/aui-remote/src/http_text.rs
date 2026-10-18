@@ -320,6 +320,82 @@ impl HttpTextModel {
     }
 }
 
+impl HttpTextModel {
+    /// One call with the caller's own `system` prompt; the user turn is
+    /// `user` and the model is asked for a JSON object. Returns the reply
+    /// text unparsed. The same endpoint, key handling, timeout, and single
+    /// retry as [`TextModel::complete`]. `effort` (`low` / `medium` / `high`)
+    /// replaces the configured reasoning effort unless reasoning is off.
+    pub fn chat_json(&self, system: &str, user: &str, effort: &str) -> Result<String, String> {
+        let mut reasoning = self.reasoning.clone();
+        // openai: {"reasoning": {"effort"}}; anthropic: {"effort"}.
+        if reasoning.pointer("/reasoning/effort").is_some() {
+            reasoning["reasoning"]["effort"] = json!(effort);
+        } else if reasoning.get("effort").is_some() {
+            reasoning["effort"] = json!(effort);
+        }
+        let body = match self.api {
+            TextApi::OpenAi => {
+                let mut body = json!({
+                    "model": self.model,
+                    "max_tokens": 1024,
+                    "response_format": {"type": "json_object"},
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                });
+                merge(&mut body, &reasoning);
+                body
+            }
+            TextApi::Anthropic => {
+                let mut body = json!({
+                    "model": self.model,
+                    "max_tokens": 1024,
+                    "system": system,
+                    "messages": [{"role": "user", "content": user}],
+                });
+                if reasoning.as_object().is_some_and(|m| !m.is_empty()) {
+                    body["output_config"] = reasoning;
+                }
+                body
+            }
+            TextApi::Gemini => json!({
+                "systemInstruction": {"parts": [{"text": system}]},
+                "contents": [{"role": "user", "parts": [{"text": user}]}],
+                "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 4096},
+            }),
+        };
+        let mut result = self.send_once(&body);
+        let retryable = match &result {
+            Ok(r) => retryable_status(r.status()),
+            Err(err) => err.is_timeout() || err.is_connect(),
+        };
+        if retryable {
+            result = self.send_once(&body);
+        }
+        let response: Value = result
+            .and_then(|r| r.error_for_status())
+            .map_err(|err| format!("text model http: {err}"))?
+            .json()
+            .map_err(|err| format!("text model response not JSON: {err}"))?;
+        match self.api {
+            TextApi::OpenAi => response["choices"][0]["message"]["content"]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "text model: no assistant content".to_owned()),
+            TextApi::Anthropic => Ok(response["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|block| block["type"] == "text")
+                .filter_map(|block| block["text"].as_str())
+                .collect()),
+            TextApi::Gemini => gemini_content(&response).map_err(|err| err.to_string()),
+        }
+    }
+}
+
 impl TextModel for HttpTextModel {
     fn complete(&mut self, request: &TextModelRequest) -> Result<TextModelReply, TextModelError> {
         let prompt = json!({
