@@ -507,10 +507,13 @@ fn element_from(node: &Value, listener: bool, hidden: &BTreeSet<u32>) -> Option<
             .or_else(|| inline_style(&attributes, "background-color"))
             .unwrap_or_default();
     }
-    // An icon-only control (a link or button with no text) is named by its
-    // title, alt text, or markup words. Form fields are named by their own
-    // labels in the accessibility tree.
-    if kept && label.is_empty() && names_from_markup(name) {
+    // An icon-only control (a link or button with no text inside) is named
+    // by its title, alt text, or markup words. A container whose text sits
+    // in its children keeps its own (empty) label: its children are the
+    // targets. Form fields are named by their labels in the accessibility
+    // tree.
+    if kept && label.is_empty() && names_from_markup(name) && subtree_text(node, hidden).is_empty()
+    {
         label = attribute_text(&attributes, "title")
             .or_else(|| attribute_text(&attributes, "alt"))
             .or_else(|| from_markup(&attributes))
@@ -654,20 +657,26 @@ fn attribute_text(
 
 /// Class-name words that say how an element looks or where it sits, not
 /// what it does.
-const LAYOUT_WORDS: [&str; 26] = [
+const LAYOUT_WORDS: [&str; 36] = [
     "active",
+    "all",
     "block",
     "clearfix",
     "col",
     "container",
+    "content",
+    "corner",
+    "default",
     "disabled",
     "fa",
-    "fas",
     "far",
+    "fas",
     "flex",
     "float",
+    "front",
     "glyphicon",
     "grid",
+    "helper",
     "hidden",
     "icon",
     "icons",
@@ -676,10 +685,14 @@ const LAYOUT_WORDS: [&str; 26] = [
     "js",
     "left",
     "outer",
+    "reset",
     "right",
     "row",
     "selected",
+    "state",
     "ui",
+    "widget",
+    "wrap",
     "wrapper",
 ];
 /// Most markup words in a name.

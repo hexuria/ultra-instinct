@@ -124,8 +124,11 @@ crate.
 >    Evidence never widens the reply. New kinds (ADR 0010) are still offered
 >    ids: `HOVER:<id>`, `SCROLL_IN:<id>`, `DRAG:<src>><dst>` (capped pairs), and
 >    surface cells `CLICK:<surface>@c,r` (8×8). JEV's DONE carries a
->    same-call `goal_satisfied` self-check; DONE below one half is re-asked
->    once without DONE, else abstain.
+>    same-call `goal_satisfied` self-check; DONE below 0.7 (0.5 once every
+>    clause is satisfied) is re-asked without DONE, and BLOCKED below 0.6 is
+>    re-asked without BLOCKED (ADR 0011): at most three calls, a second
+>    refused DONE abstains. Targets come before page controls in the request;
+>    near text and row text that echo the goal are not sent.
 > 9. **HGRA stays frozen.** No matcher tuning on the agent path.
 > 10. **One blocking CDP socket per agent.** Parallelism means separate agents
 >    in separate tabs with no shared state. Formal tools stay unjustified for

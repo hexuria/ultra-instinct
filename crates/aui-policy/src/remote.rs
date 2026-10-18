@@ -131,11 +131,18 @@ pub fn request_json_with_evidence(
     page: Option<&PageView>,
     progress: Option<&Progress>,
 ) -> String {
-    let actions: Vec<Value> = space
-        .actions()
+    // Page targets first, page-level controls (scroll, WAIT, DONE, BLOCKED)
+    // last: a model reads the list top down.
+    let (targets, controls): (Vec<_>, Vec<_>) = space.actions().partition(|a| a.target().is_some());
+    let actions: Vec<Value> = targets
+        .into_iter()
+        .chain(controls)
         .map(|a| {
-            let mut action =
-                json!({"id": a.id().as_str(), "kind": a.kind().as_str(), "label": a.label()});
+            let mut action = json!({
+                "id": a.id().as_str(),
+                "kind": a.kind().as_str(),
+                "label": label_without_goal_echo(a.label(), goal.as_str()),
+            });
             if let Some(role) = a.role() {
                 action["role"] = json!(role.as_str());
             }
@@ -229,6 +236,19 @@ fn echoes_goal(near: &str, goal: &str) -> bool {
     let goal: std::collections::BTreeSet<String> = words(goal).into_iter().collect();
     let shared = near.iter().filter(|w| goal.contains(*w)).count();
     shared * 5 >= near.len() * 4
+}
+
+/// Separator observe puts between a markup name and its row's text
+/// ("more · Conner @a 7h ago").
+const ROW_CONTEXT_SEP: &str = " · ";
+
+/// A label whose row text is the goal sentence (the nearest text above a
+/// board cell was the instruction line) keeps only its name.
+fn label_without_goal_echo<'a>(label: &'a str, goal: &str) -> &'a str {
+    match label.split_once(ROW_CONTEXT_SEP) {
+        Some((name, row)) if echoes_goal(row, goal) => name,
+        _ => label,
+    }
 }
 
 /// Parse and validate a reply against the offered space.
@@ -450,6 +470,46 @@ mod tests {
             .unwrap()
             .iter()
             .any(|a| a["id"] == "CLICK:a"));
+    }
+
+    #[test]
+    fn page_targets_come_before_page_controls() {
+        let request: Value = serde_json::from_str(&request_json(
+            &stateful_space(),
+            &AgentGoal::new("Fill"),
+            &[],
+        ))
+        .unwrap();
+        let ids: Vec<&str> = request["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["id"].as_str().unwrap())
+            .collect();
+        let first_control = ids.iter().position(|id| !id.contains(':')).unwrap();
+        assert!(
+            ids[..first_control].iter().all(|id| id.contains(':')),
+            "{ids:?}"
+        );
+        assert!(
+            ids[first_control..].iter().all(|id| !id.contains(':')),
+            "{ids:?}"
+        );
+        assert_eq!(ids.last(), Some(&"WAIT"), "{ids:?}");
+    }
+
+    #[test]
+    fn row_text_that_repeats_the_goal_is_dropped_from_a_label() {
+        let goal = "Playing as 'X', win a game of tic-tac-toe.";
+        assert_eq!(
+            label_without_goal_echo("ttt · Playing as 'X', win a game of tic-tac-toe.", goal),
+            "ttt"
+        );
+        assert_eq!(
+            label_without_goal_echo("more · Conner @a 7h ago", goal),
+            "more · Conner @a 7h ago"
+        );
+        assert_eq!(label_without_goal_echo("Submit", goal), "Submit");
     }
 
     #[test]

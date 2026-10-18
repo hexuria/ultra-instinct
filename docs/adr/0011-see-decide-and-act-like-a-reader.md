@@ -46,6 +46,22 @@ benchmark name, task name, or page class appears in `crates/`.
    - Near text that repeats the goal (three or more words, four in five of
      them goal words) is not sent to a remote model.
 
+2. **Decide with evidence.**
+   - DONE needs JEV's same-call self-check at 0.7 or more, or 0.5 or more
+     once the run's progress marks every clause satisfied. Below that it is
+     re-asked without DONE.
+   - BLOCKED needs 0.6 or more on the operation head. Below that it is
+     re-asked without BLOCKED. A doubtful BLOCKED right after a refused DONE
+     gets that second look too, so a decision costs at most three calls. A
+     second refused DONE abstains; a BLOCKED that cannot be re-asked stands.
+     Every answer is still an offered id: this is a fresh decision on a
+     smaller menu, never "the runner-up wins".
+   - The request lists page targets before page controls (scroll, WAIT,
+     DONE, BLOCKED).
+   - An unnamed generic wrapper around a clickable control is not offered
+     CLICK: the control inside is.
+   - Row text that echoes the goal is dropped from a label in the request.
+
 ## Consequences
 
 - Observe costs one more CDP call: six on the compact path. The call budget
@@ -57,4 +73,7 @@ benchmark name, task name, or page class appears in `crates/`.
   - `aui-browser` observe tests: a listener box and canvas end to end;
     `tests/call_budget.rs`.
   - `aui-core` action-space tests: near text for shared labels.
-  - `aui-policy` remote tests: near text that echoes the goal.
+  - `aui-policy` remote tests: near text and row text that echo the goal,
+    target-first order.
+  - `aui-core` action-space tests: unnamed wrappers.
+  - `aui-remote` typesafe tests: DONE and BLOCKED second looks.

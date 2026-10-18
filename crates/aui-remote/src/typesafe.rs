@@ -400,20 +400,58 @@ fn add_done_check(built: &mut BuiltQuestions, request: &Value) {
     ));
 }
 
-/// DONE is refused when the model's own self-check says the goal is unmet
-/// (yes-probability below one half). A missing check never refuses.
-fn done_vetoed(reply: &str, satisfied: Option<f64>) -> bool {
-    let is_done = serde_json::from_str::<Value>(reply)
-        .ok()
-        .is_some_and(|v| v["choice"]["kind"] == "DONE");
-    is_done && satisfied.is_some_and(|p| p < 0.5)
+/// Self-check yes-probability DONE needs while a goal clause is still
+/// unsatisfied in the run's progress.
+const DONE_SURE: f64 = 0.7;
+/// Self-check yes-probability DONE needs when every clause is satisfied.
+const DONE_SURE_ALL_CLAUSES: f64 = 0.5;
+/// Operation probability BLOCKED needs to end the run without a second look.
+const BLOCKED_SURE: f64 = 0.6;
+
+/// Every goal clause is marked satisfied in the request's progress.
+fn all_clauses_satisfied(request: &Value) -> bool {
+    request["progress"]["satisfied"]
+        .as_array()
+        .is_some_and(|s| !s.is_empty() && s.iter().all(|v| v == true))
 }
 
-/// The same request with DONE taken off the menu.
-fn without_done(request: &Value) -> Value {
+/// The control a reply should not be trusted with yet, if any:
+///
+/// - DONE when the model's own self-check is below [`DONE_SURE`]
+///   ([`DONE_SURE_ALL_CLAUSES`] when progress marks every clause satisfied);
+/// - BLOCKED when the operation head gave it less than [`BLOCKED_SURE`].
+///
+/// A missing check or probability never refuses.
+fn second_look(
+    reply: &str,
+    satisfied: Option<f64>,
+    operation_p: Option<f64>,
+    request: &Value,
+) -> Option<&'static str> {
+    let kind = serde_json::from_str::<Value>(reply).ok()?["choice"]["kind"]
+        .as_str()
+        .map(str::to_owned)?;
+    match kind.as_str() {
+        "DONE" => {
+            let sure = if all_clauses_satisfied(request) {
+                DONE_SURE_ALL_CLAUSES
+            } else {
+                DONE_SURE
+            };
+            satisfied.is_some_and(|p| p < sure).then_some("DONE")
+        }
+        "BLOCKED" => operation_p
+            .is_some_and(|p| p < BLOCKED_SURE)
+            .then_some("BLOCKED"),
+        _ => None,
+    }
+}
+
+/// The same request with the control `kind` taken off the menu.
+fn without_control(request: &Value, kind: &str) -> Value {
     let mut request = request.clone();
     if let Some(actions) = request["actions"].as_array_mut() {
-        actions.retain(|a| a["id"] != "DONE");
+        actions.retain(|a| a["id"] != kind);
     }
     request
 }
@@ -477,30 +515,61 @@ impl RemoteTransport for TypesafeTransport {
     ) -> Result<String, String> {
         let request: Value =
             serde_json::from_str(request_json).map_err(|err| format!("typesafe request: {err}"))?;
-        let (reply, satisfied) = self.decide_once(&request, screenshot, true)?;
-        if !done_vetoed(&reply, satisfied) {
+        let (mut reply, satisfied, operation_p) = self.decide_once(&request, screenshot, true)?;
+        let Some(mut vetoed) = second_look(&reply, satisfied, operation_p, &request) else {
             return Ok(reply);
-        }
-        // JEV chose DONE but judged the goal unmet: ask once more without
-        // DONE on the menu. The reply is still an offered id, or an abstain.
-        match self.decide_once(&without_done(&request), screenshot, false) {
-            Ok((reply, _)) => Ok(reply),
-            Err(err) => {
-                Ok(json!({"abstain": format!("done self-check refused DONE; {err}")}).to_string())
+        };
+        // JEV chose DONE but its own check says the goal is unmet, or chose
+        // BLOCKED without conviction: ask again without that control on the
+        // menu. A doubtful BLOCKED right after a refused DONE gets one more
+        // look, so a decision costs at most three calls. Every reply is still
+        // an offered id, or an abstain.
+        let mut again = request.clone();
+        for _ in 0..2 {
+            again = without_control(&again, vetoed);
+            let still_offers_done = again["actions"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|a| a["id"] == "DONE"));
+            match self.decide_once(&again, screenshot, still_offers_done) {
+                Ok((next, satisfied, operation_p)) => {
+                    match second_look(&next, satisfied, operation_p, &again) {
+                        None => return Ok(next),
+                        Some("DONE") => {
+                            return Ok(
+                                json!({"abstain": "self-check refused DONE twice"}).to_string()
+                            )
+                        }
+                        Some(next_veto) => {
+                            reply = next;
+                            vetoed = next_veto;
+                        }
+                    }
+                }
+                // A doubtful BLOCKED that cannot be re-asked still stands.
+                Err(_) if vetoed == "BLOCKED" => return Ok(reply),
+                Err(err) => {
+                    return Ok(
+                        json!({"abstain": format!("done self-check refused DONE; {err}")})
+                            .to_string(),
+                    )
+                }
             }
         }
+        // Still a doubtful BLOCKED with nothing else to offer: it stands.
+        Ok(reply)
     }
 }
 
 impl TypesafeTransport {
-    /// One System One call: the reply, and when `check_done` the model's
-    /// probability that the whole goal is already satisfied.
+    /// One System One call: the reply, when `check_done` the model's
+    /// probability that the whole goal is already satisfied, and the
+    /// operation head's probability for the chosen operation.
     fn decide_once(
         &mut self,
         request: &Value,
         screenshot: Option<&Screenshot>,
         check_done: bool,
-    ) -> Result<(String, Option<f64>), String> {
+    ) -> Result<(String, Option<f64>, Option<f64>), String> {
         let mut built = build_questions(request)?;
         if check_done {
             add_done_check(&mut built, request);
@@ -535,7 +604,12 @@ impl TypesafeTransport {
             .then(|| response.noul(DONE_CHECK_HEAD).ok().map(|a| a.noul))
             .flatten()
             .filter(|p| p.is_finite());
-        Ok((reply, satisfied))
+        let operation_p = response
+            .choice("operation")
+            .ok()
+            .and_then(|a| a.probabilities.get(&a.choice).copied())
+            .filter(|p| p.is_finite());
+        Ok((reply, satisfied, operation_p))
     }
 }
 
@@ -756,19 +830,55 @@ mod tests {
     }
 
     #[test]
-    fn done_is_vetoed_only_when_the_self_check_says_unmet() {
+    fn done_needs_a_sure_self_check_unless_every_clause_is_satisfied() {
         let done = r#"{"choice":{"id":"DONE","kind":"DONE"}}"#;
         let click = r#"{"choice":{"id":"CLICK:n12","kind":"CLICK"}}"#;
-        assert!(done_vetoed(done, Some(0.2)));
-        assert!(!done_vetoed(done, Some(0.5)), "one half keeps DONE");
-        assert!(!done_vetoed(done, None), "a missing check never refuses");
-        assert!(!done_vetoed(click, Some(0.0)), "only DONE is checked");
+        let open = json!({"progress": {"satisfied": [true, false]}});
+        let all = json!({"progress": {"satisfied": [true, true]}});
+        assert_eq!(second_look(done, Some(0.6), None, &open), Some("DONE"));
+        assert_eq!(
+            second_look(done, Some(0.7), None, &open),
+            None,
+            "0.7 keeps DONE"
+        );
+        assert_eq!(second_look(done, Some(0.6), None, &json!({})), Some("DONE"));
+        assert_eq!(
+            second_look(done, Some(0.5), None, &all),
+            None,
+            "all clauses: one half keeps DONE"
+        );
+        assert_eq!(second_look(done, Some(0.4), None, &all), Some("DONE"));
+        assert_eq!(
+            second_look(done, None, None, &open),
+            None,
+            "a missing check never refuses"
+        );
+        assert_eq!(
+            second_look(click, Some(0.0), Some(0.1), &open),
+            None,
+            "a click is never re-asked"
+        );
+    }
+
+    #[test]
+    fn blocked_needs_conviction_to_end_the_run() {
+        let blocked = r#"{"choice":{"id":"BLOCKED","kind":"BLOCKED"}}"#;
+        assert_eq!(
+            second_look(blocked, None, Some(0.42), &json!({})),
+            Some("BLOCKED")
+        );
+        assert_eq!(second_look(blocked, None, Some(0.6), &json!({})), None);
+        assert_eq!(
+            second_look(blocked, Some(0.0), None, &json!({})),
+            None,
+            "no probability, no veto"
+        );
     }
 
     #[test]
     fn re_ask_drops_only_done_and_the_check_needs_done_offered() {
         let request = request();
-        let again = without_done(&request);
+        let again = without_control(&request, "DONE");
         let ids: Vec<&str> = again["actions"]
             .as_array()
             .unwrap()

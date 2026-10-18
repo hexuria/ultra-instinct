@@ -265,6 +265,14 @@ impl ActionSpace {
         for region in manifold.regions().filter(|r| region_is_viable_target(r)) {
             *label_count.entry(region.label().trim()).or_default() += 1;
         }
+        // An unnamed generic wrapper around a clickable control adds a second,
+        // nameless way to press the same thing: the control is offered, the
+        // wrapper's click is not.
+        let wraps_click: std::collections::BTreeSet<&RegionId> = manifold
+            .regions()
+            .filter(|r| region_is_viable_target(r) && r.actions().contains(&Action::Click))
+            .filter_map(|r| r.parent())
+            .collect();
 
         for region in manifold.regions() {
             if !region_is_viable_target(region) {
@@ -274,6 +282,13 @@ impl ActionSpace {
                 let Some(kind) = map_region_claim(*claim) else {
                     continue;
                 };
+                if kind == ActionKind::Click
+                    && region.role() == Role::Generic
+                    && region.label().trim().is_empty()
+                    && wraps_click.contains(region.id())
+                {
+                    continue;
+                }
                 // Readonly controls stay clickable (focus/select text) but are
                 // not offered as TYPE_TEXT / SELECT targets.
                 if region.flags().readonly()
@@ -765,6 +780,36 @@ mod tests {
             Some([33, 55, 120, 15])
         );
         assert_eq!(space.get_str("DONE").unwrap().bounds(), None);
+    }
+
+    #[test]
+    fn an_unnamed_wrapper_around_a_clickable_control_is_not_a_second_target() {
+        let m = parse_fixture(
+            r#"
+            viewport w=800 h=600
+            region id=menu role=generic label="" x=6 y=56 w=50 h=51 actions=click sources=dom
+            region id=item role=menu_item label="Randee" x=10 y=93 w=36 h=11 actions=click,hover parent=menu sources=dom
+            region id=card role=generic label="Flight 12" x=100 y=56 w=80 h=40 actions=click sources=dom
+            region id=book role=button label="Book" x=110 y=70 w=40 h=20 actions=click parent=card sources=dom
+            region id=lonely role=generic label="" x=300 y=56 w=40 h=40 actions=click sources=dom
+            "#,
+        )
+        .unwrap();
+        let space = ActionSpace::from_manifold(&m);
+        assert!(
+            space.get_str("CLICK:menu").is_none(),
+            "nameless wrapper of a control"
+        );
+        assert!(space.get_str("CLICK:item").is_some());
+        assert!(space.get_str("HOVER:item").is_some());
+        assert!(
+            space.get_str("CLICK:card").is_some(),
+            "a named wrapper stays"
+        );
+        assert!(
+            space.get_str("CLICK:lonely").is_some(),
+            "a nameless box with no control inside stays"
+        );
     }
 
     #[test]
