@@ -42,6 +42,9 @@ pub(crate) struct DomElement {
     pub named_by_markup: bool,
     /// An SVG shape (circle, rect, polygon, ...).
     pub svg_shape: bool,
+    /// CLICK comes only from a script listener Chrome reported, not from
+    /// the tag, role, or markup.
+    pub click_from_listener: bool,
     /// An SVG shape whose markup names no fill: observe names its computed
     /// fill instead.
     pub unpainted: bool,
@@ -119,8 +122,28 @@ pub(crate) fn dom_document_with(
     })?;
     let mut out = DomDocument::default();
     walk_dom(root, listeners, hidden, &mut out);
+    drop_listener_clicks_on_containers(&mut out);
     drop_ambiguous_hu_k(&mut out);
     Ok(out)
+}
+
+/// A listener on an element that holds other click targets (a dialog that
+/// raises itself on mousedown, a list delegating to its rows) is bookkeeping,
+/// not a target: its listener-only CLICK goes, its children stay.
+fn drop_listener_clicks_on_containers(out: &mut DomDocument) {
+    let holders: BTreeSet<i64> = out
+        .elements
+        .iter()
+        .filter(|e| e.actions.contains(&Action::Click))
+        .flat_map(|e| e.ancestors.iter().copied())
+        .collect();
+    for element in &mut out.elements {
+        if element.click_from_listener && holders.contains(&element.backend_node_id) {
+            element
+                .actions
+                .retain(|a| *a != Action::Click && *a != Action::Point);
+        }
+    }
 }
 
 /// Backend ids `DOMSnapshot.captureSnapshot` marks `isClickable`: Chrome's
@@ -493,7 +516,12 @@ fn element_from(node: &Value, listener: bool, hidden: &BTreeSet<u32>) -> Option<
     let mut label = if svg_shape {
         shape_label(node, name, &attributes, aria)
     } else if surface {
-        surface_label(node, name, aria)
+        surface_label(
+            node,
+            name,
+            aria,
+            listener || attribute_click_hint(&attributes),
+        )
     } else {
         aria.unwrap_or_else(|| direct_text(node))
     };
@@ -570,6 +598,8 @@ fn element_from(node: &Value, listener: bool, hidden: &BTreeSet<u32>) -> Option<
         .and_then(|raw| raw.parse::<u32>().ok());
     let mut actions = dom_actions(name, role);
     let marked_clickable = attribute_click_hint(&attributes);
+    let click_from_listener =
+        listener && !svg_shape && !marked_clickable && !actions.contains(&Action::Click);
     if svg_shape || marked_clickable || listener {
         add_click(&mut actions);
     }
@@ -627,6 +657,7 @@ fn element_from(node: &Value, listener: bool, hidden: &BTreeSet<u32>) -> Option<
         surface,
         named_by_markup,
         svg_shape,
+        click_from_listener,
         unpainted: svg_shape && shape_fill(&attributes).is_none(),
     })
 }
@@ -647,8 +678,10 @@ fn is_surface(name: &str) -> bool {
     name == "svg" || name.eq_ignore_ascii_case("CANVAS")
 }
 
-/// A surface's `aria-label`, else its `<title>`, else "canvas" / "drawing".
-fn surface_label(node: &Value, name: &str, aria: Option<String>) -> String {
+/// A surface's `aria-label`, else its `<title>`, else "canvas" / "drawing"
+/// when it takes clicks. A display-only surface with no name has none: a
+/// placeholder would read as the name of every unnamed target beside it.
+fn surface_label(node: &Value, name: &str, aria: Option<String>, interactive: bool) -> String {
     let title = node
         .get("children")
         .and_then(Value::as_array)
@@ -657,8 +690,15 @@ fn surface_label(node: &Value, name: &str, aria: Option<String>) -> String {
         .find(|c| c.get("nodeName").and_then(Value::as_str) == Some("title"))
         .map(direct_text)
         .filter(|t| !t.is_empty());
-    aria.or(title)
-        .unwrap_or_else(|| if name == "svg" { "drawing" } else { "canvas" }.to_owned())
+    aria.or(title).unwrap_or_else(|| {
+        if !interactive {
+            String::new()
+        } else if name == "svg" {
+            "drawing".to_owned()
+        } else {
+            "canvas".to_owned()
+        }
+    })
 }
 
 /// Plain elements a page commonly makes clickable by script: text boxes,
@@ -996,8 +1036,10 @@ fn dom_role(name: &str, role_attr: Option<&str>, input_type: Option<&str>) -> Ro
         "H1" | "H2" | "H3" | "H4" | "H5" | "H6" => Role::Heading,
         "DIALOG" => Role::Dialog,
         "INPUT" => match input_type.unwrap_or("").to_ascii_lowercase().as_str() {
-            "checkbox" => Role::Checkbox,
-            "button" | "submit" => Role::Button,
+            // A radio toggles like a checkbox; it takes no text.
+            "checkbox" | "radio" => Role::Checkbox,
+            "button" | "submit" | "reset" | "image" => Role::Button,
+            "range" => Role::Slider,
             _ => Role::TextField,
         },
         _ => Role::Generic,
@@ -1044,7 +1086,7 @@ fn ax_role(value: &str) -> Option<Role> {
         "combobox" => Some(Role::ComboBox),
         "listbox" => Some(Role::ListBox),
         "option" => Some(Role::Option),
-        "checkbox" => Some(Role::Checkbox),
+        "checkbox" | "radio" => Some(Role::Checkbox),
         "menuitem" => Some(Role::MenuItem),
         "navigation" => Some(Role::Navigation),
         "image" => Some(Role::Image),
@@ -1329,8 +1371,9 @@ mod pierce_tests {
         assert_eq!(
             shapes,
             [
-                // A bare svg root has no click evidence: no click, no points.
-                (2, "drawing", Role::Image, false),
+                // A bare svg root has no click evidence: no click, no points,
+                // and no placeholder name.
+                (2, "", Role::Image, false),
                 (10, "red circle", Role::Image, true),
                 (11, "blue rect", Role::Image, true),
                 (12, "Triangle", Role::Image, true),
@@ -1380,6 +1423,44 @@ mod pierce_tests {
             "waits for a compact hint, named by content, title, or color; \
              tags that are not boxes never"
         );
+    }
+
+    #[test]
+    fn a_listener_on_a_box_that_holds_targets_is_not_a_target() {
+        // A dialog that raises itself on mousedown, holding its close button.
+        let json = r##"{"root": {"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
+          "children": [{"nodeId": 2, "backendNodeId": 2, "nodeType": 1, "nodeName": "DIV", "attributes": ["role", "dialog"],
+            "children": [
+              {"nodeId": 3, "backendNodeId": 3, "nodeType": 1, "nodeName": "BUTTON", "attributes": ["title", "Close"]},
+              {"nodeId": 4, "backendNodeId": 4, "nodeType": 1, "nodeName": "P", "attributes": [],
+               "children": [{"nodeId": 5, "backendNodeId": 5, "nodeType": 3, "nodeName": "#text", "nodeValue": "Nunc odio arcu"}]}
+            ]},
+            {"nodeId": 6, "backendNodeId": 6, "nodeType": 1, "nodeName": "SPAN", "attributes": ["class", "cell"]}
+          ]}}"##;
+        let doc = dom_document_with(json, &BTreeSet::from([2, 6]), &BTreeSet::new()).unwrap();
+        let clicks = |id: i64| {
+            doc.elements
+                .iter()
+                .find(|e| e.node_id == id)
+                .is_some_and(|e| e.actions.contains(&Action::Click))
+        };
+        assert!(
+            !clicks(2),
+            "the dialog holds a button: its listener is bookkeeping"
+        );
+        assert!(clicks(3), "the button inside stays a target");
+        assert!(
+            clicks(6),
+            "a listener box with nothing inside stays a target"
+        );
+    }
+
+    #[test]
+    fn radios_toggle_and_range_inputs_slide() {
+        assert_eq!(dom_role("INPUT", None, Some("radio")), Role::Checkbox);
+        assert_eq!(dom_role("INPUT", None, Some("range")), Role::Slider);
+        assert_eq!(dom_role("INPUT", None, Some("email")), Role::TextField);
+        assert_eq!(ax_role("radio"), Some(Role::Checkbox));
     }
 
     #[test]
