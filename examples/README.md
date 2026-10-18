@@ -3,13 +3,13 @@
 Phase 1 example: rank the sidebar fixture.
 
 ```bash
-cargo run -p aui-cli --example sidebar_locate
-cargo run -p aui-cli -- locate \
+cargo run -p ultra-instinct --example sidebar_locate
+cargo run -p ultra-instinct -- locate \
   --fixture fixtures/sidebar.manifold \
   --text Settings --role button --position left --json
 ```
 
-The compiled example lives at `crates/aui-cli/examples/sidebar_locate.rs`.
+The compiled example lives at `crates/ultra-instinct/examples/sidebar_locate.rs`.
 It prints the top region id and checks that it is `nav-settings`.
 
 ## Benchmark scenarios
@@ -52,8 +52,8 @@ Thread tasks start on `#thread/q3` (`t8` adds `?preset=twin`). See
 ```sh
 python3 bench/server.py --port 8765 &
 # throwaway Chrome on CDP 9333, then:
-cargo build --release -p aui-cli --bin ultra-instinct
-cargo build --release -p aui-cli --features jev --example live_drive
+cargo build --release -p ultra-instinct --bin ultra-instinct
+cargo build --release -p ultra-instinct --features jev --example live_drive
 TYPESAFE_API_KEY=... ULTRA_INSTINCT_JEV=1 \
   ./target/release/examples/live_drive --bin target/release/ultra-instinct \
     --site http://127.0.0.1:8765/acme-mail/site

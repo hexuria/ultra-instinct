@@ -79,7 +79,7 @@ next call's read — there is no passive event stream, and none is claimed.
 
 ## Tests
 
-`crates/aui-mcp/tests/browser_tools.rs` drives most tools through the CDP
+`crates/ultra-instinct-mcp/tests/browser_tools.rs` drives most tools through the CDP
 replay harness (`ScriptBuilder` + `ReplayTransport`): call sequence, index
 resolution, gate→ticket→press order, observed-option grounding, and
 refusals (unobserved option, out-of-range index) are pinned without a live

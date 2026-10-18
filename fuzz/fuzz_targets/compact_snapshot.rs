@@ -8,5 +8,5 @@ use libfuzzer_sys::fuzz_target;
 // anything malformed and must never panic.
 fuzz_target!(|data: &[u8]| {
     let json = String::from_utf8_lossy(data);
-    let _ = aui_browser::compact_parse_fuzzable(&json);
+    let _ = ultra_instinct_browser::compact_parse_fuzzable(&json);
 });

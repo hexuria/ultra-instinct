@@ -73,8 +73,8 @@ specific to MiniWoB:
   guarded, and printed.
 - Menus can grow by decorative pointer-cursor text; the gate, ticket, and
   verification still apply to every offered click.
-- Owners: `aui-browser` extract / compact / observe tests (click hints),
-  `aui-mcp` browser_tools tests (`mouse: true`), `aui-core` action-space tests (box, near text, gap boundaries),
-  `aui-policy` remote and model-text tests (evidence reaches transports,
-  derived guards), `aui-agent` `verify_map` and `mock_loop` tests (control
-  state, evidence capture, page-text cap), `aui-cli` typesafe / run tests.
+- Owners: `ultra-instinct-browser` extract / compact / observe tests (click hints),
+  `ultra-instinct-mcp` browser_tools tests (`mouse: true`), `ultra-instinct-core` action-space tests (box, near text, gap boundaries),
+  `ultra-instinct-policy` remote and model-text tests (evidence reaches transports,
+  derived guards), `ultra-instinct-agent` `verify_map` and `mock_loop` tests (control
+  state, evidence capture, page-text cap), `ultra-instinct` typesafe / run tests.

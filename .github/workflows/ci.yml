@@ -59,7 +59,7 @@ jobs:
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - run: cargo clippy -p aui-cli --all-targets --features jev --locked -- -D warnings
+      - run: cargo clippy -p ultra-instinct --all-targets --features jev --locked -- -D warnings
 
   check-crates:
     name: each crate alone (--no-default-features, --locked)
@@ -94,13 +94,13 @@ jobs:
           tool: cargo-nextest
       - run: cargo nextest run --workspace --locked --profile ci --no-tests=pass
       # Optional HGRA experiment still compiles and tests behind its feature.
-      - run: cargo nextest run -p aui-resonance --features hgra --locked --profile ci
+      - run: cargo nextest run -p ultra-instinct-resonance --features hgra --locked --profile ci
       # Optional remote escalation behind its feature.
-      - run: cargo nextest run -p aui-policy -p aui-agent --features aui-agent/remote,aui-policy/remote --locked --profile ci
+      - run: cargo nextest run -p ultra-instinct-policy -p ultra-instinct-agent --features ultra-instinct-agent/remote,ultra-instinct-policy/remote --locked --profile ci
       # Optional model-text TextResolver: scripted / local-command models only (no network, no keys).
-      - run: cargo nextest run -p aui-policy -p aui-agent -p aui-cli --features aui-policy/model-text,aui-agent/model-text,aui-cli/model-text --locked --profile ci
+      - run: cargo nextest run -p ultra-instinct-policy -p ultra-instinct-agent -p ultra-instinct --features ultra-instinct-policy/model-text,ultra-instinct-agent/model-text,ultra-instinct/model-text --locked --profile ci
       # Optional System One client example still compiles behind its feature.
-      - run: cargo nextest run -p aui-cli --features jev --locked --profile ci
+      - run: cargo nextest run -p ultra-instinct --features jev --locked --profile ci
       - run: cargo test --workspace --all-features --locked --doc
       - name: Upload JUnit
         if: always()
@@ -124,7 +124,7 @@ jobs:
       - run: cargo doc --workspace --no-deps --all-features --locked
 
   deny:
-    name: cargo-deny (advisories)
+    name: cargo-deny (advisories + licenses)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -132,7 +132,7 @@ jobs:
           persist-credentials: false
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
-          command: check advisories
+          command: check advisories licenses
 
   zizmor:
     name: zizmor (workflow audit)

@@ -22,8 +22,8 @@ graph is a bug.
 ## Primary API (agent runtime)
 
 ```rust
-use aui_agent::AgentBuilder;
-use aui_policy::InstinctPolicy;
+use ultra_instinct_agent::AgentBuilder;
+use ultra_instinct_policy::InstinctPolicy;
 
 let mut agent = AgentBuilder::new(browser, InstinctPolicy::default())
     .max_steps(60)

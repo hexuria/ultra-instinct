@@ -1,6 +1,6 @@
 # ultra-instinct
 
-The product is `ultra-instinct`; crates are `aui-*` (Autonomous Ultra
+The product is `ultra-instinct`; crates are `ultra-instinct-*` (Autonomous Ultra
 Instinct) and binaries are `ultra-instinct` plus its short alias `aui`.
 HGRA is an experimental matcher frozen under `experiments/hgra/`. A crate
 or binary named `hgra` on the product path is a bug.
@@ -16,8 +16,10 @@ MCP (`ultra-instinct mcp`) is an **optional adapter**, not the orchestration
 surface. Nothing on the product path requires MCP, Browser Use, CUA, or Jev.
 
 Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
-(`rust-toolchain.toml`). `publish = false`. `#![forbid(unsafe_code)]` on every
-crate.
+(`rust-toolchain.toml`). Product crates publish to crates.io as
+`ultra-instinct-*` (incl. `ultra-instinct-hyper`: it stays off the
+product path but ships so `ultra-instinct-resonance`'s `hgra` feature
+resolves). `#![forbid(unsafe_code)]` on every crate.
 
 ## Anti-drift (read before changing anything on the agent path)
 
@@ -38,7 +40,7 @@ crate.
 >    as state-changed (ADR 0009), without that state entering the fingerprint.
 > 3. **Hard invalidity is guard evidence, not a score.** Disabled, readonly
 >    (TYPE / SELECT), hidden / zero-area, occluded, front-layer, offscreen,
->    missing target, unsupported action → `aui_guard::gate` refuses. The
+>    missing target, unsupported action → `ultra_instinct_guard::gate` refuses. The
 >    ranked `guard()` + `0.55` / `0.05` float gate exists only for the MCP / CLI
 >    preflight surface (historical A5 / A6 arms).
 > 4. **One executor boundary, one staleness barrier.** `execute_ticketed` is
@@ -64,10 +66,12 @@ crate.
 >    neighborhood (ancestors, same-parent siblings, children, root peers within
 >    `NEIGHBOR_RADIUS_PX` = 160, inclusive). MCP `seen_world` stays whole-page
 >    (`WorldSnapshot::of`). A DRAG ticket binds two ends: the source world as
->    above and a `TicketDest` with the destination's own neighborhood; a
->    surface-point ticket binds its grid `cell`. The executor refuses a
->    swapped destination, another cell, or a two-end / cell ticket on any other
->    input (`TicketMismatch`), and re-checks the drop target (ADR 0010).
+>    above and a `TicketDest` with the destination's own neighborhood (and,
+>    for a drop on a surface point, its grid `cell`); a surface-point ticket
+>    binds its grid `cell`; a KEY ticket binds its one key. The executor
+>    refuses a swapped destination, another cell, another key, or a two-end /
+>    cell / key ticket on any other input (`TicketMismatch`), and re-checks
+>    the drop target (ADR 0010, 0011).
 > 7. **Text is not Instinct.** `TYPE_TEXT` / `SELECT` payloads come from a
 >    `TextResolver`, checked against their context fingerprint, before the
 >    ticket is consumed, so executor revalidation always runs after resolver
@@ -79,15 +83,21 @@ crate.
 >    literals successfully typed earlier, then picks an untyped quoted literal
 >    whose preceding three goal words share a word with the field label, else
 >    the first untyped literal, else abstains (parity with the bench A3q helper).
+>    A literal right after a press verb (`press "Submit"`) names a control,
+>    not a value (ADR 0011).
 > 7a. **Model text is payload-only and grounded** (feature `model-text`,
 >    ADR 0006). The model fills the payload of an action Instinct already chose;
 >    replies must echo the context fingerprint, pass shape checks, and occur
->    in the goal clause, else deterministic fallback, else abstain. One opt-in
->    exception (`--allow-derived-text`, ADR 0009): a value read or worked out
+>    in the goal clause and not be a described phrase ("your answer"), else
+>    deterministic fallback, else abstain. One exception (ADR 0009; on by
+>    default in the CLI whenever a text model is configured, off with
+>    `--no-derived-text`, ADR 0011): a value read or worked out
 >    from page text may be typed when the goal quotes no untyped value, the
 >    field is not secret (password / hidden / file inputs; PIN /
 >    CVV / card / one-time-code labels), and the value is one line of ≤ 64
->    chars; every derived value is printed. CI uses scripted models only; no
+>    chars, or copied word for word from the page text; every derived value
+>    is printed. The model sees the page's reading text (rendered text plus
+>    text-area contents) and the field's near text. CI uses scripted models only; no
 >    provider SDK or key handling in the tree.
 > 7b. **Harder page types** (ADR 0007). Observe pierces open shadow roots and
 >    same-origin iframes (`pierce: true`). ComboBox / ListBox / Option are
@@ -99,12 +109,16 @@ crate.
 >    options change from the first poll and stabilize; input is never
 >    re-dispatched. A plain element the page made clickable (an `onclick`
 >    attribute or handler property, `tabindex` ≥ 0, or a pointer cursor it
->    sets itself rather than inherits) is offered CLICK (ADR 0009). Also kept
+>    sets itself rather than inherits) is offered CLICK (ADR 0009), and so is
+>    a plain box Chrome reports `isClickable` (one `DOMSnapshot` call: listeners
+>    added by script, ADR 0011). Also kept
 >    (ADR 0010): SVG shapes (named by title / text / fill; not an icon inside
 >    a click control), `LI` with text,
 >    text-less boxes only with a click hint, `canvas` / `svg` surfaces (claim
->    `point`), scrollable boxes (claim `scroll`), popup owners (claim
->    `hover`), and drag-marked elements (claim `drag`). Observe
+>    `point` only with click evidence), scrollable boxes (claim `scroll`), popup owners (claim
+>    `hover`), and drag-marked elements (claim `drag`). Icon-only controls
+>    are named by title / alt / class or id words plus their row's rendered
+>    text; unrendered text names nothing. Observe
 >    also records control state (value, checked,
 >    expanded, select options) as evidence only: it is not in the region
 >    fingerprint, and password values are never read. Do not claim cross-origin
@@ -118,10 +132,20 @@ crate.
 >    `--no-page-text`), per-target `box` / `near_text`, and the run's
 >    `progress` (clauses, which are satisfied, values typed; secrets masked).
 >    Evidence never widens the reply. New kinds (ADR 0010) are still offered
->    ids: `HOVER:<id>`, `SCROLL_IN:<id>`, `DRAG:<src>><dst>` (capped pairs), and
->    surface cells `CLICK:<surface>@c,r` (8×8). JEV's DONE carries a
->    same-call `goal_satisfied` self-check; DONE below one half is re-asked
->    once without DONE, else abstain.
+>    ids: `HOVER:<id>`, `SCROLL_IN:<id>`, `DRAG:<src>><dst>` (up to 8
+>    sources × 96 destinations, sent as one compact `drag` block) including
+>    `DRAG:<src>><surface>@c,r` onto a cell of the drawing a source sits on,
+>    surface cells `CLICK:<surface>@c,r` (8×8), `KEY:<id>#<key>` from the
+>    closed `KEY_NAMES` set, and `SELECT_TEXT:<id>` (a trusted triple-click,
+>    verified by the page's selection) (ADR 0011). JEV's DONE carries a
+>    same-call `goal_satisfied` self-check; DONE below 0.7 (0.5 once every
+>    clause is satisfied) is re-asked without DONE, and BLOCKED below 0.6 is
+>    re-asked without BLOCKED (ADR 0011): at most three calls, a second
+>    refused DONE abstains. With `--second-opinion` the text model is asked
+>    when JEV ends on BLOCKED, abstains, or gives its operation < 0.5; its
+>    reply must be exactly an offered id + kind, else JEV's answer stands.
+>    Targets come before page controls in the request;
+>    near text and row text that echo the goal are not sent.
 > 9. **HGRA stays frozen.** No matcher tuning on the agent path.
 > 10. **One blocking CDP socket per agent.** Parallelism means separate agents
 >    in separate tabs with no shared state. Formal tools stay unjustified for
@@ -139,20 +163,20 @@ crate.
 
 | Crate | Owns |
 |---|---|
-| `aui-core` | `InteractionManifold`, regions, `ActionSpace`, fixture grammar |
-| `aui-cdp` | CDP transport trait, websocket, replay transport, replay script builder |
-| `aui-browser` | CDP observe (DOM/AX fusion, identity, stacking), raw CDP inputs |
-| `aui-observe` | Observation history and id diff |
-| `aui-geometry` | Geometry helpers |
-| `aui-policy` | `BrowserPolicy` + `PolicyContext` (`set_situation`, default no-op), `InstinctPolicy` (`instinct-*` 0.1.0 from crates.io) + `TRUST_CAP_MILLIS`/`set_evidence_adjustments` (bounded learned-trust evidence), `TextResolver`, `ModelTextResolver` (feature `model-text`), `RemotePolicy` (feature `remote`), multi-step clause split |
-| `aui-guard` | Hard `gate`, `ActionTicket` issue / `revalidate`, `TicketLedger`, `consume_ticket_once`, front layer + `WorldSnapshot`; ranked `guard()` for MCP preflight |
-| `aui-agent` | `Agent` state machine, `execute_ticketed`, `BrowserRuntime`, verification mapping, `MockBrowser` |
-| `aui-protocol` | Guard / ticket / verify wire types |
-| `aui-resonance` | `WeightedMatcher` (MCP / CLI locate + ranked guard only) |
-| `aui-mcp` | Optional JSON-RPC adapter (observe / guard / verify) |
-| `aui-remote` | Remote decision transports and the HTTP text model, the only crate with a model SDK / HTTP client: `typesafe` (feature `jev`), `clef` (feature `clef`), `http_text` (feature `model-text`); re-exported by `aui-cli` |
-| `aui-cli` | `ultra-instinct run` (agent loop, `--policy instinct|jev|clef|clef-flash`, `--diary <dir>`); `replay --diary` (offline arena: agree / would-abstain / regress per recorded decision); `observe` / `guard` / `verify` / `locate` / `inspect` / `diff` preflight helpers; `mcp` (stdio); `TypesafeTransport` (feature `jev`: JEV-primary over the closed remote wire); `ClefTransport` (feature `clef`: Cloudflare Workers AI Clef / Clef-Flash over the same wire through `typesafe-sdk`'s Clef provider, one decision call, single-candidate heads answered locally) |
-| `aui-dojo` | Battle diary schema v1 (`DiaryLine` JSONL), `DiaryWriter` / `read_diary`, site + situation keys, decision→`ActionSpace` rebuild for the replay arena; versioned `LessonStore` (words / places / moves / trust, keyed per situation, carrying proving diary ids); lessons only adjust evidence inside the finite `ActionSpace` |
+| `ultra-instinct-core` | `InteractionManifold`, regions, `ActionSpace`, fixture grammar |
+| `ultra-instinct-cdp` | CDP transport trait, websocket, replay transport, replay script builder |
+| `ultra-instinct-browser` | CDP observe (DOM/AX fusion, identity, stacking), raw CDP inputs |
+| `ultra-instinct-observe` | Observation history and id diff |
+| `ultra-instinct-geometry` | Geometry helpers |
+| `ultra-instinct-policy` | `BrowserPolicy` + `PolicyContext` (`set_situation`, default no-op), `InstinctPolicy` (`instinct-*` 0.1.0 from crates.io) + `TRUST_CAP_MILLIS`/`set_evidence_adjustments` (bounded learned-trust evidence), `TextResolver`, `ModelTextResolver` (feature `model-text`), `RemotePolicy` (feature `remote`), multi-step clause split |
+| `ultra-instinct-guard` | Hard `gate`, `ActionTicket` issue / `revalidate`, `TicketLedger`, `consume_ticket_once`, front layer + `WorldSnapshot`; ranked `guard()` for MCP preflight |
+| `ultra-instinct-agent` | `Agent` state machine, `execute_ticketed`, `BrowserRuntime`, verification mapping, `MockBrowser` |
+| `ultra-instinct-protocol` | Guard / ticket / verify wire types |
+| `ultra-instinct-resonance` | `WeightedMatcher` (MCP / CLI locate + ranked guard only) |
+| `ultra-instinct-mcp` | Optional JSON-RPC adapter (observe / guard / verify) |
+| `ultra-instinct-remote` | Remote decision transports and the HTTP text model, the only crate with a model SDK / HTTP client: `typesafe` (feature `jev`), `clef` (feature `clef`), `http_text` (feature `model-text`); re-exported by `ultra-instinct` |
+| `ultra-instinct` | `ultra-instinct run` (agent loop, `--policy instinct|jev|clef|clef-flash`, `--diary <dir>`); `replay --diary` (offline arena: agree / would-abstain / regress per recorded decision); `observe` / `guard` / `verify` / `locate` / `inspect` / `diff` preflight helpers; `mcp` (stdio); `TypesafeTransport` (feature `jev`: JEV-primary over the closed remote wire); `ClefTransport` (feature `clef`: Cloudflare Workers AI Clef / Clef-Flash over the same wire through `typesafe-sdk`'s Clef provider, one decision call, single-candidate heads answered locally) |
+| `ultra-instinct-dojo` | Battle diary schema v1 (`DiaryLine` JSONL), `DiaryWriter` / `read_diary`, site + situation keys, decision→`ActionSpace` rebuild for the replay arena; versioned `LessonStore` (words / places / moves / trust, keyed per situation, carrying proving diary ids); lessons only adjust evidence inside the finite `ActionSpace` |
 
 Instinct (`instinct-core` / `-text` / `-lexicon`) is pinned to 0.1.0 from
 crates.io in the workspace `Cargo.toml` (`INSTINCT_VERSION_REQ`); bump only with a
@@ -161,15 +185,15 @@ feature, not the default product path.
 
 ## Verification owners
 
-- Agent loop, stale discards, multi-step clauses: `aui-agent` unit tests,
+- Agent loop, stale discards, multi-step clauses: `ultra-instinct-agent` unit tests,
   `tests/mock_loop.rs`, `tests/adversarial.rs`, `tests/replay_cdp.rs`.
 - Executor boundary: `executor.rs` unit tests, `tests/props.rs`
   (substitution, staleness, consumed-beats-stale, `is_stale` classification,
   drag destination and surface cell substitution).
-- Gate / ticket / world: `aui-guard` unit tests,
+- Gate / ticket / world: `ultra-instinct-guard` unit tests,
   `tests/ticket_props.rs` (radius boundary 159 / 160 / 161, focus-only change,
   consumed never stale), `tests/world_context.rs`.
-- Instinct evidence: `aui-policy` unit tests. Do not add a second model of
+- Instinct evidence: `ultra-instinct-policy` unit tests. Do not add a second model of
   Instinct scoring or of `WeightedMatcher::rank`.
 - `write_fixture` / `parse_fixture` own the manifold fixture grammar. CDP
   replay is a different grammar. Fusion is the only DOM/accessibility merge.
@@ -178,11 +202,11 @@ feature, not the default product path.
   remote-model replies, model-text replies): `fuzz/` cargo-fuzz targets on a
   dated nightly (`scripts/fuzz-smoke.sh`, `.github/workflows/nightly.yml`),
   backed by the structured/garbage proptests at small case counts.
-- Observe protocol cost: `crates/aui-browser/tests/call_budget.rs`
+- Observe protocol cost: `crates/ultra-instinct-browser/tests/call_budget.rs`
   pins the CDP call count per observe as a regression tripwire.
 - Repo rules (toolchain pin, `forbid(unsafe_code)`, crate ceilings, pinned
   nightlies): `scripts/check_repo_rules.sh`. Dependency direction and the
-  no-async/no-model-SDK ban below `aui-cli`:
+  no-async/no-model-SDK ban below `ultra-instinct`:
   `scripts/architecture.txt` + `scripts/check_architecture.py`. Both run in
   `ci.yml`'s `repo-rules` job.
 - Workflow integrity: `zizmor --persona=auditor` in `ci.yml`. Dependency

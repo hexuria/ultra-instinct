@@ -10,13 +10,13 @@ Upstream: <https://github.com/browser-use/jev-ultrafast>
 
 | jev-ultrafast | ultra-instinct |
 |---|---|
-| `agent.py` | `aui-agent` (`Agent`: predict / act / tick / run) |
-| `browser.py` | `aui-browser` |
+| `agent.py` | `ultra-instinct-agent` (`Agent`: predict / act / tick / run) |
+| `browser.py` | `ultra-instinct-browser` |
 | `snapshot.js` | browser observation / ActionSpace (existing DOM+AX; not a JS port) |
-| `model.py` | `aui-policy` + `ActionSpace` |
+| `model.py` | `ultra-instinct-policy` + `ActionSpace` |
 | `questions.py` | consumer policy / eval data |
 | `fresh()` | fresh observe + `revalidate` + hard `gate` at the executor (ADR 0003) |
-| `Browser.act()` | `aui_agent::execute_ticketed` → `BrowserSession::{press, type_text, select_option, scroll}` |
+| `Browser.act()` | `ultra_instinct_agent::execute_ticketed` → `BrowserSession::{press, type_text, select_option, scroll}` |
 | history | agent history / journal |
 
 Where Ultra-Instinct intentionally goes further: DOM+AX fusion, stable cross-observation

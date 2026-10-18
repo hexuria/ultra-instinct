@@ -25,12 +25,12 @@ jobs:
         include:
           - name: gate-ticket-executor
             args: >-
-              -f crates/aui-guard/src/gate.rs
-              -f crates/aui-guard/src/ticket.rs
-              -f crates/aui-agent/src/executor.rs
+              -f crates/ultra-instinct-guard/src/gate.rs
+              -f crates/ultra-instinct-guard/src/ticket.rs
+              -f crates/ultra-instinct-agent/src/executor.rs
           - name: world-of-target
             args: >-
-              -f crates/aui-guard/src/world.rs
+              -f crates/ultra-instinct-guard/src/world.rs
               --re 'of_target|neighborhood_of|nearby'
     name: mutants (${{ matrix.name }})
     steps:

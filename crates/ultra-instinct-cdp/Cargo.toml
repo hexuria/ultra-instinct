@@ -1,0 +1,13 @@
+[package]
+name = "ultra-instinct-cdp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "CDP wire for ultra-instinct: transport trait, blocking websocket, replay transport, replay script builder."
+
+[dependencies]
+serde_json = "1"
+tungstenite = { version = "0.26", default-features = false, features = ["handshake"] }

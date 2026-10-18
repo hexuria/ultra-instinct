@@ -31,8 +31,8 @@ fi
 
 # Locate the repo root from the script's own path; empty when piped/copied.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." 2>/dev/null && pwd || true)"
-if [ -n "$HERE" ] && [ -f "$HERE/crates/aui-cli/Cargo.toml" ] \
-    && grep -q 'name = "aui-cli"' "$HERE/crates/aui-cli/Cargo.toml"; then
+if [ -n "$HERE" ] && [ -f "$HERE/crates/ultra-instinct/Cargo.toml" ] \
+    && grep -q 'name = "ultra-instinct"' "$HERE/crates/ultra-instinct/Cargo.toml"; then
     SRC="$HERE"
 else
     SRC="$CACHE_SRC"
@@ -47,7 +47,7 @@ fi
 # the source tree — cd into the source so its rust-toolchain.toml (1.99.0)
 # applies even when the caller's default toolchain is older.
 cd "$SRC"
-cargo install --locked --path crates/aui-cli --features "$FEATURES"
+cargo install --locked --path crates/ultra-instinct --features "$FEATURES"
 
 BIN_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
 case ":$PATH:" in

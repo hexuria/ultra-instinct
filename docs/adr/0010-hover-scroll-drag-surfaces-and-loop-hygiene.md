@@ -68,8 +68,8 @@ benchmark and suite names there.
    - Surface cells are `CLICK:<surface>@c,r` on an 8×8 grid. `gate_point`
      binds the cell into the ticket, and the executor clicks exactly that
      cell from the fresh surface box.
-4. **Crate split.** The remote transports move into `aui-remote`, the only
-   crate with a model SDK or HTTP client. `aui-cli` re-exports them.
+4. **Crate split.** The remote transports move into `ultra-instinct-remote`, the only
+   crate with a model SDK or HTTP client. `ultra-instinct` re-exports them.
 
 ## Consequences
 
@@ -78,6 +78,8 @@ benchmark and suite names there.
   one.
 - Handlers bound with `addEventListener` that show no cursor and no markup
   stay unseen. That is deliberate: guessing would be tuning to a benchmark.
+  (Superseded by ADR 0011: Chrome's own `isClickable` record is read, not
+  guessed.)
 - Drawing (dragging between two surface points) is not offered, nor is
   dragging a shape to a surface point.
 - Instinct never picks HOVER, SCROLL_IN or DRAG: those are remote-only kinds
@@ -87,13 +89,13 @@ benchmark and suite names there.
   compact walk (the per-node fallback degrades to markup-only hints); the
   diary does not record a DRAG destination or a surface cell.
 - Owners:
-  - `aui-core` action-space tests: hover, scroll-in, drag caps, grid.
-  - `aui-guard` `ticket_props`: drag binds both ends.
-  - `aui-agent` `props`: destination and cell substitution, drag ticket on a
+  - `ultra-instinct-core` action-space tests: hover, scroll-in, drag caps, grid.
+  - `ultra-instinct-guard` `ticket_props`: drag binds both ends.
+  - `ultra-instinct-agent` `props`: destination and cell substitution, drag ticket on a
     click.
-  - `aui-agent` `mock_loop`: retype guard (per clause), progress masking,
+  - `ultra-instinct-agent` `mock_loop`: retype guard (per clause), progress masking,
     late popup and late-only change, hover / scroll / drag end to end.
-  - `aui-mcp` `browser_tools`: drag-only rows, self-drag refusal, release
+  - `ultra-instinct-mcp` `browser_tools`: drag-only rows, self-drag refusal, release
     after a failed move.
-  - `aui-browser` extract / compact / observe tests.
-  - `aui-remote` typesafe tests: DONE check, drag compose, progress.
+  - `ultra-instinct-browser` extract / compact / observe tests.
+  - `ultra-instinct-remote` typesafe tests: DONE check, drag compose, progress.
