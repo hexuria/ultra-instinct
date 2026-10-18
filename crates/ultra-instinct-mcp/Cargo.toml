@@ -18,7 +18,7 @@ ultra-instinct-observe = { path = "../ultra-instinct-observe", version = "0.1.0"
 ultra-instinct-agent = { path = "../ultra-instinct-agent", version = "0.1.0"}
 ultra-instinct-cdp = { path = "../ultra-instinct-cdp", version = "0.1.0"}
 serde_json = "1"
-base64 = "0.22"
+base64 = "0.23"
 
 [dev-dependencies]
 proptest = "1.7"
