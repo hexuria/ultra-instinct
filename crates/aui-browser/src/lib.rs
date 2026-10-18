@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+mod color;
 mod compact;
 mod error;
 mod extract;
@@ -946,6 +947,38 @@ mod compact_observe {
             "a display-only canvas takes no point clicks"
         );
         assert!(points("n400"), "a canvas with a click listener does");
+    }
+
+    #[test]
+    fn colour_only_targets_are_named_by_their_paint() {
+        let page = PageSpec::new(
+            vec![
+                DomSpec::button(10, 100, "", (10.0, 100.0, 40.0, 40.0))
+                    .with_tag("DIV")
+                    .with_attr("class", "color")
+                    .with_compact_state(serde_json::json!({"bg": "rgb(255, 165, 0)"})),
+                DomSpec::button(20, 200, "", (60.0, 100.0, 12.0, 12.0))
+                    .with_tag("SPAN")
+                    .with_compact_state(serde_json::json!({"ck": 1, "bg": "rgb(140, 242, 140)"})),
+                DomSpec::button(30, 300, "Save", (90.0, 100.0, 40.0, 20.0))
+                    .with_tag("BUTTON")
+                    .with_compact_state(serde_json::json!({"bg": "rgb(0, 0, 255)"})),
+            ],
+            vec![],
+            "https://example.test/",
+            "Colours",
+        )
+        .listener(100);
+        let script = ScriptBuilder::new().observe_compact(&page).to_json();
+        let mut session = BrowserSession::new(ReplayTransport::parse(&script).unwrap());
+        let manifold = session.observe().unwrap();
+        assert_eq!(manifold.get_str("n100").unwrap().label(), "orange color");
+        assert_eq!(manifold.get_str("n200").unwrap().label(), "light green");
+        assert_eq!(
+            manifold.get_str("n300").unwrap().label(),
+            "Save",
+            "a control with text keeps its name"
+        );
     }
 
     #[test]

@@ -211,6 +211,11 @@ function visit(el,doc,off){
       if(clickHint(el))rec.ck=1;
       if(scrollable(el))rec.sc=1;
       if(dragCursor(el))rec.dg=1;
+      // Paint, for targets named by colour alone.
+      var paint=el.ownerDocument.defaultView.getComputedStyle(el);
+      var bgc=paint.backgroundColor;
+      if(bgc&&bgc!=='transparent'&&bgc!=='rgba(0, 0, 0, 0)')rec.bg=bgc;
+      if(el.namespaceURI===SVG_NS&&SHAPES[el.localName]&&paint.fill&&paint.fill!=='none')rec.fl=paint.fill;
       var name=el.nodeName.toUpperCase();
       var inputType=(el.getAttribute('type')||'text').toLowerCase();
       if(name==='INPUT')rec.it=inputType;
@@ -294,6 +299,10 @@ pub(crate) struct CompactNode {
     pub drag_hint: bool,
     /// Not rendered at all: no client rects (`display: none`).
     pub unrendered: bool,
+    /// Computed `background-color`, when it is not transparent.
+    pub background: Option<String>,
+    /// Computed `fill` of an SVG shape, when it is not `none`.
+    pub fill: Option<String>,
 }
 
 /// Compact hit-test evidence for one element.
@@ -398,6 +407,14 @@ pub(crate) fn parse(eval_result_json: &str) -> Result<CompactSnapshot, BrowserEr
         let scrollable = record.get("sc").is_some_and(|sc| sc.as_i64() == Some(1));
         let drag_hint = record.get("dg").is_some_and(|dg| dg.as_i64() == Some(1));
         let unrendered = record.get("nr").is_some_and(|nr| nr.as_i64() == Some(1));
+        let paint = |key: &str| {
+            record
+                .get(key)
+                .and_then(Value::as_str)
+                .map(|v| truncate_chars(v, 64))
+        };
+        let background = paint("bg");
+        let fill = paint("fl");
         out.nodes.insert(
             k,
             CompactNode {
@@ -409,6 +426,8 @@ pub(crate) fn parse(eval_result_json: &str) -> Result<CompactSnapshot, BrowserEr
                 scrollable,
                 drag_hint,
                 unrendered,
+                background,
+                fill,
             },
         );
     }

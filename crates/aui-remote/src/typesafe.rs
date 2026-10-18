@@ -230,7 +230,7 @@ pub(crate) fn build_questions(request: &Value) -> Result<BuiltQuestions, String>
                 if let Some(role) = a["role"].as_str() {
                     element.insert("role".to_owned(), Value::String(role.to_owned()));
                 }
-                for key in ["near_text", "box", "key"] {
+                for key in ["near_text", "box", "key", "in_instruction"] {
                     if let Some(value) = a.get(key) {
                         element.insert(key.to_owned(), value.clone());
                     }

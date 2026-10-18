@@ -107,6 +107,27 @@ pub struct BrowserSession<T: CdpTransport> {
     stale: bool,
 }
 
+/// The label of a target named by its paint alone, in colour words: a box
+/// with no text (empty, its class words, or a raw colour) takes its
+/// background's name ("orange", "orange color"); a shape whose markup names
+/// no fill takes its computed fill's ("red circle"). `None` keeps the label.
+fn painted_label(element: &extract::DomElement, node: &compact::CompactNode) -> Option<String> {
+    if element.svg_shape {
+        let fill = node.fill.as_deref().and_then(crate::color::name)?;
+        return element
+            .unpainted
+            .then(|| format!("{fill} {}", element.label));
+    }
+    let background = node.background.as_deref().and_then(crate::color::name)?;
+    if element.label.is_empty() || crate::color::parse(&element.label).is_some() {
+        Some(background)
+    } else if element.named_by_markup {
+        Some(format!("{background} {}", element.label))
+    } else {
+        None
+    }
+}
+
 /// [`BrowserSession::reading_text`]: rendered text plus text-area values.
 const READING_TEXT_JS: &str = r#"(function(){
 var text=document.body?document.body.innerText:'';
@@ -272,6 +293,9 @@ impl<T: CdpTransport> BrowserSession<T> {
                 }
                 if node.is_some_and(|n| n.drag_hint) {
                     extract::add_drag(&mut raw.actions);
+                }
+                if let Some(label) = node.and_then(|n| painted_label(element, n)) {
+                    raw.label = label;
                 }
                 dom_raw.push(raw);
             }

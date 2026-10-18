@@ -109,10 +109,26 @@ benchmark name, task name, or page class appears in `crates/`.
      no element, so it verifies by `getSelection()`: success when it holds
      some of the target's text, wrong effect when it holds none.
 
+5. **Describe pictures in words.**
+   - A target named by its paint alone (a box with no text, class words, or
+     a raw colour; a shape whose markup names no fill) takes its computed
+     colour's name: the nearest basic keyword ("orange", "purple"), else a
+     hue family with "light" / "dark" ("light green"). The compact walk reads
+     the computed `background-color` and `fill`.
+   - Polygons say how many corners they have ("green 3-corner polygon").
+   - A target whose row text is the goal sentence is flagged
+     `in_instruction` in the request: a sample swatch in the instruction
+     line is part of the question, not an answer.
+   - SELECT_TEXT counts a block's own words, not words from its name.
+
 ## Consequences
 
 - Observe costs one more CDP call: six on the compact path. The call budget
   test pins it.
+- `aui-browser` grows past its ceiling (7400 → 7800): listener, label,
+  paint, and act evidence, most of it inline tests.
+- Drawings rendered on a canvas stay unseen: no DOM, no shapes. A text-only
+  model cannot read them; that needs an image.
 - A canvas whose listener sits on a parent element loses its point grid.
 - Owners:
   - `aui-browser` extract tests: listener boxes, markup names, row context,
@@ -136,3 +152,4 @@ benchmark name, task name, or page class appears in `crates/`.
     verification.
   - `aui-policy` text tests: date / time / month value formats.
   - `aui-remote` typesafe tests: the compact drag block, self pairs.
+  - `aui-browser` colour tests and the painted-label observe test.

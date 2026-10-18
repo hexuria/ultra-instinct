@@ -148,6 +148,11 @@ pub fn request_json_with_evidence(
                 "kind": a.kind().as_str(),
                 "label": label_without_goal_echo(a.label(), goal.as_str()),
             });
+            // A target inside the goal's own instruction line (a sample
+            // swatch, a quoted word) is part of the question, not an answer.
+            if in_instruction(a.label(), goal.as_str()) {
+                action["in_instruction"] = json!(true);
+            }
             if let Some(role) = a.role() {
                 action["role"] = json!(role.as_str());
             }
@@ -296,6 +301,14 @@ fn drag_block(drags: &[&aui_core::ObservedAction], goal: &str) -> Value {
 /// Separator observe puts between a markup name and its row's text
 /// ("more · Conner @a 7h ago").
 const ROW_CONTEXT_SEP: &str = " · ";
+
+/// The label's row text is the goal sentence: the target sits in the line
+/// that states the task.
+fn in_instruction(label: &str, goal: &str) -> bool {
+    label
+        .split_once(ROW_CONTEXT_SEP)
+        .is_some_and(|(_, row)| echoes_goal(row, goal))
+}
 
 /// A label whose row text is the goal sentence (the nearest text above a
 /// board cell was the instruction line) keeps only its name.
@@ -565,6 +578,11 @@ mod tests {
             "more · Conner @a 7h ago"
         );
         assert_eq!(label_without_goal_echo("Submit", goal), "Submit");
+        assert!(in_instruction(
+            "orange color · Playing as 'X', win a game of tic-tac-toe.",
+            goal
+        ));
+        assert!(!in_instruction("more · Conner @a 7h ago", goal));
     }
 
     #[test]

@@ -40,6 +40,11 @@ pub(crate) struct DomElement {
     pub surface: bool,
     /// The label is only the words of its class or id ("more", "trash").
     pub named_by_markup: bool,
+    /// An SVG shape (circle, rect, polygon, ...).
+    pub svg_shape: bool,
+    /// An SVG shape whose markup names no fill: observe names its computed
+    /// fill instead.
+    pub unpainted: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -582,7 +587,8 @@ fn element_from(node: &Value, listener: bool, hidden: &BTreeSet<u32>) -> Option<
     }
     // A block of reading text (a paragraph, a list item, a cell, a text box
     // with words of its own) can be selected. Controls and fields cannot.
-    let words = label.split_whitespace().count();
+    // Its own text, not a name taken from attributes or paint.
+    let words = direct_text(node).split_whitespace().count();
     if matches!(
         name.to_ascii_uppercase().as_str(),
         "P" | "LI" | "TD" | "DIV" | "SPAN" | "BLOCKQUOTE" | "PRE"
@@ -620,6 +626,8 @@ fn element_from(node: &Value, listener: bool, hidden: &BTreeSet<u32>) -> Option<
         needs_hint,
         surface,
         named_by_markup,
+        svg_shape,
+        unpainted: svg_shape && shape_fill(&attributes).is_none(),
     })
 }
 
@@ -789,15 +797,34 @@ fn shape_label(
     if name == "text" {
         return direct_text(node);
     }
-    let fill = attributes
+    // A polygon says how many corners it has ("5-corner polygon").
+    let kind = match (name, attributes.get("points")) {
+        ("polygon" | "polyline", Some(points)) => {
+            let numbers = points
+                .split(|c: char| c == ',' || c.is_whitespace())
+                .filter(|p| !p.is_empty())
+                .count();
+            match numbers / 2 {
+                n if n >= 3 => format!("{n}-corner {name}"),
+                _ => name.to_owned(),
+            }
+        }
+        _ => name.to_owned(),
+    };
+    match shape_fill(attributes) {
+        // A fill a reader can name is named ("#f00" is "red").
+        Some(fill) => format!("{} {kind}", crate::color::name(&fill).unwrap_or(fill)),
+        None => kind,
+    }
+}
+
+/// A shape's fill from its markup (`fill` attribute or inline style).
+fn shape_fill(attributes: &std::collections::BTreeMap<String, String>) -> Option<String> {
+    attributes
         .get("fill")
         .cloned()
         .or_else(|| inline_style(attributes, "fill"))
-        .filter(|f| !f.is_empty() && f != "none");
-    match fill {
-        Some(fill) => format!("{fill} {name}"),
-        None => name.to_owned(),
-    }
+        .filter(|f| !f.is_empty() && f != "none" && !f.eq_ignore_ascii_case("currentcolor"))
 }
 
 /// One declaration from the inline `style` attribute, value trimmed.
