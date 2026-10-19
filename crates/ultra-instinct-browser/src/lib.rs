@@ -986,6 +986,49 @@ mod compact_observe {
     }
 
     #[test]
+    fn paint_never_names_a_form_field_or_a_drawing_surface() {
+        let white = serde_json::json!({"bg": "rgb(255, 255, 255)"});
+        let page = PageSpec::new(
+            vec![
+                DomSpec::button(10, 100, "", (10.0, 100.0, 100.0, 12.0))
+                    .with_tag("INPUT")
+                    .with_attr("type", "text")
+                    .with_attr("readonly", "")
+                    .with_compact_state(white.clone()),
+                DomSpec::button(20, 200, "", (200.0, 0.0, 160.0, 210.0))
+                    .with_tag("CANVAS")
+                    .with_compact_state(white.clone()),
+                DomSpec::button(30, 300, "", (10.0, 140.0, 40.0, 40.0))
+                    .with_tag("DIV")
+                    .with_compact_state(white),
+            ],
+            vec![],
+            "https://example.test/",
+            "Paint",
+        )
+        .listener(300);
+        let script = ScriptBuilder::new().observe_compact(&page).to_json();
+        let mut session = BrowserSession::new(ReplayTransport::parse(&script).unwrap());
+        let manifold = session.observe().unwrap();
+        let label = |id: &str| manifold.get_str(id).map(|r| r.label().to_owned());
+        assert_eq!(
+            label("n100").as_deref(),
+            Some(""),
+            "a text box is named by its label only"
+        );
+        assert_ne!(
+            label("n200").as_deref(),
+            Some("white"),
+            "a display-only canvas is not its paint"
+        );
+        assert_eq!(
+            label("n300").as_deref(),
+            Some("white"),
+            "a text-less box still is"
+        );
+    }
+
+    #[test]
     fn a_canvas_with_its_own_pointer_cursor_is_a_surface() {
         let page = PageSpec::new(
             vec![DomSpec::button(30, 300, "", (200.0, 0.0, 160.0, 210.0))

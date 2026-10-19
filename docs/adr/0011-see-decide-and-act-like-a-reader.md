@@ -124,7 +124,9 @@ benchmark name, task name, or page class appears in `crates/`.
      a raw colour; a shape whose markup names no fill) takes its computed
      colour's name: the nearest basic keyword ("orange", "purple"), else a
      hue family with "light" / "dark" ("light green"). The compact walk reads
-     the computed `background-color` and `fill`.
+     the computed `background-color` and `fill`. Paint never names a form
+     field (a white text box is named by its label, or not at all, and its
+     near text says what it is) or a drawing surface.
    - Polygons say how many corners they have ("green 3-corner polygon").
    - A target whose row text is the goal sentence is flagged
      `in_instruction` in the request: a sample swatch in the instruction
@@ -177,6 +179,7 @@ benchmark name, task name, or page class appears in `crates/`.
     verification.
   - `ultra-instinct-policy` text tests: date / time / month value formats.
   - `ultra-instinct-remote` typesafe tests: the compact drag block, self pairs.
-  - `ultra-instinct-browser` colour tests and the painted-label observe test.
+  - `ultra-instinct-browser` colour tests and the painted-label observe tests
+    (`paint_never_names_a_form_field_or_a_drawing_surface`).
   - `ultra-instinct-remote` typesafe tests: when a second opinion is asked, and that
     advice must name an offered action.
