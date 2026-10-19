@@ -70,6 +70,32 @@ fn clicks_exact_label_and_sees_state_change() {
 }
 
 #[test]
+fn run_with_reports_every_step_as_it_is_recorded() {
+    let page = |label: &str| {
+        manifold(&format!(
+            r#"
+        viewport w=800 h=600
+        region id=go role=button label="{label}" x=10 y=10 w=80 h=24 actions=click sources=dom,accessibility
+        "#
+        ))
+    };
+    let mut browser = MockBrowser::new(page("Continue"));
+    browser.set_on_press(page("Finish"));
+    let mut agent = AgentBuilder::new(browser, InstinctPolicy::default())
+        .max_steps(3)
+        .build("Continue");
+    let mut seen = Vec::new();
+    let outcome = agent.run_with(|step| seen.push((step.step, step.label.clone())));
+    let recorded: Vec<_> = outcome
+        .steps()
+        .iter()
+        .map(|s| (s.step, s.label.clone()))
+        .collect();
+    assert!(!recorded.is_empty(), "{outcome:?}");
+    assert_eq!(seen, recorded);
+}
+
+#[test]
 fn twin_delete_abstains_without_pressing() {
     let m = manifold(
         r#"

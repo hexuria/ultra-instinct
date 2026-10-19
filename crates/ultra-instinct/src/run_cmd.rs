@@ -12,6 +12,7 @@
 //! ultra-instinct run ... --policy clef                # feature `clef`: Cloudflare Clef (27B) decides
 //! ultra-instinct run ... --policy clef-flash          # feature `clef`: Cloudflare Clef-Flash (9B) decides
 //! ultra-instinct run ... --policy instinct            # offline; `pua` is a deprecated alias
+//! ultra-instinct run ... --live-steps                 # print each `step` line as it happens
 //! ```
 //!
 //! Live mode with `--url` opens an owned background tab; it closes when the run
@@ -51,7 +52,11 @@
 //! env drives an HTTP model — OpenAI-compatible, Anthropic, or Gemini wire,
 //! picked by `TEXT_MODEL_API` or the base URL host ([`crate::http_text`]).
 
-use ultra_instinct_agent::{Agent, AgentBuilder, AgentOutcome, BrowserRuntime, MockBrowser};
+use std::io::Write as _;
+
+use ultra_instinct_agent::{
+    Agent, AgentBuilder, AgentOutcome, BrowserRuntime, MockBrowser, StepRecord,
+};
 use ultra_instinct_browser::{
     open_tab, BrowserSession, CdpTransport, ReplayTransport, WebSocketTransport,
 };
@@ -92,6 +97,10 @@ struct RunArgs {
     /// when JEV is unsure (features `jev` + `model-text`).
     #[cfg_attr(not(feature = "jev"), allow(dead_code))]
     second_opinion: bool,
+    /// `--live-steps`: print (and flush) each `step` line as the step is
+    /// recorded instead of in the end-of-run transcript, so a run stopped
+    /// from outside still leaves every step it took.
+    live_steps: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -121,6 +130,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     let mut allow_derived_text = false;
     let mut no_derived_text = false;
     let mut second_opinion = false;
+    let mut live_steps = false;
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
@@ -174,6 +184,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
             )?,
             "--no-derived-text" => switch(&mut no_derived_text, "--no-derived-text", arg, &inline)?,
             "--second-opinion" => switch(&mut second_opinion, "--second-opinion", arg, &inline)?,
+            "--live-steps" => switch(&mut live_steps, "--live-steps", arg, &inline)?,
             "--max-steps" => {
                 let raw = value("--max-steps")?;
                 let n: u32 = raw.parse().map_err(|_| CliError::BadNumber {
@@ -245,6 +256,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
         allow_derived_text,
         no_derived_text,
         second_opinion,
+        live_steps,
     })
 }
 
@@ -461,12 +473,12 @@ fn drive_dojo<T: CdpTransport>(
             .max_wait(std::time::Duration::from_secs(u64::from(secs)));
     }
     let mut agent = builder.build(args.goal.clone());
-    let outcome = agent.run();
+    let outcome = run_agent(&mut agent, args);
     let diary_path = write_run_diary(&mut agent, args)?;
     let diary = diary_path
         .as_ref()
         .map(|p| format!("diary: {}\n", p.display()));
-    let mut out = with_diary(render(&agent, &outcome), diary.as_deref())?;
+    let mut out = with_diary(render(&agent, &outcome, args), diary.as_deref())?;
     let policy = agent.into_policy();
     let credited = policy.credited_steps().to_vec();
     let learned = policy.learned_count();
@@ -524,9 +536,9 @@ fn drive_with<T: CdpTransport, P: BrowserPolicy>(
         ));
     }
     let mut agent = builder.build(args.goal.clone());
-    let outcome = agent.run();
+    let outcome = run_agent(&mut agent, args);
     let diary = write_diary_line(&mut agent, args)?;
-    with_diary(render(&agent, &outcome), diary.as_deref())
+    with_diary(render(&agent, &outcome, args), diary.as_deref())
 }
 
 #[cfg(feature = "jev")]
@@ -650,7 +662,7 @@ fn drive_model_text<B: BrowserRuntime, P: BrowserPolicy>(
     let resolver =
         ultra_instinct_policy::ModelTextResolver::new(model).allow_derived(!args.no_derived_text);
     let mut agent = builder.text_resolver(resolver).build(args.goal.clone());
-    let outcome = agent.run();
+    let outcome = run_agent(&mut agent, args);
     let mut out = format!(
         "text resolver model ({source}) calls={}\n",
         agent.text_resolver().model_calls()
@@ -660,7 +672,7 @@ fn drive_model_text<B: BrowserRuntime, P: BrowserPolicy>(
         out.push_str(&format!("text derived from page: {value:?}\n"));
     }
     let diary = write_diary_line(&mut agent, args)?;
-    match with_diary(render(&agent, &outcome), diary.as_deref()) {
+    match with_diary(render(&agent, &outcome, args), diary.as_deref()) {
         Ok(rendered) => {
             out.push_str(&rendered);
             Ok(out)
@@ -719,21 +731,51 @@ fn with_diary(rendered: Result<String, CliError>, diary: Option<&str>) -> Result
     }
 }
 
-fn render<B, P, T>(agent: &Agent<B, P, T>, outcome: &AgentOutcome) -> Result<String, CliError>
+fn step_line(step: &StepRecord) -> String {
+    format!(
+        "step {} {} {:?} -> {}\n",
+        step.step,
+        step.action_id,
+        step.label,
+        step.verification.as_str()
+    )
+}
+
+/// Run the loop; with `--live-steps` each step line goes to stdout, flushed,
+/// the moment the step is recorded.
+fn run_agent<B, P, T>(agent: &mut Agent<B, P, T>, args: &RunArgs) -> AgentOutcome
+where
+    B: BrowserRuntime,
+    P: BrowserPolicy,
+    T: TextResolver,
+{
+    if !args.live_steps {
+        return agent.run();
+    }
+    agent.run_with(|step| {
+        let mut out = std::io::stdout().lock();
+        // Best effort: a closed stdout must not stop the run.
+        let _ = out.write_all(step_line(step).as_bytes());
+        let _ = out.flush();
+    })
+}
+
+fn render<B, P, T>(
+    agent: &Agent<B, P, T>,
+    outcome: &AgentOutcome,
+    args: &RunArgs,
+) -> Result<String, CliError>
 where
     B: BrowserRuntime,
     P: BrowserPolicy,
     T: TextResolver,
 {
     let mut out = String::new();
-    for step in outcome.steps() {
-        out.push_str(&format!(
-            "step {} {} {:?} -> {}\n",
-            step.step,
-            step.action_id,
-            step.label,
-            step.verification.as_str()
-        ));
+    // Live steps were already printed as they happened.
+    if !args.live_steps {
+        for step in outcome.steps() {
+            out.push_str(&step_line(step));
+        }
     }
     let (kind, why) = match outcome {
         AgentOutcome::Done { reason, .. } => ("done", reason.as_str()),
@@ -837,6 +879,20 @@ mod tests {
         assert!(out.contains("TYPE_TEXT:"), "{out}");
         assert!(out.contains("-> success"), "{out}");
         assert!(out.contains("outcome done"), "{out}");
+        // `--live-steps` prints step lines as they happen, so the closing
+        // transcript must not repeat them.
+        let live = run_command(&a(&[
+            "--goal",
+            r#"Type "rust" into Search"#,
+            "--policy",
+            "instinct",
+            "--fixture",
+            path.to_str().unwrap(),
+            "--live-steps",
+        ]))
+        .unwrap();
+        assert!(!live.lines().any(|l| l.starts_with("step ")), "{live}");
+        assert!(live.contains("outcome done"), "{live}");
     }
 
     #[cfg(not(feature = "model-text"))]
@@ -879,6 +935,30 @@ mod tests {
             matches!(err, CliError::UnknownFlag(ref m) if m.contains("--features jev")),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn live_steps_is_a_bare_switch_off_by_default() {
+        assert!(
+            !parse(&a(&["--goal", "Go", "--fixture", "x"]))
+                .unwrap()
+                .live_steps
+        );
+        assert!(
+            parse(&a(&["--goal", "Go", "--fixture", "x", "--live-steps"]))
+                .unwrap()
+                .live_steps
+        );
+        assert!(parse(&a(&["--goal", "Go", "--fixture", "x", "--live-steps=1"])).is_err());
+        assert!(parse(&a(&[
+            "--goal",
+            "Go",
+            "--fixture",
+            "x",
+            "--live-steps",
+            "--live-steps"
+        ]))
+        .is_err());
     }
 
     #[test]

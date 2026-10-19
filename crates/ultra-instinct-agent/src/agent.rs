@@ -1516,7 +1516,14 @@ where
     }
 
     pub fn run(&mut self) -> AgentOutcome {
+        self.run_with(|_| {})
+    }
+
+    /// [`Agent::run`], calling `on_step` with each step as soon as it is
+    /// recorded. Observer only: it sees steps, it cannot change the loop.
+    pub fn run_with(&mut self, mut on_step: impl FnMut(&StepRecord)) -> AgentOutcome {
         let started = std::time::Instant::now();
+        let mut seen = self.history.len();
         loop {
             if self.steps_taken >= self.max_steps {
                 let outcome = AgentOutcome::Failed {
@@ -1526,7 +1533,14 @@ where
                 self.finish_journal(outcome.clone(), started);
                 return outcome;
             }
-            match self.tick() {
+            let ticked = self.tick();
+            // Any tick may record a step (one that also finishes the run or
+            // advances a clause included), so report by history growth.
+            for step in &self.history[seen..] {
+                on_step(step);
+            }
+            seen = self.history.len();
+            match ticked {
                 Ok(TickResult::Finished(outcome)) => {
                     self.finish_journal(outcome.clone(), started);
                     return outcome;
