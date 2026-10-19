@@ -106,7 +106,9 @@ impl<T: RemoteTransport> RemotePolicy<T> {
 ///
 /// Each action carries `id`, `kind`, `label`, and — for region-bound
 /// actions — `role`, `box`, `near_text` when unnamed, and nonempty observed
-/// `state`. History includes the
+/// `state`. An action already dispatched with no effect carries
+/// `tried` (`{"times", "last"}` in the habituation vocabulary), evidence
+/// only — the reply may still pick it. History includes the
 /// executed action's `kind` and `label`. Extra fields are additive for
 /// transports; a consumer may ignore them.
 pub fn request_json(space: &ActionSpace, goal: &AgentGoal, history: &[HistoryEntry]) -> String {
@@ -139,6 +141,21 @@ pub fn request_json_with_evidence(
     let (drags, targets): (Vec<_>, Vec<_>) = targets
         .into_iter()
         .partition(|a| a.kind() == ActionKind::Drag);
+    // Actions already dispatched with no effect, in Instinct's habituation
+    // vocabulary: the remote sees the same world next step and otherwise
+    // re-picks the same candidate deterministically. Evidence only — the
+    // transport's reply stays a free choice among all offered ids.
+    let mut tried: std::collections::BTreeMap<&str, (u32, &str)> = Default::default();
+    for entry in history {
+        if matches!(
+            entry.verification.as_str(),
+            "dispatched-no-visible-change" | "wrong-effect"
+        ) {
+            let slot = tried.entry(entry.action_id.as_str()).or_default();
+            slot.0 += 1;
+            slot.1 = entry.verification.as_str();
+        }
+    }
     let actions: Vec<Value> = targets
         .into_iter()
         .chain(controls)
@@ -171,6 +188,9 @@ pub fn request_json_with_evidence(
             if let Some(dest) = a.dest() {
                 action["dest"] =
                     json!({"id": dest.id.as_str(), "label": dest.label, "box": dest.bounds});
+            }
+            if let Some((times, last)) = tried.get(a.id().as_str()) {
+                action["tried"] = json!({"times": times, "last": last});
             }
             let observed = a.state();
             if !observed.is_empty() {
@@ -647,6 +667,36 @@ mod tests {
         assert!(done.get("box").is_none(), "controls have no box");
         assert_eq!(request["history"][0]["kind"], "TYPE_TEXT");
         assert_eq!(request["history"][0]["label"], "Name");
+    }
+
+    #[test]
+    fn tried_actions_are_marked_from_no_effect_history() {
+        let entry = |step: u32, id: &str, verification: &str| HistoryEntry {
+            step,
+            action_id: ActionId::try_new(id).unwrap(),
+            kind: ActionKind::Click,
+            label: "Delete".to_owned(),
+            verification: verification.to_owned(),
+        };
+        let history = [
+            entry(1, "CLICK:a", "dispatched-no-visible-change"),
+            entry(2, "CLICK:a", "dispatched-no-visible-change"),
+            entry(3, "CLICK:b", "state-changed"),
+        ];
+        let request: Value =
+            serde_json::from_str(&request_json(&twins(), &AgentGoal::new("Delete"), &history))
+                .unwrap();
+        let actions = request["actions"].as_array().unwrap();
+        let a = actions.iter().find(|x| x["id"] == "CLICK:a").unwrap();
+        assert_eq!(
+            a["tried"],
+            json!({"times": 2, "last": "dispatched-no-visible-change"})
+        );
+        let b = actions.iter().find(|x| x["id"] == "CLICK:b").unwrap();
+        assert!(
+            b.get("tried").is_none(),
+            "state-changed is not a no-effect try"
+        );
     }
 
     /// Records the screenshot and page each call carried; replies with a

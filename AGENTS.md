@@ -129,7 +129,9 @@ resolves). `#![forbid(unsafe_code)]` on every crate.
 >    may carry evidence a transport asks for (`wants_evidence`, ADR 0009):
 >    the viewport JPEG beside it (`jev`: a System One image, `--no-screenshot`),
 >    `page` {url, title, ≤ 6000 chars of visible text} (`jev`, `clef`,
->    `--no-page-text`), per-target `box` / `near_text`, and the run's
+>    `--no-page-text`), per-target `box` / `near_text`, per-action `tried`
+>    {times, last} when the action was already dispatched with no effect
+>    (evidence only — the reply may still pick it), and the run's
 >    `progress` (clauses, which are satisfied, values typed; secrets masked).
 >    Evidence never widens the reply. New kinds (ADR 0010) are still offered
 >    ids: `HOVER:<id>`, `SCROLL_IN:<id>`, `DRAG:<src>><dst>` (up to 8
