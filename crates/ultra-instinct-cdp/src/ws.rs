@@ -1,11 +1,12 @@
 //! Blocking CDP websocket. Plain `ws://` only. `wss://` is refused: this
 //! crate does not pull a TLS stack. Chrome's local debugging port is `ws`.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
+use serde_json::value::RawValue;
 use serde_json::{json, Value};
 use tungstenite::{Message, WebSocket};
 
@@ -254,23 +255,29 @@ impl CdpTransport for WebSocketTransport {
             let Message::Text(text) = message else {
                 continue;
             };
-            let value: Value =
-                serde_json::from_str(text.as_ref()).map_err(|err| CdpError::BadJson {
-                    message: err.to_string(),
-                })?;
-            if value.get("id").and_then(Value::as_i64) != Some(id) {
-                if let Some(method) = value.get("method").and_then(Value::as_str) {
-                    if self.events.len() >= MAX_BUFFERED_EVENTS {
-                        self.events.pop_front();
+            let Some(frame) = frame_fields(text.as_ref())? else {
+                continue;
+            };
+            if frame
+                .get("id")
+                .and_then(|raw| raw.get().parse::<i64>().ok())
+                != Some(id)
+            {
+                if let Some(method) = frame.get("method").and_then(|raw| raw_string(raw)) {
+                    if let Some(params) = event_params(&frame) {
+                        if self.events.len() >= MAX_BUFFERED_EVENTS {
+                            self.events.pop_front();
+                        }
+                        self.events.push_back(CdpEvent { method, params });
                     }
-                    self.events.push_back(CdpEvent {
-                        method: method.to_owned(),
-                        params: value.get("params").cloned().unwrap_or(Value::Null),
-                    });
                 }
                 continue;
             }
-            if let Some(error) = value.get("error") {
+            if let Some(raw) = frame.get("error") {
+                let error: Value =
+                    serde_json::from_str(raw.get()).map_err(|err| CdpError::BadJson {
+                        message: err.to_string(),
+                    })?;
                 let message = error
                     .get("message")
                     .and_then(Value::as_str)
@@ -278,13 +285,52 @@ impl CdpTransport for WebSocketTransport {
                     .to_owned();
                 return Err(CdpError::Protocol { message });
             }
-            let result = value.get("result").cloned().unwrap_or(Value::Null);
-            return Ok(result.to_string());
+            let result = frame
+                .get("result")
+                .map(|raw| raw.get().to_owned())
+                .unwrap_or_else(|| "null".to_owned());
+            return Ok(result);
         }
     }
 
     fn drain_events(&mut self) -> Vec<CdpEvent> {
         self.events.drain(..).collect()
+    }
+}
+
+/// One websocket text frame as a field map of raw values. Payload fields
+/// stay `RawValue` and are materialized only by the leaf parsers that know
+/// whether they need depth: a `DOM.getDocument` `result` nests ~2 JSON
+/// levels per DOM level, which dies at `serde_json`'s 128-level `Value` cap
+/// on real pages (~60-deep DOMs). Callers already choose bounded vs deep
+/// parsing (observe uses `parse_json_deep`), so the envelope decode only
+/// locates the fields.
+///
+/// `Ok(None)` is a valid JSON frame that is not an object — not a CDP
+/// message, ignored like any foreign frame. `Err(BadJson)` is malformed
+/// JSON, same mapping `Value` parsing had.
+fn frame_fields(text: &str) -> Result<Option<BTreeMap<String, Box<RawValue>>>, CdpError> {
+    match serde_json::from_str(text) {
+        Ok(fields) => Ok(Some(fields)),
+        Err(err) if err.is_data() => Ok(None),
+        Err(err) => Err(CdpError::BadJson {
+            message: err.to_string(),
+        }),
+    }
+}
+
+/// A frame field's text when it is a JSON string, `None` otherwise.
+fn raw_string(raw: &RawValue) -> Option<String> {
+    serde_json::from_str(raw.get()).ok()
+}
+
+/// An event frame's `params`, `Null` when the field is absent. A frame
+/// whose params overflow `Value`'s depth cap is undeliverable: the event is
+/// dropped rather than failing the in-flight call it rode in with.
+fn event_params(frame: &BTreeMap<String, Box<RawValue>>) -> Option<Value> {
+    match frame.get("params") {
+        Some(raw) => serde_json::from_str(raw.get()).ok(),
+        None => Some(Value::Null),
     }
 }
 
@@ -673,6 +719,68 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn deep_result_tree_passes_the_envelope_decode_unparsed() {
+        // DOM.getDocument on a real page nests past serde_json's 128-level
+        // Value cap (~2 JSON levels per DOM level): the transport must hand
+        // `result` to the caller's deep parser as raw text instead of dying
+        // in the envelope decode.
+        let mut tree = String::from("null");
+        for _ in 0..150 {
+            tree = format!("{{\"children\":[{tree}]}}");
+        }
+        let result_text = format!("{{\"root\":{tree}}}");
+        assert!(
+            serde_json::from_str::<Value>(&result_text).is_err(),
+            "fixture must exceed the Value depth cap"
+        );
+        let frame = frame_fields(&format!("{{\"id\":7,\"result\":{result_text}}}"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            frame
+                .get("id")
+                .and_then(|raw| raw.get().parse::<i64>().ok()),
+            Some(7)
+        );
+        assert_eq!(
+            frame.get("result").map(|raw| raw.get()),
+            Some(result_text.as_str())
+        );
+    }
+
+    #[test]
+    fn foreign_frames_and_deep_event_params_do_not_break_decode() {
+        // Valid JSON that is not an object is not a CDP message: skipped,
+        // like any frame that does not carry our response id.
+        assert!(frame_fields("[1,2]").unwrap().is_none());
+        assert!(frame_fields("\"text\"").unwrap().is_none());
+        assert!(frame_fields("null").unwrap().is_none());
+        assert!(matches!(
+            frame_fields("{nope"),
+            Err(CdpError::BadJson { .. })
+        ));
+        // An event whose params overflow the Value cap is undeliverable;
+        // the frame still decodes so the reader can drop just that event
+        // instead of failing the in-flight call.
+        let mut deep = String::from("null");
+        for _ in 0..140 {
+            deep = format!("{{\"a\":{deep}}}");
+        }
+        let frame = frame_fields(&format!("{{\"method\":\"X.y\",\"params\":{deep}}}"))
+            .unwrap()
+            .unwrap();
+        assert!(frame.get("id").is_none());
+        assert_eq!(
+            frame
+                .get("method")
+                .and_then(|raw| raw_string(raw))
+                .as_deref(),
+            Some("X.y")
+        );
+        assert!(event_params(&frame).is_none());
     }
 
     #[test]

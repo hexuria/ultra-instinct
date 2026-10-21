@@ -1,6 +1,9 @@
 //! Ordered CDP replay. Each [`CdpTransport::call`] consumes the next scripted
 //! step. A live socket uses the same method names and JSON params.
 
+use std::collections::BTreeMap;
+
+use serde_json::value::RawValue;
 use serde_json::Value;
 
 use crate::{CdpError, CdpTransport};
@@ -14,7 +17,11 @@ struct Step {
 
 #[derive(Clone, Debug)]
 enum Outcome {
-    Result(Value),
+    /// Raw `result` JSON, returned verbatim. A recorded page's
+    /// `DOM.getDocument` tree nests past `serde_json`'s 128-level `Value`
+    /// cap, so a scripted result keeps its text rather than materializing —
+    /// the same split the websocket transport makes in `ws::frame_fields`.
+    Result(String),
     Protocol(String),
 }
 
@@ -41,24 +48,40 @@ impl ReplayTransport {
     }
 
     pub fn append(&mut self, text: &str) -> Result<(), CdpError> {
-        let root: Value = serde_json::from_str(text).map_err(|err| CdpError::BadScript {
-            message: err.to_string(),
-        })?;
-        let calls =
-            root.get("calls")
-                .and_then(Value::as_array)
-                .ok_or_else(|| CdpError::BadScript {
+        let root: BTreeMap<String, Box<RawValue>> =
+            serde_json::from_str(text).map_err(|err| CdpError::BadScript {
+                message: err.to_string(),
+            })?;
+        let calls = match root.get("calls") {
+            Some(calls) if calls.get().trim_start().starts_with('[') => calls,
+            _ => {
+                return Err(CdpError::BadScript {
                     message: "script must be an object with a calls array".into(),
-                })?;
-        for call in calls {
+                })
+            }
+        };
+        let calls: Vec<Box<RawValue>> =
+            serde_json::from_str(calls.get()).map_err(|err| CdpError::BadScript {
+                message: err.to_string(),
+            })?;
+        for raw_call in calls {
+            // A non-object element decodes to an empty map and reports the
+            // same missing-method error it always did.
+            let call: BTreeMap<String, Box<RawValue>> =
+                serde_json::from_str(raw_call.get()).unwrap_or_default();
             let method = call
                 .get("method")
-                .and_then(Value::as_str)
+                .and_then(|raw| serde_json::from_str::<String>(raw.get()).ok())
                 .ok_or_else(|| CdpError::BadScript {
                     message: "call is missing method".into(),
-                })?
-                .to_owned();
-            let params = call.get("params").cloned();
+                })?;
+            let params = call
+                .get("params")
+                .map(|raw| serde_json::from_str::<Value>(raw.get()))
+                .transpose()
+                .map_err(|err| CdpError::BadScript {
+                    message: err.to_string(),
+                })?;
             if let Some(params) = &params {
                 if !params.is_object() {
                     return Err(CdpError::BadScript {
@@ -66,22 +89,32 @@ impl ReplayTransport {
                     });
                 }
             }
-            let has_result = call.get("result").is_some();
-            let has_error = call.get("error").is_some();
+            let has_result = call.contains_key("result");
+            let has_error = call.contains_key("error");
             if has_result == has_error {
                 return Err(CdpError::BadScript {
                     message: format!("`{method}` must set exactly one of result or error"),
                 });
             }
             let outcome = if has_error {
-                let message = match call.get("error") {
-                    Some(Value::String(message)) => message.clone(),
-                    Some(other) => other.to_string(),
-                    None => unreachable!("error presence checked"),
+                let error: Value = serde_json::from_str(
+                    call.get("error").expect("error presence checked").get(),
+                )
+                .map_err(|err| CdpError::BadScript {
+                    message: err.to_string(),
+                })?;
+                let message = match error {
+                    Value::String(message) => message,
+                    other => other.to_string(),
                 };
                 Outcome::Protocol(message)
             } else {
-                Outcome::Result(call.get("result").cloned().unwrap_or(Value::Null))
+                Outcome::Result(
+                    call.get("result")
+                        .expect("result presence checked")
+                        .get()
+                        .to_owned(),
+                )
             };
             self.steps.push(Step {
                 method,
@@ -136,7 +169,7 @@ impl CdpTransport for ReplayTransport {
         self.params_log
             .push((method.to_owned(), params_json.to_owned()));
         match outcome {
-            Outcome::Result(value) => Ok(value.to_string()),
+            Outcome::Result(text) => Ok(text),
             Outcome::Protocol(message) => Err(CdpError::Protocol { message }),
         }
     }
@@ -209,6 +242,30 @@ mod tests {
             "scripted CDP params do not match the call to `Page.getLayoutMetrics`"
         );
         assert!(transport.logged_methods().is_empty());
+    }
+
+    #[test]
+    fn deep_scripted_result_round_trips_verbatim() {
+        // A recorded DOM.getDocument result nests past Value's 128-level
+        // cap; the step keeps its raw text and call() hands it back
+        // untouched so the extract layer's deep parser sees it whole.
+        let mut tree = String::from("null");
+        for _ in 0..150 {
+            tree = format!("{{\"children\":[{tree}]}}");
+        }
+        let result_text = format!("{{\"root\":{tree}}}");
+        assert!(serde_json::from_str::<Value>(&result_text).is_err());
+        let text =
+            format!("{{\"calls\":[{{\"method\":\"DOM.getDocument\",\"result\":{result_text}}}]}}");
+        let mut transport = ReplayTransport::parse(&text).unwrap();
+        assert_eq!(transport.call("DOM.getDocument", "{}").unwrap(), result_text);
+
+        // `result: null` is a present result and answers "null".
+        let mut transport = ReplayTransport::parse(
+            r#"{"calls":[{"method":"Runtime.evaluate","result":null}]}"#,
+        )
+        .unwrap();
+        assert_eq!(transport.call("Runtime.evaluate", "{}").unwrap(), "null");
     }
 
     #[test]
