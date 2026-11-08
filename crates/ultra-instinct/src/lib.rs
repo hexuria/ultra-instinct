@@ -444,6 +444,7 @@ pub(crate) mod lessons_cmd;
 pub(crate) mod replay_cmd;
 pub(crate) mod run_cmd;
 pub(crate) mod session_cmd;
+pub(crate) mod state_cmd;
 
 // Remote transports live in `ultra-instinct-remote`; re-exported under their old paths.
 #[cfg(feature = "clef")]
