@@ -861,3 +861,38 @@ fn confirm_patterns_do_not_refuse_typing() {
     );
     assert_eq!(out["acted"], "type", "{out}");
 }
+
+/// `verify: true` observes again after the press and names the effect.
+#[test]
+fn click_with_verify_reports_the_verification() {
+    let (mut server, _log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&page())
+            .dom_click(11)
+            .ready_state("complete")
+            .observe_compact(&page()),
+    );
+    let out = call(
+        &mut server,
+        "browser_click",
+        json!({"cdp": CDP, "index": "@e2", "verify": true}),
+    );
+    assert_eq!(out["verification"], "dispatched-no-visible-change", "{out}");
+    assert!(out["ticket"].as_u64().is_some(), "{out}");
+}
+
+/// `browser_send_key` with an index is a ticketed KEY: a target that takes
+/// no keys refuses before any key event.
+#[test]
+fn send_key_with_an_index_is_gated() {
+    let (mut server, log) = server(ScriptBuilder::new().observe_compact(&page()));
+    let err = server
+        .call_tool(
+            "browser_send_key",
+            &json!({"cdp": CDP, "index": 2, "key": "Enter"}),
+        )
+        .expect_err("a button takes no keys");
+    assert_eq!(err, ToolError::TicketInvalid("unsupported-action".into()));
+    assert!(log.borrow().iter().all(|m| m != "Input.dispatchKeyEvent"));
+}

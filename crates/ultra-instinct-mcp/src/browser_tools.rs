@@ -622,6 +622,7 @@ fn gated_input(
         "click" => Input::ScriptClick,
         "type" => Input::Type(req_str(arguments, "text")?.to_owned()),
         "select" => Input::Select(req_str(arguments, "text")?.to_owned()),
+        "key" => Input::Key(req_str(arguments, "key")?.to_owned()),
         other => return Err(ToolError::UnknownTool(other.to_owned())),
     };
     let action = input.action();
@@ -643,13 +644,23 @@ fn gated_input(
                 order.len()
             ))
         })?;
-        let ticket = gate(
-            manifold,
-            &region_id,
-            action,
-            focused,
-            manifold.captured_at_ms(),
-        )
+        let ticket = match &input {
+            // A KEY ticket binds its one key (KEY_NAMES) on a region that claims Key.
+            Input::Key(name) => ultra_instinct_guard::gate_key(
+                manifold,
+                &region_id,
+                name,
+                focused,
+                manifold.captured_at_ms(),
+            ),
+            _ => gate(
+                manifold,
+                &region_id,
+                action,
+                focused,
+                manifold.captured_at_ms(),
+            ),
+        }
         .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
         // The user's policy after the gate, before the ticket is used; the
         // executor checks it again on its fresh observation.
@@ -921,6 +932,10 @@ fn drag(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
 }
 
 fn send_key(server: &mut Server, arguments: &Value, hold_ms: u64) -> Result<Value, ToolError> {
+    // With an index the key goes to that element as a ticketed KEY.
+    if hold_ms == 0 && arguments.get("index").is_some_and(|v| !v.is_null()) {
+        return gated_input(server, arguments, "key");
+    }
     let endpoint = endpoint_of(arguments)?;
     let key_name = req_str(arguments, "key")?.to_owned();
     let key = session_key(server, &endpoint);
@@ -1584,8 +1599,10 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
         }
         "browser_send_key" => {
             props.insert("key".into(), json!({"type": "string"}));
+            props.insert("index".into(), index_prop());
+            props.insert("verify".into(), verify_prop());
             required.push("key");
-            "One key event (Enter, Tab, Escape, arrows, letters...) via Input.dispatchKeyEvent."
+            "One key event (Enter, Tab, Escape, arrows, letters...) via Input.dispatchKeyEvent. With index: a ticketed KEY on that element (it must take keys; key is one of ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Home, End, PageUp, PageDown, Enter, Escape)."
         }
         "browser_hold_key" => {
             props.insert("key".into(), json!({"type": "string"}));

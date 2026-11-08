@@ -45,7 +45,7 @@ path = "src/bin/aui.rs"
 [features]
 default = []
 # Optional System One client. Not part of `cargo build` or `cargo test`.
-jev = ["dep:ultra-instinct-remote", "ultra-instinct-remote/jev", "dep:serde_json", "ultra-instinct-policy/remote"]
+jev = ["dep:ultra-instinct-remote", "ultra-instinct-remote/jev", "ultra-instinct-policy/remote"]
 # Optional Cloudflare Workers AI Clef / Clef-Flash client (same closed remote wire).
 clef = ["jev", "ultra-instinct-remote/clef"]
 # Experimental HGRA matcher (wires into ultra-instinct-mcp / mcp locate+guard).
@@ -53,8 +53,7 @@ hgra = ["ultra-instinct-mcp/hgra"]
 # Model-backed TYPE_TEXT / SELECT payloads via `run --text-model-cmd <program>`;
 # without the flag, jev-ultrafast's TEXT_MODEL_* env drives an HTTP model (OpenAI-compatible,
 # Anthropic, or Gemini wire; TEXT_MODEL_API or the base URL host picks it).
-model-text = ["ultra-instinct-agent/model-text", "ultra-instinct-policy/model-text", "dep:ultra-instinct-remote", "ultra-instinct-remote/model-text", "dep:serde_json"]
+model-text = ["ultra-instinct-agent/model-text", "ultra-instinct-policy/model-text", "dep:ultra-instinct-remote", "ultra-instinct-remote/model-text"]
 
 [dependencies.serde_json]
 version = "1"
-optional = true

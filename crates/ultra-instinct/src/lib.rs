@@ -176,8 +176,8 @@ impl std::fmt::Display for CliError {
 impl std::error::Error for CliError {}
 
 pub fn usage() -> &'static str {
-    "ultra-instinct run|replay|lessons|exams|observe|locate|inspect|guard|verify|diff|mcp\nrun --goal <text> (--cdp [url] [--url <page>] | --fixture <replay.cdp.json|page.manifold>) [--max-steps N] [--wait-secs N] [--text-model-cmd <program>] [--policy instinct|jev|clef|clef-flash|dojo] [--diary <dir>] [--lessons <store>] [--no-screenshot] [--no-page-text] [--no-derived-text] [--second-opinion]\n  goal clauses: `click X if present` acts when X shows up (else skipped); `wait for X` waits for X; both wait up to --wait-secs (default 30)\n  owned agent loop: observe -> Instinct -> gate -> ticket -> execute -> verify (no LLM, no MCP)\n  --cdp with --url opens a background tab and closes it at exit; without --url drives the first existing tab\n  --diary <dir> writes the battle diary (schema v1 JSONL): every decision, step, and outcome\nreplay --diary <dir> [--lessons <store>] re-scores every recorded decision with Instinct: agree / would-abstain / regress\nlessons --diary <dir> --store <path> distills diaries into the versioned lesson store (words / places / moves / trust)
-exams --diary <dir> [--lessons <store>] reports remote calls per 100 decisions and the belt each pairing holds\nmcp serves newline-delimited JSON-RPC on stdin.\nguard [--fixture <path> | --cdp [url]] --target <label> [--role button] [--proposed <id>] [--json]\nact is a deprecated alias of guard and never clicks.\nlocate [--fixture <path>] [text] [--role ...] [--matcher weighted] [--json]\nverify (--expect-text <text> | --expect-absent <id>) [--fixture <path>]\nDefault matcher: weighted. HGRA is experimental.\n"
+    "ultra-instinct run|replay|lessons|exams|observe|locate|inspect|guard|verify|diff|mcp|open|snap|click|type|select|key|scroll|wait|shot|tabs|close\nrun --goal <text> (--cdp [url] [--url <page>] | --fixture <replay.cdp.json|page.manifold>) [--max-steps N] [--wait-secs N] [--text-model-cmd <program>] [--policy instinct|jev|clef|clef-flash|dojo] [--diary <dir>] [--lessons <store>] [--no-screenshot] [--no-page-text] [--no-derived-text] [--second-opinion] [--allow-domain <host>]... [--confirm-press <glob>]... [--confirm <label>]...\n  --allow-domain shop.example|*.shop.example: input only on those hosts (--url must match); --confirm-press \"Pay*\": a matching click ends BLOCKED until --confirm \"<label>\"\n  goal clauses: `click X if present` acts when X shows up (else skipped); `wait for X` waits for X; both wait up to --wait-secs (default 30)\n  owned agent loop: observe -> Instinct -> gate -> ticket -> execute -> verify (no LLM, no MCP)\n  --cdp with --url opens a background tab and closes it at exit; without --url drives the first existing tab\n  --diary <dir> writes the battle diary (schema v1 JSONL): every decision, step, and outcome\nreplay --diary <dir> [--lessons <store>] re-scores every recorded decision with Instinct: agree / would-abstain / regress\nlessons --diary <dir> --store <path> distills diaries into the versioned lesson store (words / places / moves / trust)
+exams --diary <dir> [--lessons <store>] reports remote calls per 100 decisions and the belt each pairing holds\nmcp serves newline-delimited JSON-RPC on stdin.\nshell verbs (one browser per --session <name>, default `default`; a daemon on $TMPDIR/aui/<session>.sock attaches to --cdp <url>, default http://127.0.0.1:9222, and never launches Chrome):\n  open <url> [--allow-domain <host>]... [--confirm-press <glob>]... | snap [--json] | click <ref> [--confirm <label>] [--mouse] | type <ref> <text> | select <ref> <option> | key <ref> <key>\n  scroll [up|down] | wait --text|--url|--control <v> [--timeout s] | shot [path] | tabs | close (stops the daemon)\n  <ref> is @eN from snap (or N); a refusal or error exits non-zero\nguard [--fixture <path> | --cdp [url]] --target <label> [--role button] [--proposed <id>] [--json]\nact is a deprecated alias of guard and never clicks.\nlocate [--fixture <path>] [text] [--role ...] [--matcher weighted] [--json]\nverify (--expect-text <text> | --expect-absent <id>) [--fixture <path>]\nDefault matcher: weighted. HGRA is experimental.\n"
 }
 
 /// Run one invocation. `args` does not include the program name.
@@ -199,6 +199,10 @@ pub fn execute(args: &[String]) -> Result<String, CliError> {
         "lessons" => crate::lessons_cmd::lessons_command(&args[1..]),
         "exams" => crate::exams_cmd::exams_command(&args[1..]),
         "mcp" => Err(CliError::McpIsStdio),
+        "daemon" => crate::daemon::daemon_command(&args[1..]),
+        verb if crate::daemon::VERBS.contains(&verb) => {
+            crate::daemon::verb_command(verb, &args[1..])
+        }
         other => Err(CliError::UnknownCommand(other.to_owned())),
     }
 }
@@ -441,6 +445,7 @@ fn json_escape(text: &str) -> String {
 }
 
 mod compare;
+pub(crate) mod daemon;
 pub mod diary;
 pub mod dojo_policy;
 pub mod exams_cmd;
