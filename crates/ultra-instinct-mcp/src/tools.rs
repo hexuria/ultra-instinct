@@ -152,6 +152,9 @@ pub(crate) fn dispatch(
     {
         return Err(ToolError::CoordinatesNotAccepted);
     }
+    if crate::browser_env::ENV_TOOLS.contains(&name) {
+        return crate::browser_env::call(server, name, arguments);
+    }
     if name.starts_with("browser_") {
         return crate::browser_tools::call(server, name, arguments);
     }

@@ -63,6 +63,8 @@ pub struct Server {
     dropped: BTreeMap<String, u64>,
     /// Session key → diagnostic domains already enabled (bit0 console, bit1 network).
     domains: BTreeMap<String, u8>,
+    /// Session key → HAR tap and blocked URLs (`browser_env`).
+    pub(crate) env: crate::browser_env::EnvState,
 }
 
 impl SignedSnapshot for Snapshot {
@@ -100,6 +102,7 @@ impl Server {
             events: BTreeMap::new(),
             dropped: BTreeMap::new(),
             domains: BTreeMap::new(),
+            env: Default::default(),
         }
     }
 
@@ -212,6 +215,7 @@ impl Server {
         self.events.remove(url);
         self.domains.remove(url);
         self.dropped.remove(url);
+        self.env.remove(url);
     }
 
     /// Page-websocket url `browser_*` tools drive for `endpoint`, when bound.
@@ -242,6 +246,7 @@ impl Server {
 
     /// Buffer events drained from a session's transport under `key`.
     pub(crate) fn push_events(&mut self, key: &str, events: Vec<CdpEvent>) {
+        self.env.tee(key, &events);
         let buffer = self.events.entry(key.to_owned()).or_default();
         buffer.extend(events);
         if buffer.len() > MAX_BUFFERED_EVENTS {
