@@ -284,7 +284,7 @@ fn wait(arguments: &Value) -> Result<Value, ToolError> {
 /// Interactive regions in browser-use reading order: top-to-bottom rows,
 /// left-to-right within a row (ties by id). Viability is the action-space
 /// rule, so the same index always maps the same way for every tool.
-fn interactive_index(manifold: &InteractionManifold) -> Vec<RegionId> {
+pub(crate) fn interactive_index(manifold: &InteractionManifold) -> Vec<RegionId> {
     let space = ActionSpace::from_manifold(manifold);
     let mut seen = Vec::<RegionId>::new();
     for action in space.actions() {
