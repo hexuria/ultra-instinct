@@ -2,14 +2,14 @@
 
 One harness, eight arms, six local scenario sites, the same Chrome, the same loopback
 server, the same 1280×800 viewport, and the same caps for everyone. Results:
-[`../RESULTS.md`](../RESULTS.md) and `examples/<scenario>/RESULTS.md`.
+[`results/HISTORICAL-A1-A8.md`](results/HISTORICAL-A1-A8.md) and `examples/<scenario>/RESULTS.md`.
 
 **n = 1 per arm per task** (up to 3 fresh tries). It is a side-by-side comparison,
 not statistics.
 
 ## Arms
 
-Product-direction ablation (ActionTicket): see [`arms/B01.md`](arms/B01.md) (B0 Browser Use alone · B1 invisible guard ticket). A1–A8 below are the historical uniform suite.
+Product-direction ablation (ActionTicket): see [`arms/B01.md`](arms/B01.md) (B0 Browser Use alone · B1 invisible guard ticket). A1–A8 below are the historical uniform suite. A5–A8 (and B0/B1) call the removed `locate` / `inspect` / `act` tools and cannot be re-run on the current build (ADR 0012).
 
 
 | Arm | Wiring | Model calls |

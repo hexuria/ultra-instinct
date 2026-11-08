@@ -2,8 +2,8 @@
 
 `ultra-instinct mcp` exposes a `browser_*` tool surface mirroring
 [browser-use](https://docs.browser-use.com) (toolsets-for-claude and the
-browser-use MCP server). 37 tools, alongside the seven product tools
-(`observe`, `guard`, `verify`, `locate`, `inspect`, `diff`, `act`).
+browser-use MCP server). 37 tools, alongside the three product tools
+(`observe`, `guard`, `verify`).
 
 **The edge over browser-use:** browser-use presses what the model says.
 Every element-mutating `browser_*` tool here resolves a 1-based index on a

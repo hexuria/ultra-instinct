@@ -9,9 +9,8 @@ It is **not** a voluntary MCP preflight the model must remember to call.
 MCP remains an optional adapter. The primary product is a library `Agent`
 that owns the loop.
 
-HGRA is one experimental matcher under `experiments/hgra/`. It is **frozen**
-and not on the product path. A crate or binary named `hgra` in the product
-graph is a bug.
+The HGRA experiment and the weighted matcher are removed (ADR 0012). A crate,
+binary or feature named `hgra` in the product graph is a bug.
 
 > **Pivot (2026-10-05).** This PRD supersedes the earlier framing that
 > Ultra-Instinct is "not an agent" and "does not click". See
@@ -68,7 +67,7 @@ next turn (or DONE / BLOCKED)
 ## What Ultra-Instinct deliberately does not do
 
 - Depend on JEV / TypeSafe in the core path (optional escalation feature only).
-- Ship HGRA as the default matcher / policy.
+- Rank labels with a matcher; `guard` matches the exact label or refuses.
 - Accept model-generated CSS selectors or JavaScript for execution.
 - Silently turn Instinct abstention into "top candidate wins".
 - Treat page content as trusted instructions.
@@ -81,11 +80,12 @@ fresh observation, then press the **exact** ticket target (or refuse stale /
 world-changed). Tickets are one-shot. Verify should bind ticket + before/after
 snapshots (`verify_delta`). See `bench/arms/B01.md` for the interceptor ablation.
 
-## Matchers / policy (HGRA frozen)
+## Policy (no matcher)
 
-- Interim locate/guard ranking: `WeightedMatcher`.
+- MCP / CLI `guard` finds its target by exact label (and role / `within`),
+  unique or refuse, then runs the hard gate (ADR 0012). There is no ranking.
 - Default policy (`jev` feature): **JEV** via `RemotePolicy`; the offline fallback is **Instinct** (`hexuria/instinct`, pin by rev) via `--policy instinct` (no model, no key).
-- **HGRA is frozen** under `experiments/hgra/`. No matcher PRs during the pivot.
+- HGRA and `ultra-instinct-resonance` are removed (ADR 0012).
 
 ## Acceptance bar
 

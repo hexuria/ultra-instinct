@@ -39,8 +39,7 @@ No LLM and no MCP are required to run the loop. See `docs/PRD.md`,
 `docs/adr/0001…0003`, and `docs/EVAL.md` for status and honest gaps.
 
 Toolchain: Rust 1.99.0. Versions are 0.1.0 and `publish = false`. Public API
-is unstable until 1.0. HGRA is an experiment under `experiments/hgra/` and is
-not on any default path.
+is unstable until 1.0.
 
 Crates are `ultra-instinct-*` (Autonomous Ultra Instinct, e.g. `ultra-instinct-agent`,
 `ultra-instinct-browser`). The binary is `ultra-instinct`, with `aui` as a short
@@ -124,9 +123,11 @@ let outcome = agent.run(); // Done | Blocked | Abstained | Failed, with verified
 
 ## MCP tools (optional adapter)
 
-`observe`, `guard`, `verify` for hosts that keep their own executor. `act` is a
-deprecated alias of `guard` and never clicks. Locate, inspect, and diff remain
-debug helpers.
+`observe`, `guard`, `verify` for hosts that keep their own executor. `guard`
+finds its target by exact label (and role / `within`), unique or refuse, runs
+the hard gate, and returns an `ActionTicket`; it never clicks. The locate,
+inspect, act and diff helpers and the matcher are removed
+([ADR 0012](docs/adr/0012-borrow-and-prune.md)).
 
 ## Benchmark: browser tools for an LLM agent
 

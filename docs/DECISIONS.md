@@ -1,5 +1,19 @@
 # Decisions
 
+## Borrow and prune (2026-11-08)
+
+[ADR 0012](adr/0012-borrow-and-prune.md). `guard` finds its target by exact
+label (and role / `within`), unique or refuse, then runs the one hard gate and
+issues an `of_target` ticket. `ultra-instinct-resonance` (weighted matcher),
+the HGRA experiment (`ultra-instinct-hyper`), the `evals/locate` corpus, the
+MCP / CLI `locate`, `inspect`, `act` and `diff` helpers, `compare.rs`, and the
+`repeated_query` signal are removed. `RegionState` lives in
+`ultra-instinct-geometry`. The entries below that describe those pieces are
+history; the sections that were only about them (hypervector algebra and
+neighbor coalescing, fixture comparison, weighted label precision, act
+ambiguity margin, raw f64 gate, text-miss cap, repeated locate signal, HGRA
+semantic parity) are deleted.
+
 ## Text model: OpenAI, Anthropic, and Gemini wire shapes (2026-10-17)
 
 Status: proposed on `feat/text-model-providers`. Asia/Manila.
@@ -70,6 +84,9 @@ resonance/contract/act, HGRA work, rewriting RESULTS.
 
 ## ActionTicket boundary + HGRA freeze (2026-10-05)
 
+> Superseded in part by ADR 0012: the matcher, HGRA, ranked guard and the
+> locate / inspect / act / diff tools it describes are removed.
+
 Status: accepted on `feat/action-ticket`. Asia/Manila.
 
 **Decision.** The product boundary is an `ActionTicket` issued on
@@ -96,6 +113,9 @@ fold, deleting legacy `act` / `contract.rs`, whole-page world equality →
 target-scoped fingerprints — next after B0/B1 stub proves the lease.
 
 ## Product pivot: browser action firewall (2026-10-05)
+
+> Superseded in part by ADR 0012: the matcher, HGRA, ranked guard and the
+> locate / inspect / act / diff tools it describes are removed.
 
 Hyper-Use is an independent action-verification layer for browser agents. It
 resolves what an agent is about to interact with, refuses ambiguous or unsafe
@@ -133,6 +153,9 @@ actions, and verifies the resulting state change.
 
 
 ## World context gate: hyper-use owns variable-change gating (2026-10-05)
+
+> Superseded in part by ADR 0012: the matcher, HGRA, ranked guard and the
+> locate / inspect / act / diff tools it describes are removed.
 
 Status: accepted on `feat/world-context-gate`. Asia/Manila.
 
@@ -255,6 +278,9 @@ tests, `context.rs` unit tests,
 
 ## Deferred: contextual target resolution (follow-up)
 
+> Superseded in part by ADR 0012: the matcher, HGRA, ranked guard and the
+> locate / inspect / act / diff tools it describes are removed.
+
 Superseded in part by "World context gate" above: ancestry (`within`), focus
 (`near`), and dialogs now resolve in Rust. `contains`-style sibling context
 from `combo.py` is still not ported.
@@ -275,34 +301,10 @@ browser fixtures is internal / transitional, not the public contract.
 
 ## Product name
 
-The technique may be discussed as HGRA. The shipped product, crates, binary,
-and skill folder are `hyper-use`. A crate named `hgra` is a bug.
-
-## Hypervector algebra
-
-Symbols are bipolar vectors in `{-1,+1}^d`, `d` one of 512, 1024, 2048, 4096.
-The default is 2048. Bits are SplitMix64 expanded from FNV-1a of
-`namespace || 0x1f || symbol || 0x1f || version || "hyper-use-hv1"`.
-`std` `DefaultHasher` is not used because its keys are per-process.
-
-Binding is element-wise multiply (commutative on bipolar values).
-Bundling is a weighted sum then sign. A component that sums to exactly 0
-becomes `+1`.
-Permutation is a left rotation. Relation shifts are in `1..d`.
-Similarity is cosine, which for these vectors is `dot / dims` in `[-1, 1]`.
-Self-similarity is 1.
-
-Region signatures bind role, label tokens, position zones, shape, actions,
-a permuted parent, neighborhood relations, content state, and source bits.
-Penalty flags are not mixed into the vector. They subtract after the weighted
-sum so a disabled twin drops by exactly the versioned penalty (detached also
-drops contextual consistency).
-
-The hypervector term is one cosine of the bundled query against that
-signature, not a second learned model. The query bundles one bound probe per
-constraint (role, each label token, position, action) at equal weight. It was
-the mean of per-probe cosines until "HGRA semantic parity and bundled query".
-Weights are [`ResonanceModel::V1`] basis points.
+The product, crates, binaries and skill folder are `ultra-instinct`
+(`ultra-instinct-*`, binaries `ultra-instinct` and `aui`). The HGRA
+matcher is removed (ADR 0012); a crate, binary or feature named `hgra`
+is a bug.
 
 ## Geometry
 
@@ -322,6 +324,9 @@ the viewport scores 0.8 and does not merge. A browser session now runs
 re-rendered control keeps its id and `diff` sees it as unchanged.
 
 ## Dependencies
+
+> Superseded in part by ADR 0012: the matcher, HGRA, ranked guard and the
+> locate / inspect / act / diff tools it describes are removed.
 
 No `unsafe`. No LLM. No macOS bindings. No browser framework.
 
@@ -348,6 +353,9 @@ until 1.0. There is no `From` for `RegionId` or for a float weight table:
 both would make an illegal value easy to build.
 
 ## Verifiers skipped
+
+> Superseded in part by ADR 0012: the matcher, HGRA, ranked guard and the
+> locate / inspect / act / diff tools it describes are removed.
 
 Deterministic ranking, encoding, penalties, and diffs are owned by unit tests
 and proptest (32 cases on the algebra, 16 on ranking): encoder stability at
@@ -387,6 +395,9 @@ model of the same score without a conformance fixture.
 
 ## What this code cannot do
 
+> Superseded in part by ADR 0012: the matcher, HGRA, ranked guard and the
+> locate / inspect / act / diff tools it describes are removed.
+
 - No macOS accessibility. macOS returns `ExecutorError::NotImplemented`.
   A browser stub with no session does too. `BrowserExecutor` does not.
   `BrowserUseExecutor` and `CuaExecutor` are each a replay of one semantic act,
@@ -416,17 +427,6 @@ model of the same score without a conformance fixture.
   change vectors. `ResonanceModel` positive weights are a different table and
   must sum to exactly 100 basis points (epsilon 0; no float gate).
 
-## Neighbor contributions
-
-Identical `(relation, role)` neighbor vectors are counted and bundled once
-with weight `0.25 * count`. `0.25` is dyadic, the running sum stays an exact
-multiple of `0.25` at the sizes we rank, and order does not change the sign.
-A unit test checks that two `0.25` parts match one `0.5`, in either order.
-If `NEIGHBOR_WEIGHT` stops being a multiple of `1/4`, delete the collapse.
-The region store stays an array of structs (`BTreeMap` of whole records).
-Each rank reads the whole record and N is aimed at 2000. No arena and no
-struct-of-arrays until a profile says the hot path is memory-bound.
-
 ## Error litmus
 
 On 2026-10-05 the empty-symbol return in `Encoder::encode` was temporarily
@@ -444,6 +444,9 @@ The return was restored. The test asserts `Err(HyperError::EmptySymbol)`, not
 `is_err()`.
 
 ## Phase 2 browser and matchers
+
+> Superseded in part by ADR 0012: the matcher, HGRA, ranked guard and the
+> locate / inspect / act / diff tools it describes are removed.
 
 The product default locate path is `WeightedMatcher` (semantic 50, geometric
 30, actionability 20, basis points, sum 100). Text and role combine by
@@ -495,6 +498,9 @@ Live Chrome: a read-only `Browser.getVersion` may be run against an
 already-open debugging port. Clicks in tests use the replay transport.
 
 ## MCP stdio
+
+> Superseded in part by ADR 0012: the matcher, HGRA, ranked guard and the
+> locate / inspect / act / diff tools it describes are removed.
 
 The server is `hyper-use mcp`. Tool names are exactly `observe`, `locate`,
 `inspect`, `act`, `diff`, and `verify`. The product name is the server name,
@@ -569,47 +575,6 @@ or of fusion was added.
 matcher and `HgraMatcher` with `ResonanceModel::V1` do not return it on a
 manifold this crate just parsed. There is no fixture for it. A click is not
 substituted.
-
-## Fixture comparison, not a Browser Use score
-
-The first comparison is the `fixture_compare` example in `hyper-use-cli`. It
-parses `sidebar.manifold`, `sign-in.cdp.json`, `welcome.cdp.json`, and
-`sign-in-press.cdp.json`, ranks with `WeightedMatcher`, and acts only on the
-press fixture through `BrowserExecutor` and `ReplayTransport`.
-`press-only.cdp.json` is omitted because it has no observation. Sign-in is not
-diffed against welcome. `HgraMatcher` is not ranked here.
-
-`executed` is true only after an action receipt. A scored raw confidence below
-0.55 does not call the transport, and `executed` is false. A manifold file
-cannot act, so the sidebar case has no `executed` field. The JSON is not a
-`ComputerResult`: that type always carries `executed` and `verified`, which
-would make a locate look like a fake refusal.
-
-`typesafe-sdk` 0.2, feature `blocking`, is an optional `jev` feature of the
-CLI crate only. It is not a path dependency, not a ranker dependency, and not
-a second matcher. `cargo build` and `cargo test` do not compile it, so the
-default `hyper-use` binary does not link Tokio. Enabling `jev` does: the SDK's
-blocking client owns a current-thread runtime. That build is not the default.
-Live calls run only when the feature and `HYPER_USE_JEV=1` are both set. Each
-case is one `Client::from_env()` `system_one` choice. The model and base URL
-come from the environment. State is the manifold (viewport, id, role, label,
-rect), not a screenshot. The prompt does not contain the 0.55 rule or the
-correct action. The client reads `choice` and does not read usage. `agree` is
-id equality, or `press` / `do-not-press` against `executed`. It is not a win
-and not a benchmark.
-
-Downside accepted: four fixtures and one press. A live choice can disagree and
-the run still succeeds, because this slice measures agreement, not a product
-winner. That comparison does not call the Browser Use executor and is not a
-Browser Use score. No tokens, screenshots, retries, latency, or winner are
-recorded.
-
-Verifier: the fixture test owns region ids, `executed` only on the press case,
-absence of `jev` and `agree`, and confidence equal to a second `rank` of the
-same manifold. The low-confidence arm owns "the transport log stays empty".
-No Miri, Loom, Kani, or benchmark harness. The optional feature is typechecked
-with `cargo check -p hyper-use-cli --features jev` and is not part of default CI.
-
 
 ## Browser Use semantic executor
 
@@ -752,67 +717,10 @@ Verifiers: `node_id_failure_retries_by_backend_id_before_coordinates`,
 `click_exception_is_a_tier_failure`. Each asserts that `DOM.focus` is never
 sent.
 
-## Label precision in the weighted text term
-
-The weighted text term was `token_recall(query, label)`: the share of query
-tokens found in the label. Extra label tokens cost nothing, so "Send",
-"Send feedback", and "Send to device" all scored 1.0 for "Send" and the id
-tie-break picked "Send feedback". The term is now
-`recall * (0.5 + 0.5 * precision)`, where precision is the share of label
-tokens found in the query (`token_precision`). On
-`fixtures/send-buttons.manifold` the totals are 1.0, 0.875, and 0.8333, in
-that order.
-
-The formula was picked over F1 so that a full-recall superset label keeps at
-least half the text credit: "Account Settings" for "Settings" scores 0.75,
-not 0.667. `token_recall` is unchanged because `verify` and the HGRA semantic
-term use it. The HGRA semantic term is not changed; it already orders this
-fixture correctly and there is no benchmark to justify moving its totals.
-
-Downside accepted: a long query against a slightly longer label differs by
-little (a 5-token query against a 6-token superset is about 42 millis apart),
-so the act margin gate refuses that case rather than guessing.
-
-Verifiers: `exact_label_outranks_superset_labels_with_lower_ids` asserts the
-three totals, the 16-case proptest
-`extra_label_tokens_strictly_lower_the_weighted_total`, the CLI test
-`locate_send_prefers_the_exact_label`, and the regression pin
-`hgra_send_order_is_unchanged`. No second model of `WeightedMatcher::rank`.
-
-## Act ambiguity margin
-
-A high top total is not enough when a second candidate is almost as high. Act
-now takes an optional runner-up total from the same ranking and refuses with
-`ExecutorError::AmbiguousTarget` when the raw gap is below
-`MIN_ACT_MARGIN` (0.05). `MIN_ACT_MARGIN_MILLIS` (50) is display only. `ActConfidence` gains a `Ranked { top,
-runner_up }` variant beside `Inspected` and `Scored`; it stays an enum, not a
-score with an optional runner-up. `gate_confidence` is the single gate, and
-all four executors call it. The order is non-finite, then the 0.55 threshold,
-then the margin, so a low top is reported as low confidence even when it is
-also ambiguous. A runner-up above the top also refuses. The journal fallback is
-`FallbackReason::Ambiguous` ("ambiguous").
-
-MCP `act` takes `runner_up: {id, confidence}`, the same shape as locate
-`candidates[1]`. A `runner_up` without `confidence` is
-`RunnerUpNeedsConfidence`, so it cannot fall to the ungated inspected path.
-A runner-up naming the pressed region is `RunnerUpIsTarget`. The CLI flag is
-`--runner-up`. The fixture comparison passes the real runner-up, so it applies
-the product gate.
-
-Downside accepted: a caller that omits `runner_up` bypasses the margin. The
-MCP session in the next phase can derive it. 0.05 is not calibrated across
-matchers; the HGRA order on `send-buttons.manifold` is about 0.02 apart
-and is refused. This is not `RegionFlags::ambiguous`, which is a ranking
-penalty that the browser observer does not set.
-
-Verifiers: `ambiguous_ranked_act_does_not_click_and_refusal_is_typed` (empty
-transport log), `low_confidence_wins_over_ambiguity`,
-`inspected_act_ignores_the_margin`, the 16-case proptests
-`ranked_within_margin_does_not_submit` (Browser Use and CUA) and
-`ranked_outside_margin_passes_the_gate`, MCP and CLI act tests, and
-`below_margin_does_not_execute_and_does_not_call_transport`.
-
 ## MCP session and snapshot ring
+
+> Superseded in part by ADR 0012: the matcher, HGRA, ranked guard and the
+> locate / inspect / act / diff tools it describes are removed.
 
 The MCP server used to be free functions: every call reconnected, observed
 from scratch, and dropped the result. Nothing could compare the state before
@@ -961,6 +869,9 @@ Verifiers: `moved_only_rect_is_moved_not_relabeled`,
 
 ## Temporal signals are data, and the corpus names no winner
 
+> Superseded in part by ADR 0012: the matcher, HGRA, ranked guard and the
+> locate / inspect / act / diff tools it describes are removed.
+
 `StateSignature` is the sorted multiset of `(role, label)` on one manifold.
 Rectangles, ids, and flags are not in it. `detect` compares signatures already
 stored in the snapshot ring. `NoOp` means the after signature equals the before
@@ -987,40 +898,6 @@ disagree. A loop older than the four preceding entries is not reported.
 Verifiers: `no_op_when_after_equals_before`,
 `loop_when_after_equals_an_older_snapshot`, and
 `eval_corpus_reports_both_matchers_without_a_winner`. No second formal model.
-
-## Raw gate: compare f64, not rounded millis
-
-Status: 2026-10-05 (Asia/Manila). Replaces the millis comparison in "Phase 2
-browser and matchers" and "Act ambiguity margin".
-
-The gate compared `display_millis(confidence)` against 550, so 0.5496 rounded
-to 550 and clicked, and a margin of 0.0491 rounded to 49 or 50 depending on the
-inputs. `gate_confidence` now compares the raw `f64`: below
-`MIN_ACT_CONFIDENCE` (0.55) is `ConfidenceBelowThreshold`, and a margin below
-`MIN_ACT_MARGIN` (0.05) is `AmbiguousTarget`. The margin check subtracts
-`MARGIN_EPSILON` (1e-9), because `0.6 - 0.55` is `0.04999999999999993` in
-`f64`; without it a clean 0.05 gap would refuse. The threshold check has no
-epsilon. A non-finite margin (for example `MAX - (-MAX)`) refuses as
-ambiguous. The millis constants and `margin_millis` remain for display and
-journal text. A refused display is capped (549 and 49) so a refusal never
-prints the threshold it failed.
-
-Caller confidence is a probability. MCP `confidence` and
-`runner_up.confidence` outside `[0, 1]` are
-`ToolError::ConfidenceOutOfRange` (`{"variant","value"}`).
-`MatcherConfidence::try_unit` enforces the range; `try_new` still accepts
-negatives because ranker totals can be negative.
-
-Downside accepted: a caller that forwards a negative locate total (a penalized
-candidate) as `runner_up.confidence` now gets `ConfidenceOutOfRange` instead
-of a passing margin. Clamp or omit it. 0.55 and 0.05 are still not
-calibrated across matchers.
-
-Verifiers: executor gate unit tests (0.5496 refused, 0.0491 refused, 0.6/0.55
-passes, extreme inputs), a 64-case gate proptest, MCP
-`caller_confidence_outside_zero_to_one_is_exact` and
-`raw_confidence_just_below_the_gate_does_not_press`, and the 32-case
-`structured_tool_calls_are_typed` proptest.
 
 ## Stale observation after a press
 
@@ -1089,6 +966,9 @@ compiler owns the absence.
 
 ## Known limits, not fixed
 
+> Superseded in part by ADR 0012: the matcher, HGRA, ranked guard and the
+> locate / inspect / act / diff tools it describes are removed.
+
 Status: 2026-10-05. Recorded so they are not mistaken for verified behavior.
 
 - `IdentityMap.minted` grows for the life of a session. Sessions are capped at
@@ -1125,6 +1005,9 @@ point.
 Verifier: the `deny` CI job. Local run on 2026-10-05: `advisories ok`.
 
 ## Mock environment before any live drive
+
+> Superseded in part by ADR 0012: the matcher, HGRA, ranked guard and the
+> locate / inspect / act / diff tools it describes are removed.
 
 Status: 2026-10-05.
 
@@ -1180,49 +1063,10 @@ stale-observation fix fails
 reverting the unknown-page fix fails
 `page_history_failure_is_unknown_not_a_false_delta`.
 
-## Text-miss cap
-
-Status: 2026-10-05 (Asia/Manila). From live drive t7.
-
-JEV asked locate for "Send" as a link on the Acme Mail thread. No link is
-named Send, so every candidate missed. The weighted V1 total for a miss was
-still 0.50: semantic is `min(text, role)` = 0, but geometry scores 1 when no
-position is asked (0.30) and actionability scores 1 when no action is asked
-and the region has any action (0.20); every extracted region has at least
-Focus. The role does not contribute. All 63 candidates tied at 0.50, and an
-unnamed AX node (`ax11`) won on region id because `ax…` sorts before `n…`.
-
-Both matchers now clamp a region's total to `TEXT_MISS_CAP` (0.45) when the
-query has text and the label shares none of its tokens (`token_recall` is
-0). WeightedMatcher applies it in `weighted_total`; HGRA applies it in
-`score_parts`, so `locate`, `locate_with`, and `HgraMatcher` all carry it.
-0.45 is strictly below the 0.55 act gate for any weights, so a nameless or
-unrelated region can never be clicked from a text query. It is 0.05 below
-the 0.50 a label hit with the wrong role gets under V1, so that control
-ranks above every text miss. A `const` assert in the MCP crate ties the cap
-to `MIN_ACT_CONFIDENCE`.
-
-Eval corpus: weighted tops, margins, and gate decisions did not move. HGRA
-margins on `twins.manifold` rose (Export 184 to 223, Admin 195 to 231, Undo
-184 to 231 millis); HGRA tops and gate decisions did not move.
-
-Downside accepted: a query whose text the label does not contain at all
-(a typo, a synonym, an icon button with no accessible name) can no longer
-reach the gate from text, even if role and position point at the right
-control. The caller must fix the text or act on an inspected region. The
-cap is a constant, not calibrated, and HGRA totals are still not comparable
-to weighted ones.
-
-Verifiers: the 256-case proptest
-`a_nameless_region_never_reaches_the_act_gate_for_a_text_query` (arbitrary
-role, query role, position, action, geometry, flag, and weights; both
-matchers), `text_miss_is_not_rescued_by_a_role_hit`,
-`a_label_hit_with_the_wrong_role_outranks_a_nameless_region`,
-`the_cap_only_lowers_and_only_on_a_text_miss`,
-`eval_corpus_reports_both_matchers_without_a_winner`, and the replica test
-`t7_send_as_a_link_ranks_the_named_send_above_unnamed_nodes_and_does_not_click`.
-
 ## Region state in observe, inspect, and locate
+
+> Superseded in part by ADR 0012: the matcher, HGRA, ranked guard and the
+> locate / inspect / act / diff tools it describes are removed.
 
 Status: 2026-10-05. From the live drive: observe returned only id, role,
 and label, so a caller could not tell the disabled Save from the enabled one
@@ -1244,78 +1088,6 @@ Verifiers: `flags_and_geometry_map_onto_the_ladder`,
 `the_most_limiting_visibility_wins`, and MCP
 `observe_alone_tells_the_disabled_save_from_the_enabled_one`
 (`fixtures/settings-saves.manifold`).
-
-## Repeated locate query signal
-
-Status: 2026-10-05. From live drive t8: after the twin Send refused as
-ambiguous, JEV asked the same locate eight more times on an unchanged page.
-`detect` compares snapshots around an act and could not see this.
-
-The MCP `Server` remembers the last 8 locate calls (`REPEAT_WINDOW`) as
-(origin, page `StateSignature`, normalized query). Text is normalized to its
-lower-case tokens; role, position, action, matcher, and dims are kept. From
-the 2nd identical call (`REPEAT_THRESHOLD`), locate's `signals` carries
-`{"kind": "repeated_query", "count", "top": {"id", "suggested_position"},
-"runner_up": {"id", "suggested_position"}}`. `suggested_position` is the
-first zone (left, right, top, bottom, center) one candidate is in and the
-other is not (`separating_zone`), or null.
-
-N = 2 because locate is deterministic: the same query on the same state
-returns the same ranking, so the first repeat already told the caller
-nothing new. N = 3 would only let one more empty call through. The signal is
-data: ranking, target, and candidates are unchanged, nothing is refused or
-retried, and the stateless `call_tool` keeps nothing and never signals.
-
-Downside accepted: the signature ignores geometry, so a page that only moved
-counts as unchanged. A repeat older than 8 locate calls (across all origins)
-is not reported. A suggested position can be null when the two candidates
-share every zone.
-
-Verifiers: `same_origin_signature_and_query_count_up`,
-`text_is_normalized_but_every_other_part_counts`,
-`a_changed_page_or_another_origin_starts_over`,
-`calls_older_than_the_window_are_forgotten`,
-`separating_zone_names_a_zone_only_the_target_is_in`, MCP
-`a_repeated_identical_locate_carries_repeated_query_and_still_ranks`, and the
-replica test `t8_twin_send_refuses_then_repeated_query_names_a_separating_position`.
-
-## HGRA semantic parity and bundled query
-
-Status: 2026-10-05 (Asia/Manila). Numbers in
-`crates/hyper-use-resonance/HGRA_REMEASURE.md`.
-
-HGRA's semantic term was `mean(token_recall, role_hit)`. It never got the
-precision factor the weighted matcher gained in "Exact label over superset",
-so "Send" and "Send feedback" both scored semantic 1.0 for "Send" and HGRA's
-margin on `send-buttons.manifold` was 0.0277, refused by the 0.05 act margin.
-HGRA now calls the weighted matcher's `weighted_semantic`:
-`min(recall * (0.5 + 0.5 * precision), role_hit)`. One function, no drift.
-This supersedes "The HGRA semantic term is not changed" in that section; the
-pin `hgra_send_order_is_unchanged` is replaced by
-`hgra_exact_label_outranks_superset_labels_with_lower_ids`.
-
-The hypervector term was the mean of one cosine per query probe. It is now
-`cosine(bundle(probes, weight 1 each), signature)`: the query is composed with
-the same `bind` and `bundle` as the signature and compared once. Equal weight
-keeps the probe set the mean used. The signature itself is unchanged.
-
-Result on the 5-case locate corpus: HGRA tops unchanged (5/5, 5/5 agreement
-with weighted); the Send margin goes 0.0277 to 0.0859 and the gate now allows
-it, so gate decisions agree with weighted on 5/5 (was 4/5). Ablation:
-parity alone gives Send 0.0777; the bundle alone gives 0.0359; the bundle adds
-0.039 on the 3-constraint sidebar query.
-
-Downside accepted: with min, a wrong-role label hit scores semantic 0 in HGRA
-(it was 0.5), as it already did in weighted. A two-probe query bundles with
-many zero-sum components that tie to `+1`, so the bundle helps little there.
-HGRA totals are still not calibrated to weighted totals, and HGRA is still not
-the product default; the live suite has not been rerun with `matcher: "hgra"`.
-
-Verifiers: `hgra_exact_label_outranks_superset_labels_with_lower_ids`,
-`bundled_query_is_one_cosine_and_widens_the_send_margin_over_probe_mean`,
-`hgra_label_hit_with_the_wrong_role_outranks_a_nameless_region`,
-`hgra_score_parts_are_exact_and_the_total_is_their_weighted_sum`, and the
-printing test `remeasure_hgra_against_weighted_on_the_locate_corpus`.
 
 ## Harder page types (ADR 0007)
 

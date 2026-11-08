@@ -1,16 +1,13 @@
 # Examples
 
-Phase 1 example: rank the sidebar fixture.
+Preflight a click on a fixture: `guard` finds the region whose label equals
+the target, unique or refuse, and never clicks.
 
 ```bash
-cargo run -p ultra-instinct --example sidebar_locate
-cargo run -p ultra-instinct -- locate \
-  --fixture fixtures/sidebar.manifold \
-  --text Settings --role button --position left --json
+cargo run -p ultra-instinct --bin ultra-instinct -- observe --fixture fixtures/sign-in.cdp.json
+cargo run -p ultra-instinct --bin ultra-instinct -- guard \
+  --fixture fixtures/sign-in.cdp.json --target "Sign in" --role button --json
 ```
-
-The compiled example lives at `crates/ultra-instinct/examples/sidebar_locate.rs`.
-It prints the top region id and checks that it is `nav-settings`.
 
 ## Benchmark scenarios
 
@@ -38,23 +35,4 @@ cookie backdrop). No JEV. See [world-context/README.md](world-context/README.md)
 
 ```sh
 ./examples/world-context/smoke.sh
-# optional forced HGRA:
-ULTRA_INSTINCT_MATCHER=hgra ./examples/world-context/smoke.sh
-```
-
-## Live drive
-
-`live-drive/` — hand-run JEV + `ultra-instinct mcp` against the Acme Mail page
-(same site as the `acme-mail/` bench scenario). Not CI and not a benchmark.
-Thread tasks start on `#thread/q3` (`t8` adds `?preset=twin`). See
-[live-drive/README.md](live-drive/README.md).
-
-```sh
-python3 bench/server.py --port 8765 &
-# throwaway Chrome on CDP 9333, then:
-cargo build --release -p ultra-instinct --bin ultra-instinct
-cargo build --release -p ultra-instinct --features jev --example live_drive
-TYPESAFE_API_KEY=... ULTRA_INSTINCT_JEV=1 \
-  ./target/release/examples/live_drive --bin target/release/ultra-instinct \
-    --site http://127.0.0.1:8765/acme-mail/site
 ```
