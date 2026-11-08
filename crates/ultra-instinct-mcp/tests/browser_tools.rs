@@ -89,12 +89,78 @@ fn navigate_sends_page_navigate() {
 #[test]
 fn get_state_indexes_elements_in_reading_order() {
     let (mut server, _log) = server(ScriptBuilder::new().observe_compact(&page()));
-    let out = call(&mut server, "browser_get_state", json!({"cdp": CDP}));
+    let out = call(
+        &mut server,
+        "browser_get_state",
+        json!({"cdp": CDP, "format": "json"}),
+    );
     let elements = out["elements"].as_array().expect("elements");
     assert_eq!(elements.len(), 3, "{elements:?}");
     assert_eq!(elements[0]["label"], "Email");
     assert_eq!(elements[1]["label"], "Sign in");
     assert_eq!(elements[2]["label"], "Country");
+}
+
+/// The default state is one line per control, in the same order and with
+/// the same 1-based refs the index-taking tools accept.
+#[test]
+fn get_state_text_is_one_line_per_control() {
+    let (mut server, _log) = server(ScriptBuilder::new().observe_compact(&page()));
+    let out = call(&mut server, "browser_get_state", json!({"cdp": CDP}));
+    assert_eq!(out["format"], "text", "{out}");
+    let text = out["text"].as_str().expect("text");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines[0], "Form  http://127.0.0.1/form", "{text}");
+    assert!(lines[1].starts_with("@e1 textbox \"Email\""), "{text}");
+    assert!(lines[2].starts_with("@e2 button \"Sign in\""), "{text}");
+    assert!(lines[3].starts_with("@e3 combobox \"Country\""), "{text}");
+    assert!(lines[3].contains("selected=\"Canada\""), "{text}");
+    assert!(lines[4].starts_with("3 controls · snapshot "), "{text}");
+    assert_eq!(lines.len(), 5, "{text}");
+}
+
+#[test]
+fn get_state_rejects_an_unknown_format() {
+    let (mut server, _log) = server(ScriptBuilder::new());
+    let err = server
+        .call_tool("browser_get_state", &json!({"cdp": CDP, "format": "yaml"}))
+        .expect_err("unknown format");
+    assert!(matches!(err, ToolError::InvalidArguments(_)), "{err:?}");
+}
+
+/// `index` is the same 1-based index as an integer, a digit string, or the
+/// `@eN` ref the text state prints.
+#[test]
+fn index_accepts_integer_digit_string_and_at_e_ref() {
+    for index in [json!(2), json!("2"), json!("@e2")] {
+        let (mut server, log) = server(
+            ScriptBuilder::new()
+                .observe_compact(&page())
+                .observe_compact(&page())
+                .dom_click(11),
+        );
+        let out = call(
+            &mut server,
+            "browser_click",
+            json!({"cdp": CDP, "index": index}),
+        );
+        assert_eq!(out["acted"], "click", "{index}: {out}");
+        assert!(log.borrow().iter().any(|m| m == "DOM.resolveNode"));
+    }
+    for bad in [json!("e2"), json!("@x2"), json!("two"), json!(-1)] {
+        let (mut server, log) = server(ScriptBuilder::new().observe_compact(&page()));
+        let err = server
+            .call_tool("browser_click", &json!({"cdp": CDP, "index": bad}))
+            .expect_err("bad index");
+        assert!(
+            matches!(err, ToolError::InvalidArguments(_)),
+            "{bad}: {err:?}"
+        );
+        assert!(
+            log.borrow().is_empty(),
+            "{bad}: nothing observed or pressed"
+        );
+    }
 }
 
 #[test]
@@ -536,7 +602,11 @@ fn go_back_uses_current_index_not_entry_id() {
 #[test]
 fn get_state_reports_url_and_title_after_observe() {
     let (mut server, _log) = server(ScriptBuilder::new().observe_compact(&page()));
-    let out = call(&mut server, "browser_get_state", json!({"cdp": CDP}));
+    let out = call(
+        &mut server,
+        "browser_get_state",
+        json!({"cdp": CDP, "format": "json"}),
+    );
     assert_eq!(out["url"], "http://127.0.0.1/form", "{out}");
     assert_eq!(out["title"], "Form", "{out}");
 }

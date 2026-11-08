@@ -25,8 +25,8 @@ curl -s http://127.0.0.1:$P/json/version   # repeat until it answers
 
 Pass `"cdp": "http://127.0.0.1:P"` on every `browser_*` call. When done, kill that Chrome, wait a second, then remove its profile dir.
 
-- Facts: `browser_navigate`, `browser_get_state` (indexed interactive elements), `browser_get_text` / `browser_get_page_text`, `browser_find`, `browser_javascript_exec` (DOM, computed styles, cookies).
-- Actions: index-based `browser_click` / `browser_type` / `browser_select_dropdown`. Take indexes from `browser_get_state` or `browser_find`; never guess coordinates.
+- Facts: `browser_navigate`, `browser_get_state` (one line per control: `@e5 button "Sign up"`, with value / checked / expanded / selected state; pass `"format": "json"` for the `elements[]` body), `browser_get_text` / `browser_get_page_text`, `browser_find`, `browser_javascript_exec` (DOM, computed styles, cookies).
+- Actions: index-based `browser_click` / `browser_type` / `browser_select_dropdown`. `index` takes the ref from `browser_get_state` (`"@e5"`, `"5"` or `5`) or an index from `browser_find`; never guess coordinates.
 - Cookies: navigate, set them with `browser_javascript_exec` (`document.cookie = "name=value; path=/"`), then navigate again.
 - Visuals: `browser_screenshot` returns the viewport as an image you can see; pass `"path": "/abs/dir/name.png"` to also save it. Call `browser_wait` (1–2 s) after navigating or clicking and before a screenshot, so fonts, images, and animations have settled. Scroll with `browser_javascript_exec` to bring off-screen parts into view.
 

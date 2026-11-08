@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 mod error;
+mod page_text;
 mod repeat;
 mod rpc;
 mod server;

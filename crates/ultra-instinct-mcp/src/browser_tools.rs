@@ -155,6 +155,22 @@ fn opt_usize(arguments: &Value, key: &str) -> Result<Option<usize>, ToolError> {
     }
 }
 
+/// A 1-based element index: `5`, `"5"`, or the `@e5` ref the text state prints.
+fn opt_index(arguments: &Value, key: &str) -> Result<Option<usize>, ToolError> {
+    match arguments.get(key) {
+        Some(Value::String(raw)) => {
+            let trimmed = raw.trim();
+            let digits = trimmed.strip_prefix("@e").unwrap_or(trimmed);
+            digits.parse::<usize>().map(Some).map_err(|_| {
+                ToolError::InvalidArguments(format!(
+                    "`{key}` must be an index like 5, \"5\" or \"@e5\", got {raw:?}"
+                ))
+            })
+        }
+        _ => opt_usize(arguments, key),
+    }
+}
+
 fn opt_f64(arguments: &Value, key: &str) -> Result<Option<f64>, ToolError> {
     match arguments.get(key) {
         None | Some(Value::Null) => Ok(None),
@@ -321,30 +337,51 @@ fn element_json(index: usize, region: &InteractionRegion) -> Value {
 
 fn get_state(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
+    let text = match opt_str(arguments, "format")?.unwrap_or("text") {
+        "text" => true,
+        "json" => false,
+        other => {
+            return Err(ToolError::InvalidArguments(format!(
+                "`format` must be text|json, got `{other}`"
+            )))
+        }
+    };
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
-    let outcome = (|| {
+    let observed = (|| {
         session.observe().map_err(browser_err)?;
         // `page()` is written inside `observe` — read it after, not before.
         let page = session.page().cloned();
         let manifold = session
             .manifold()
+            .cloned()
             .ok_or_else(|| browser_err(BrowserError::NotObserved))?;
-        let order = interactive_index(manifold);
-        let elements: Vec<Value> = order
-            .iter()
-            .enumerate()
-            .filter_map(|(i, id)| manifold.get(id).map(|r| element_json(i + 1, r)))
-            .collect();
-        Ok::<_, ToolError>(json!({
-            "url": page.as_ref().and_then(|p| p.url().map(str::to_owned)),
-            "title": page.as_ref().and_then(|p| p.title().map(str::to_owned)),
-            "interactive_elements": elements.len(),
-            "elements": elements,
-        }))
+        Ok::<_, ToolError>((page, manifold))
     })();
     keep(server, &key, session);
-    outcome
+    let (page, manifold) = observed?;
+    let order = interactive_index(&manifold);
+    if text {
+        let snapshot = server.record(
+            &format!("cdp:{endpoint}"),
+            manifold.clone(),
+            page.clone()
+                .unwrap_or_else(ultra_instinct_browser::PageState::blank),
+        );
+        let body = crate::page_text::page_text(page.as_ref(), &manifold, &order, snapshot.get());
+        return Ok(json!({"format": "text", "text": body}));
+    }
+    let elements: Vec<Value> = order
+        .iter()
+        .enumerate()
+        .filter_map(|(i, id)| manifold.get(id).map(|r| element_json(i + 1, r)))
+        .collect();
+    Ok(json!({
+        "url": page.as_ref().and_then(|p| p.url().map(str::to_owned)),
+        "title": page.as_ref().and_then(|p| p.title().map(str::to_owned)),
+        "interactive_elements": elements.len(),
+        "elements": elements,
+    }))
 }
 
 fn get_html(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
@@ -430,7 +467,7 @@ fn gated_input(
     input_kind: &str,
 ) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
-    let index = opt_usize(arguments, "index")?
+    let index = opt_index(arguments, "index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".into()))?;
     let input = match input_kind {
         // DOM-side click by default, so existing hosts see no change;
@@ -504,7 +541,7 @@ fn gated_press_at(
     mut press: impl FnMut(&mut crate::server::LiveSession, &RegionId) -> Result<(), BrowserError>,
 ) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
-    let index = opt_usize(arguments, "index")?
+    let index = opt_index(arguments, "index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".into()))?;
     if index == 0 {
         return Err(ToolError::InvalidArguments("`index` is 1-based".into()));
@@ -561,7 +598,7 @@ fn gated_press(
 /// no press, so no ticket (it reveals state but commits no mutation).
 fn hover(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
-    let index = opt_usize(arguments, "index")?
+    let index = opt_index(arguments, "index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".into()))?;
     if index == 0 {
         return Err(ToolError::InvalidArguments("`index` is 1-based".into()));
@@ -589,9 +626,9 @@ fn hover(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
 /// Element-to-element drag by index (`from_index` → `to_index`).
 fn drag(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
-    let from = opt_usize(arguments, "from_index")?
+    let from = opt_index(arguments, "from_index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `from_index`".into()))?;
-    let to = opt_usize(arguments, "to_index")?
+    let to = opt_index(arguments, "to_index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `to_index`".into()))?;
     if from == 0 || to == 0 {
         return Err(ToolError::InvalidArguments("indexes are 1-based".into()));
@@ -733,7 +770,7 @@ fn save_as_pdf(server: &mut Server, arguments: &Value) -> Result<Value, ToolErro
 
 fn get_dropdown_options(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
-    let index = opt_usize(arguments, "index")?
+    let index = opt_index(arguments, "index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".into()))?;
     if index == 0 {
         return Err(ToolError::InvalidArguments("`index` is 1-based".into()));
@@ -933,7 +970,7 @@ fn extract_content(server: &mut Server, arguments: &Value) -> Result<Value, Tool
 /// Scroll the element at `index` into view via its `data-hu-k` identity.
 fn scroll_to(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
-    let index = opt_usize(arguments, "index")?
+    let index = opt_index(arguments, "index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".to_owned()))?;
     if index == 0 {
         return Err(ToolError::InvalidArguments("`index` is 1-based".to_owned()));
@@ -1185,6 +1222,11 @@ fn read_network(server: &mut Server, arguments: &Value) -> Result<Value, ToolErr
     Ok(json!({"entries": entries, "dropped": dropped}))
 }
 
+/// Schema of an element index: an integer, `"5"`, or `"@e5"`.
+fn index_prop() -> Value {
+    json!({"type": ["integer", "string"], "description": "1-based index from browser_get_state: 5, \"5\" or \"@e5\""})
+}
+
 /// Tool spec fragments shared by every `browser_*` tool.
 pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&'static str>) {
     let cdp = || {
@@ -1213,7 +1255,11 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             "Wait seconds (default 3, capped at 60)."
         }
         "browser_get_state" => {
-            "Page url, title, and interactive elements as 1-based indexes in reading order — the numbers browser_click/browser_type take."
+            props.insert(
+                "format".into(),
+                json!({"type": "string", "enum": ["text", "json"], "description": "text (default): one line per control, `@eN role \"label\"  state`; json: the elements[] body"}),
+            );
+            "Page title, url, and interactive elements as 1-based indexes in reading order (@e1, @e2, …) — the refs browser_click/browser_type take. Default format text: one short line per control with its value / checked / expanded / selected state; format json returns elements[]."
         }
         "browser_get_html" => "document.documentElement.outerHTML of the current tab.",
         "browser_get_page_text" => "Visible text of the current tab (alias of browser_get_text).",
@@ -1228,13 +1274,13 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             "Scroll pages viewport heights (default 1.0) down or up."
         }
         "browser_click" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
             props.insert("mouse".into(), json!({"type": "boolean"}));
             required.push("index");
             "Left-click the interactive element at a browser_get_state index, through the ticketed executor (re-observes and refuses on drift). Default is a script click; mouse: true presses a real mouse at its center instead (moves focus, fires mousedown) — use it when a script click does nothing."
         }
         "browser_type" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
             props.insert("text".into(), json!({"type": "string"}));
             required.extend(["index", "text"]);
             "Set the text of the interactive element at a browser_get_state index, through the ticketed executor."
@@ -1251,7 +1297,7 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             "Close a tab by id; falls back to another tab if it was current."
         }
         "browser_scroll_to" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
             required.push("index");
             "Scroll the element at a browser_get_state index into view."
         }
@@ -1277,23 +1323,23 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
         }
         "browser_right_click" | "browser_middle_click" | "browser_double_click"
         | "browser_triple_click" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
             required.push("index");
             "Click the element at a browser_get_state index with the named button/count, through gate + one-shot ticket + consume-before-press."
         }
         "browser_hover" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
             required.push("index");
             "Move the pointer to the element at a browser_get_state index (no press)."
         }
         "browser_drag" => {
-            props.insert("from_index".into(), json!({"type": "integer"}));
-            props.insert("to_index".into(), json!({"type": "integer"}));
+            props.insert("from_index".into(), index_prop());
+            props.insert("to_index".into(), index_prop());
             required.extend(["from_index", "to_index"]);
             "Press at one element's center, drag to another's, release — both by index."
         }
         "browser_form_input" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
             props.insert("text".into(), json!({"type": "string"}));
             required.extend(["index", "text"]);
             "Alias of browser_type (browser-use form_input name)."
@@ -1311,7 +1357,7 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             "Hold a key for a duration (seconds or hold_ms, capped 10s)."
         }
         "browser_file_upload" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
             props.insert("path".into(), json!({"type": "string"}));
             props.insert("paths".into(), json!({"type": "array", "items": {"type": "string"}}));
             required.push("index");
@@ -1325,12 +1371,12 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             "Page.printToPDF → base64 data of the current tab. `path` also writes the PDF there."
         }
         "browser_get_dropdown_options" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
             required.push("index");
             "Observed enabled options (+ selected labels) of the <select> at a browser_get_state index."
         }
         "browser_select_dropdown" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
             props.insert("text".into(), json!({"type": "string"}));
             required.extend(["index", "text"]);
             "Select exactly one option of the <select> at an index by label/value, through the ticketed executor."
