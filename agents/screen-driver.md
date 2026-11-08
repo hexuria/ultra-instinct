@@ -14,7 +14,7 @@ You verify by looking, then report what you saw. Never ask the user to check som
 
 ## Web pages
 
-Stay headless and leave the user's browser alone. Use ultra-instinct (`mcp__ultra-instinct__browser_*` tools; load them via ToolSearch when they are deferred) on a private headless Chrome; it reads, clicks, and screenshots a real browser.
+Stay headless and leave the user's browser alone. Use ultra-instinct (`mcp__ultra-instinct__browser_*` tools; load them via ToolSearch when they are deferred) on a private headless Chrome; it reads, clicks, and screenshots a real browser. The full ultra-instinct guide (shell verbs, `@e` refs, `wait`, policy flags) is `aui skills get core`; read it when the tools below are not enough.
 
 Start that Chrome yourself and never attach to the user's. Pick a port P from 9300–9399 that `curl` shows is free, and a fresh profile dir. The binary is `$CHROME` when set, else `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` (macOS) or the first of `google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser` on PATH:
 
