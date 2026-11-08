@@ -58,11 +58,20 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    helper `consume_ticket_once` uses
 >    the same consume-before-press order. `Predicted` carries no fingerprint of
 >    its own; do not add a "pre-ticket check" that is not wired into a refusal.
+>    The user's `Policy` (guard `policy.rs`: allowed domains, confirm-before-press)
+>    is checked by `execute_ticketed_with` on the fresh observe's URL and region
+>    after `revalidate` and the hard gate, before mark-consumed;
+>    `execute_ticketed` runs it with an empty policy. The agent also checks it
+>    after the gate; `consume_ticket_once_checked` runs it after `revalidate`,
+>    before consume. An empty policy allows everything.
 > 5. **Stale ≠ spent.** `WorldChanged` / `TargetChanged` / `TargetGone` are
 >    stale → discard the prediction, re-observe, decide again (bounded by
 >    `max_consecutive_stale`). `TicketConsumed` / `TicketMismatch` / gate
 >    refusal / page rejection / dispatch failure are **not** stale and are
->    never silently retried with the same lease.
+>    never silently retried with the same lease. `DomainNotAllowed` and
+>    `NeedsConfirm` are not stale: the agent ends BLOCKED
+>    (`Agent::policy_refusal`), `run` prints `rerun with --confirm "<label>"`,
+>    never retried with the same lease.
 > 6. **Ticket worlds are target-scoped.** `WorldSnapshot::of_target`: front
 >    layer and focus are global; clickable / occluded sets are the target
 >    neighborhood (ancestors, same-parent siblings, children, root peers within
@@ -158,7 +167,10 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    protocol): Loom / Kani / TLA+ / Miri / Lean are **NOT JUSTIFIED**. The
 >    owners are unit tests, `proptest`, adversarial fixtures, replay fixtures,
 >    cargo-mutants (nightly), and cargo-fuzz on the untrusted-input parsers
->    (nightly).
+>    (nightly). `aui daemon --session <name>` (unix, std sockets, single
+>    thread) owns one MCP `Server`: one session is one CDP socket; one
+>    connection and one line at a time, no thread pool. `aui open --launch`
+>    makes the daemon own its Chrome for the session's life.
 >
 > Any change to observable semantics on this path names the boundary it
 > affects (gate, ticket, executor, world, policy, text) and the test that owns
@@ -170,16 +182,16 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 |---|---|
 | `ultra-instinct-core` | `InteractionManifold`, regions, `ActionSpace`, fixture grammar |
 | `ultra-instinct-cdp` | CDP transport trait, websocket, replay transport, replay script builder |
-| `ultra-instinct-browser` | CDP observe (DOM/AX fusion, identity, stacking), raw CDP inputs |
+| `ultra-instinct-browser` | CDP observe (DOM/AX fusion, identity, stacking), raw CDP inputs; `launch.rs` (find / start a local Chrome, `ChromeProcess` killed on drop); `storage_state` (save / load cookies + storage, the 0600 state file and its parser) |
 | `ultra-instinct-observe` | Observation history and id diff |
 | `ultra-instinct-geometry` | Geometry helpers; `RegionState` (availability / visibility of a region) |
 | `ultra-instinct-policy` | `BrowserPolicy` + `PolicyContext` (`set_situation`, default no-op), `InstinctPolicy` (`instinct-*` 0.1.0 from crates.io) + `TRUST_CAP_MILLIS`/`set_evidence_adjustments` (bounded learned-trust evidence), `TextResolver`, `ModelTextResolver` (feature `model-text`), `RemotePolicy` (feature `remote`), multi-step clause split |
-| `ultra-instinct-guard` | Hard `gate`, `ActionTicket` issue / `revalidate`, `TicketLedger`, `consume_ticket_once`, front layer + `WorldSnapshot`; exact-label `guard()` for MCP / CLI preflight |
-| `ultra-instinct-agent` | `Agent` state machine, `execute_ticketed`, `BrowserRuntime`, verification mapping, `MockBrowser` |
+| `ultra-instinct-guard` | Hard `gate`, `ActionTicket` issue / `revalidate`, `TicketLedger`, `consume_ticket_once` / `consume_ticket_once_checked`, front layer + `WorldSnapshot`; the user's `Policy` (`HostPattern` allowed domains, `LabelGlob` confirm-before-press); exact-label `guard()` for MCP / CLI preflight |
+| `ultra-instinct-agent` | `Agent` state machine, `execute_ticketed` / `execute_ticketed_with` (policy), `AgentBuilder::guard_policy`, `BrowserRuntime`, verification mapping, `MockBrowser` |
 | `ultra-instinct-protocol` | Guard / ticket / verify wire types |
-| `ultra-instinct-mcp` | Optional JSON-RPC adapter (observe / guard / verify) |
+| `ultra-instinct-mcp` | Optional JSON-RPC adapter (observe / guard / verify) and the `browser_*` host surface: browser-use names, `browser_wait` conditions, `browser_extra` (dialog, forward / reload, check, focus, keyboard, get / is / count, annotate, `max_chars`), `browser_state` (state save / load, cookies, storage), `browser_env` (set, download, network) |
 | `ultra-instinct-remote` | Remote decision transports and the HTTP text model, the only crate with a model SDK / HTTP client: `typesafe` (feature `jev`), `clef` (feature `clef`), `http_text` (feature `model-text`); re-exported by `ultra-instinct` |
-| `ultra-instinct` | `ultra-instinct run` (agent loop, `--policy instinct|jev|clef|clef-flash`, `--diary <dir>`); `replay --diary` (offline arena: agree / would-abstain / regress per recorded decision); `observe` / `guard` / `verify` preflight commands; `mcp` (stdio); `TypesafeTransport` (feature `jev`: JEV-primary over the closed remote wire); `ClefTransport` (feature `clef`: Cloudflare Workers AI Clef / Clef-Flash over the same wire through `typesafe-sdk`'s Clef provider, one decision call, single-candidate heads answered locally) |
+| `ultra-instinct` | `ultra-instinct run` (agent loop, `--policy instinct|jev|clef|clef-flash`, `--diary <dir>`); `replay --diary` (offline arena: agree / would-abstain / regress per recorded decision); `observe` / `guard` / `verify` preflight commands; `mcp` (stdio); the shell verbs over the session daemon (`verbs.rs`, `daemon.rs`), `batch`, `session`, `skills`, `doctor`, `install`; `run --launch/--load-state/--save-state/--allow-domain/--confirm-press/--confirm`; `TypesafeTransport` (feature `jev`: JEV-primary over the closed remote wire); `ClefTransport` (feature `clef`: Cloudflare Workers AI Clef / Clef-Flash over the same wire through `typesafe-sdk`'s Clef provider, one decision call, single-candidate heads answered locally) |
 | `ultra-instinct-dojo` | Battle diary schema v1 (`DiaryLine` JSONL), `DiaryWriter` / `read_diary`, site + situation keys, decision→`ActionSpace` rebuild for the replay arena; versioned `LessonStore` (words / places / moves / trust, keyed per situation, carrying proving diary ids); lessons only adjust evidence inside the finite `ActionSpace` |
 
 Instinct (`instinct-core` / `-text` / `-lexicon`) is pinned to 0.1.0 from
@@ -196,6 +208,15 @@ deliberate eval.
 - Gate / ticket / world: `ultra-instinct-guard` unit tests,
   `tests/ticket_props.rs` (radius boundary 159 / 160 / 161, focus-only change,
   consumed never stale), `tests/world_context.rs`.
+- User policy (allowed domains, confirm-before-press): guard
+  `tests/policy_props.rs`; the `executor.rs` policy tests; the
+  `tests/mock_loop.rs` policy tests (`needs_confirm_ends_blocked_without_pressing`,
+  `domain_off_the_allowlist_ends_blocked`).
+- Shell verbs and the session daemon: `verbs.rs` / `batch.rs` unit tests and
+  the `daemon.rs` socket tests (round trip, spawn / stale socket, idle exit,
+  failed launch, session list). `browser_*` families over CDP replay:
+  `crates/ultra-instinct-mcp/tests/browser_tools.rs`, `browser_extra.rs`,
+  `browser_state.rs`, `browser_env.rs`.
 - Instinct evidence: `ultra-instinct-policy` unit tests. Do not add a second model of
   Instinct scoring.
 - MCP / CLI `guard` (exact label, unique or refuse): `ultra-instinct-guard`
@@ -208,7 +229,9 @@ deliberate eval.
 - Untrusted input (fixture grammar, CDP replay scripts, MCP stdin lines,
   remote-model replies, model-text replies): `fuzz/` cargo-fuzz targets on a
   dated nightly (`scripts/fuzz-smoke.sh`, `.github/workflows/nightly.yml`),
-  backed by the structured/garbage proptests at small case counts.
+  backed by the structured/garbage proptests at small case counts. Saved
+  state files: the parser proptests in
+  `crates/ultra-instinct-browser/tests/storage_state.rs`.
 - Observe protocol cost: `crates/ultra-instinct-browser/tests/call_budget.rs`
   pins the CDP call count per observe as a regression tripwire.
 - Repo rules (toolchain pin, `forbid(unsafe_code)`, crate ceilings, pinned
@@ -277,6 +300,42 @@ press runs; `browser_hover`, `browser_drag` (index→index), `browser_zoom`,
 `browser_send_key`/`browser_hold_key`, `browser_save_as_pdf`,
 `browser_get_dropdown_options`/`browser_select_dropdown`,
 `browser_search`, `browser_form_input` (type alias).
+
+`browser_get_state` defaults to text: a title / url line, then one line per
+control, `@eN role "label"  state`; `format:"json"` returns `elements[]`.
+Index arguments take `5`, `"5"` or `"@e5"`.
+
+`browser_wait` with `text` / `url` / `control` / `gone` (no control has that
+exact label) / `load` (`domcontentloaded` | `load` on `document.readyState`,
+never network idle) observes about every 200 ms until every given condition
+holds or `seconds` (default 10, cap 60) runs out; it never acts.
+
+Policy: `ULTRA_INSTINCT_ALLOW_DOMAINS` / `ULTRA_INSTINCT_CONFIRM_PRESS`
+(comma lists) set the server's `Policy`; a press tool's `confirm` argument
+names the label the user confirmed. Ticketed inputs return `ticket`;
+`verify:true` adds `verification`. `browser_send_key` with `index` is a
+ticketed KEY.
+
+`browser_extra` ports (from agent-browser): `browser_dialog`,
+`browser_go_forward`, `browser_reload`, `browser_check`, `browser_focus`,
+`browser_keyboard`, `browser_get`, `browser_is`, `browser_count`,
+`browser_screenshot` `annotate`, and `max_chars` on the text tools. Index
+tools read the index from the tab's last observation when no input ran
+since, and act on that region in a fresh observation. Page is enabled once
+per tab outside observe for dialog tracking; a failing call while a dialog
+is open says so.
+
+Login state (`browser_state_save` / `_load`, `browser_cookies`,
+`browser_storage`): values are masked unless `reveal`; state files are 0600
+and load refuses a file with group or other permissions; storage is written
+only for the current origin, other origins come back as pending.
+
+`browser_set` (viewport / device / media / offline / headers / reset),
+`browser_download` (a ticketed press, then the file moves to `path`) and
+`browser_network` (block / unblock via `Network.setBlockedURLs`, never Fetch
+interception, because the blocking server cannot answer paused requests;
+`har_start` / `har_stop` writes HAR without bodies, secret headers `•••`,
+0600).
 
 ## Signals
 

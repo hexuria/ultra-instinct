@@ -38,7 +38,56 @@ gate.
 
 ### Borrow
 
-Recorded with the borrow change (claims 1–4).
+Everything borrowed wraps the agent / gate / ticket path; none of it adds a
+second way to press.
+
+1. **Compact snapshot.** `browser_get_state` defaults to text: a title / url
+   line, then `@eN role "label"  state` per control (value, checked,
+   expanded, selected; never a password value); `format:"json"` keeps
+   `elements[]`. Every index argument takes `5`, `"5"` or `"@e5"`.
+2. **Session daemon and shell verbs.** `aui daemon --session <name>` serves
+   `$TMPDIR/aui/<session>.sock` (0700 dir, 0600 socket) with one MCP
+   `Server` in one thread: one session, one CDP socket. `aui open`, `snap`,
+   `click`, `type`, … spawn it on first use; every press is the ticketed
+   `browser_*` tool. `aui batch` runs several verbs in order on one session;
+   `aui session [list]` names the current / live sessions.
+3. **Guard policy.** `Policy` in guard `policy.rs`: allowed domains
+   (`HostPattern`) and confirm-before-press labels (`LabelGlob`), checked
+   after `revalidate` and the hard gate, before consume. `run
+   --allow-domain / --confirm-press / --confirm`, the MCP env vars and the
+   `confirm` argument set it. A refusal is BLOCKED, not stale.
+4. **Wait-for.** `browser_wait` / `aui wait` with `text`, `url`, `control`,
+   `gone` (no control has that exact label) or `load` (`document.readyState`;
+   never network idle), polling a fresh observe about every 200 ms.
+5. **Skills in the binary.** `aui skills list | get core` prints the guide
+   (`crates/ultra-instinct/skills/core.md`).
+6. **Ported tools** (`browser_extra.rs`): `browser_dialog`,
+   `browser_go_forward`, `browser_reload`, `browser_check`, `browser_focus`,
+   `browser_keyboard`, `browser_get` / `browser_is` / `browser_count`,
+   `browser_screenshot` `annotate`, and `max_chars` on the text tools
+   (`aui --max-output N`).
+7. **Launch, doctor, install.** `run --launch [--headed]` and `aui open
+   --launch` start a local Chrome (`ultra-instinct-browser` `launch.rs`;
+   the daemon owns it for the session's life); `aui doctor` checks Chrome,
+   the endpoint, a test launch and the socket dir; `aui install` prints (or
+   with `--run` runs) the Chrome for Testing install command.
+8. **Saved state.** `browser_state_save` / `_load`, `browser_cookies`,
+   `browser_storage`, `run --load-state / --save-state`: values masked
+   unless `reveal`, 0600 files, load refuses group / other permissions,
+   storage only for the current origin (others pending).
+9. **Environment.** `browser_set` (viewport, device, media, offline,
+   headers, reset), `browser_download` (a ticketed press, then the file
+   moves to `path`), `browser_network` (block / unblock through
+   `Network.setBlockedURLs`, HAR without bodies, secret headers masked).
+
+Not borrowed: other browser engines, live streaming, the dashboard, mouse
+coordinates, CSS / XPath selectors, the auth vault and plugins, and the
+react / vitals / a11y / trace / record commands.
+
+The owner's decisions on the open questions: refs are `@eN`; the text
+snapshot is the default; confirm-before-press only for labels the user
+lists (no built-in risky-word list); confirmation is the `--confirm` flag,
+not a tty prompt; and `guard` matches the exact label (see Prune 1).
 
 ### Prune
 
@@ -90,6 +139,15 @@ Recorded with the borrow change (claims 1–4).
 - Two exact twins (for example a page "Cancel" and a dialog "Cancel")
   escalate `ambiguous` where the old front-layer ranking picked the dialog's;
   the host passes `proposed` or `within`.
+- The `ultra-instinct-browser` and `ultra-instinct-mcp` line ceilings were
+  raised for the ported tools, and `ultra-instinct` for the shell verbs
+  (reasons in `scripts/crate-ceilings.txt`).
+- `Network.setBlockedURLs` takes `urls`; very new Chrome may want
+  `urlPatterns` instead.
+- `browser_download` and `browser_set` are tested over CDP replay only, not
+  against live Chrome in CI. One manual smoke of the shell verbs against a
+  launched Chrome 156 (2026-11-08) ran `download`, `set viewport / media /
+  reset`, `network block / har` and the rest; it is not a recorded test.
 - Owners:
   - `ultra-instinct-guard` unit tests (clear button, different label, twins,
     hidden twin, `within`, case and whitespace, disabled, buried page button
@@ -99,5 +157,10 @@ Recorded with the borrow change (claims 1–4).
   - `ultra-instinct-mcp` `tests/server.rs`, `tests/world_context.rs`,
     `tests/acme_mail.rs` (t7 / t8 re-homed under guard), `tests/chaos.rs`.
   - `ultra-instinct` `tests/cli_execute.rs`, `tests/mcp_stdio*.rs`.
+  - Borrow: guard `tests/policy_props.rs`, the executor and `mock_loop`
+    policy tests, the `daemon.rs` socket tests and `verbs.rs` / `batch.rs`
+    unit tests, `crates/ultra-instinct-mcp/tests/browser_tools.rs`,
+    `browser_extra.rs`, `browser_state.rs`, `browser_env.rs`, and the
+    state-file proptests in `crates/ultra-instinct-browser/tests/storage_state.rs`.
   - `scripts/architecture.txt` and `scripts/check_architecture.py` for the
     dependency graph.

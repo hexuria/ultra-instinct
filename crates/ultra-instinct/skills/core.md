@@ -33,7 +33,10 @@ unavailable), reinstall with `AUI_FORCE=1`.
 curl -s http://127.0.0.1:9222/json/version >/dev/null
 ```
 
-If nothing answers, launch Chrome yourself:
+If nothing answers, the simplest fix is to let `aui` start its own Chrome:
+`aui run --launch …` for a goal, `aui open --launch <url>` for the shell
+verbs. `aui doctor` says what is missing; `aui install` prints the Chrome for
+Testing install command. Or launch Chrome yourself:
 
 ```bash
 google-chrome --remote-debugging-port=9222 &
@@ -113,12 +116,12 @@ press still goes through the ticketed guard, so a page that changed since
 you looked refuses instead of clicking the wrong thing.
 
 ```bash
-aui open https://shop.example/join      # starts the session daemon; attaches to --cdp
-aui snap                                # the page, one line per control
+aui open --launch https://shop.example/join   # starts the daemon and its own Chrome
+aui snap                                      # the page, one line per control
 aui type @e2 "kid@example.com"
 aui click @e5
 aui wait --text "Welcome" --timeout 10
-aui close                               # stops the daemon
+aui close                                     # stops the daemon and its Chrome
 ```
 
 `aui snap` prints:
@@ -152,15 +155,44 @@ Verbs:
 | `key <ref> <key>` | one key on that control: `Enter`, `Escape`, arrows, `Home`, `End`, `PageUp`, `PageDown` |
 | `scroll [up\|down]` | scroll one viewport |
 | `wait --text\|--url\|--control <v> [--timeout s]` | look about every 200 ms until the page shows that text, the URL contains it, or a control label contains it (default 10 s, max 60) |
-| `shot [path]` | save a PNG screenshot |
+| `wait --gone <label>` | until no control has exactly that label (a spinner, a "Loading" button) |
+| `wait --load domcontentloaded\|load` | until `document.readyState` gets there (not network idle) |
+| `shot [--annotate] [path]` | save a PNG screenshot; `--annotate` draws the `@eN` boxes on it |
 | `tabs` | list tabs |
-| `close` | stop the daemon |
+| `dialog [status]` / `dialog accept ["text"]` / `dialog dismiss` | see or answer an alert / confirm / prompt |
+| `forward`, `reload [--ignore-cache]` | history forward, reload |
+| `check <ref>`, `uncheck <ref>` | set a checkbox; `--mouse` presses a real pointer |
+| `focus <ref>` | focus a control (ticketed) |
+| `keyboard type\|insert <text>` | keys into whatever has focus (`insert` sends the text in one go) |
+| `get value\|label\|role\|box <ref>`, `get attr <ref> <name>` | read one fact; never a password value |
+| `is visible\|enabled\|checked\|editable <ref>` | prints `true` or `false` |
+| `count [--label L] [--role R]` | how many controls match, and their refs |
+| `state save\|load <path>` | save / reuse a login (cookies + storage, 0600 file); load prints origins still pending |
+| `cookies [list] [--name N] [--domain D] [--reveal]` | cookie values print as `•••` unless `--reveal` |
+| `cookies set <name> <value> [--domain D] [--path P] [--expires SECS] [--http-only] [--secure] [--same-site Strict\|Lax\|None]`, `cookies clear [--name N] [--domain D]` | change cookies |
+| `storage local\|session [list] [--reveal]`, `… get <key>`, `… set <key> <value>`, `… clear [<key>]` | the page origin's storage |
+| `set viewport W H [scale]`, `set device "<name>"`, `set media dark\|light\|no-preference`, `set offline on\|off`, `set headers K=V…`, `set reset` | emulate a screen / device / color scheme / network |
+| `download <ref> <path> [--overwrite] [--timeout-ms N]` | ticketed click, then save the file |
+| `network block <pattern>…`, `network unblock [<pattern>…]`, `network har start`, `network har stop <path>` | block URLs; record a HAR (no bodies, secrets masked) |
+| `close` | stop the daemon (and the Chrome it launched) |
+
+`--max-output N` on any verb cuts long text output (`snap`) to N chars.
+Relative paths are yours: they resolve against your cwd.
+
+Several steps at once: `aui batch "snap" "click @e5" "wait --text Done" --bail`
+runs them in order on one session (`--bail` stops at the first failure;
+`--json` prints `[{cmd, ok, output}]`; with no commands it reads a JSON array
+of strings on stdin). Exit is non-zero if any failed. `aui session` prints the
+session name in use; `aui session list` lists live sessions and removes stale
+sockets.
 
 Every verb takes `--session <name>` (letters, digits, `-`; default
-`default`) and `--cdp <url>` (default `http://127.0.0.1:9222`). `aui open`
-does not launch Chrome: start it first (step 2). `open` also takes
-`--allow-domain` and `--confirm-press`; they are fixed when the daemon
-starts, so `aui close` before you change them.
+`default`) and `--cdp <url>` (default `http://127.0.0.1:9222`). `aui open
+--launch [--headed]` makes the daemon start its own Chrome (headless unless
+`--headed`), which ends when the daemon does; without it, start Chrome first
+(step 2). `open` also takes `--allow-domain` and `--confirm-press`; these and
+`--launch` are fixed when the daemon starts, so `aui close` before you change
+them.
 
 Output is one short line. `✓ ticket 41 · navigation` means the click ran
 and what changed (`success`, `state-changed`, `navigation`,
