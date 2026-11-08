@@ -1518,19 +1518,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63e71662fa4b2a2c3a26f570f037eb95bb1f85397f3cd8076caed2f026a6d100"
 dependencies = [
  "pin-project-lite",
- "tracing-attributes",
  "tracing-core",
-]
-
-[[package]]
-name = "tracing-attributes"
-version = "0.1.31"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7490cfa5ec963746568740651ac6781f701c9c5ea257c58e057f3ba8cf69e8da"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -1625,7 +1613,6 @@ dependencies = [
  "ultra-instinct-policy",
  "ultra-instinct-protocol",
  "ultra-instinct-remote",
- "ultra-instinct-resonance",
 ]
 
 [[package]]
@@ -1654,7 +1641,6 @@ dependencies = [
  "ultra-instinct-core",
  "ultra-instinct-geometry",
  "ultra-instinct-observe",
- "ultra-instinct-resonance",
 ]
 
 [[package]]
@@ -1691,15 +1677,8 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "ultra-instinct-core",
+ "ultra-instinct-geometry",
  "ultra-instinct-protocol",
- "ultra-instinct-resonance",
-]
-
-[[package]]
-name = "ultra-instinct-hyper"
-version = "0.1.0"
-dependencies = [
- "proptest",
 ]
 
 [[package]]
@@ -1714,10 +1693,10 @@ dependencies = [
  "ultra-instinct-browser",
  "ultra-instinct-cdp",
  "ultra-instinct-core",
+ "ultra-instinct-geometry",
  "ultra-instinct-guard",
  "ultra-instinct-observe",
  "ultra-instinct-protocol",
- "ultra-instinct-resonance",
 ]
 
 [[package]]
@@ -1755,18 +1734,6 @@ dependencies = [
  "typesafe-sdk",
  "ultra-instinct-core",
  "ultra-instinct-policy",
-]
-
-[[package]]
-name = "ultra-instinct-resonance"
-version = "0.1.0"
-dependencies = [
- "proptest",
- "tracing",
- "tracing-subscriber",
- "ultra-instinct-core",
- "ultra-instinct-geometry",
- "ultra-instinct-hyper",
 ]
 
 [[package]]

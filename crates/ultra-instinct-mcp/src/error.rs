@@ -19,11 +19,9 @@ pub enum ToolError {
     UnknownTool(String),
     GoalNotAccepted,
     CoordinatesNotAccepted,
-    UnknownMatcher(String),
     EmptyText,
     UnknownRegion(String),
     UnknownRole(String),
-    UnknownPosition(String),
     UnknownAction(String),
     UnsupportedAction(String),
     NonFiniteConfidence,
@@ -40,8 +38,6 @@ pub enum ToolError {
     },
     /// `act` was given both `confidence` and locate fields.
     ConfidenceWithQuery,
-    /// `diff` mixed file paths and snapshot ids.
-    MixedDiffSources,
     SnapshotEvicted {
         id: u64,
         oldest: u64,
@@ -56,13 +52,10 @@ pub enum ToolError {
     RegionStillPresent {
         id: String,
     },
-    DimsRequireHgra,
-    BadDims(String),
     BadConfidence(String),
     /// A caller-supplied `confidence` or `runner_up.confidence` outside
     /// `[0, 1]`. The value is the JSON text the caller sent.
     ConfidenceOutOfRange(String),
-    MissingRegion,
     MissingExpect,
     BothExpectations,
     ActNeedsCdp,
@@ -95,10 +88,6 @@ pub enum ToolError {
     },
     Fixture(String),
     Browser(String),
-    /// `locate_with` failed. The default weighted and V1 hyper matchers do not
-    /// return this on a manifold this crate just parsed. Kept so a future
-    /// encoder error is not turned into a click.
-    Ranker(String),
 }
 
 impl ToolError {
@@ -112,11 +101,9 @@ impl ToolError {
             Self::UnknownTool(_) => "UnknownTool",
             Self::GoalNotAccepted => "GoalNotAccepted",
             Self::CoordinatesNotAccepted => "CoordinatesNotAccepted",
-            Self::UnknownMatcher(_) => "UnknownMatcher",
             Self::EmptyText => "EmptyText",
             Self::UnknownRegion(_) => "UnknownRegion",
             Self::UnknownRole(_) => "UnknownRole",
-            Self::UnknownPosition(_) => "UnknownPosition",
             Self::UnknownAction(_) => "UnknownAction",
             Self::UnsupportedAction(_) => "UnsupportedAction",
             Self::NonFiniteConfidence => "NonFiniteConfidence",
@@ -125,18 +112,14 @@ impl ToolError {
             Self::BadRunnerUp(_) => "BadRunnerUp",
             Self::TargetNotTop { .. } => "TargetNotTop",
             Self::ConfidenceWithQuery => "ConfidenceWithQuery",
-            Self::MixedDiffSources => "MixedDiffSources",
             Self::SnapshotEvicted { .. } => "SnapshotEvicted",
             Self::UnknownSnapshot(_) => "UnknownSnapshot",
             Self::BadSnapshot(_) => "BadSnapshot",
             Self::ExpectNeedsObserveAfter => "ExpectNeedsObserveAfter",
             Self::ExpectedTextMissing { .. } => "ExpectedTextMissing",
             Self::RegionStillPresent { .. } => "RegionStillPresent",
-            Self::DimsRequireHgra => "DimsRequireHgra",
-            Self::BadDims(_) => "BadDims",
             Self::BadConfidence(_) => "BadConfidence",
             Self::ConfidenceOutOfRange(_) => "ConfidenceOutOfRange",
-            Self::MissingRegion => "MissingRegion",
             Self::MissingExpect => "MissingExpect",
             Self::BothExpectations => "BothExpectations",
             Self::ActNeedsCdp => "ActNeedsCdp",
@@ -154,19 +137,14 @@ impl ToolError {
             Self::Io { .. } => "Io",
             Self::Fixture(_) => "Fixture",
             Self::Browser(_) => "Browser",
-            Self::Ranker(_) => "Ranker",
         }
     }
 
     pub fn to_value(&self) -> Value {
         match self {
             Self::UnknownTool(name) => json!({"variant": "UnknownTool", "name": name}),
-            Self::UnknownMatcher(name) => json!({"variant": "UnknownMatcher", "name": name}),
             Self::UnknownRegion(id) => json!({"variant": "UnknownRegion", "id": id}),
             Self::UnknownRole(role) => json!({"variant": "UnknownRole", "role": role}),
-            Self::UnknownPosition(position) => {
-                json!({"variant": "UnknownPosition", "position": position})
-            }
             Self::UnknownAction(action) => json!({"variant": "UnknownAction", "action": action}),
             Self::UnsupportedAction(action) => {
                 json!({"variant": "UnsupportedAction", "action": action})
@@ -175,7 +153,6 @@ impl ToolError {
                 json!({"variant": "ExpectedTextMissing", "expected": expected})
             }
             Self::RegionStillPresent { id } => json!({"variant": "RegionStillPresent", "id": id}),
-            Self::BadDims(dims) => json!({"variant": "BadDims", "dims": dims}),
             Self::BadConfidence(value) => json!({"variant": "BadConfidence", "value": value}),
             Self::ConfidenceOutOfRange(value) => {
                 json!({"variant": "ConfidenceOutOfRange", "value": value})
@@ -217,7 +194,6 @@ impl ToolError {
             }
             Self::Fixture(message) => json!({"variant": "Fixture", "message": message}),
             Self::Browser(message) => json!({"variant": "Browser", "message": message}),
-            Self::Ranker(message) => json!({"variant": "Ranker", "message": message}),
             other => json!({"variant": other.variant()}),
         }
     }
@@ -231,8 +207,8 @@ impl fmt::Display for ToolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingFixture => f.write_str("tool requires fixture or cdp"),
-            Self::MissingBefore => f.write_str("diff requires before"),
-            Self::MissingAfter => f.write_str("diff requires after"),
+            Self::MissingBefore => f.write_str("verify requires before_snapshot"),
+            Self::MissingAfter => f.write_str("verify requires after_snapshot"),
             Self::DuplicateSource => f.write_str("pass fixture or cdp, not both"),
             Self::MissingToolName => f.write_str("tools/call requires a name"),
             Self::UnknownTool(name) => write!(f, "unknown tool `{name}`"),
@@ -242,11 +218,9 @@ impl fmt::Display for ToolError {
             Self::CoordinatesNotAccepted => {
                 f.write_str("ultra-instinct does not accept coordinates; act on a region id")
             }
-            Self::UnknownMatcher(name) => write!(f, "unknown matcher `{name}`"),
             Self::EmptyText => f.write_str("text must contain at least one alphanumeric token"),
             Self::UnknownRegion(id) => write!(f, "unknown region `{id}`"),
             Self::UnknownRole(role) => write!(f, "unknown role `{role}`"),
-            Self::UnknownPosition(position) => write!(f, "unknown position `{position}`"),
             Self::UnknownAction(action) => write!(f, "unknown action `{action}`"),
             Self::UnsupportedAction(action) => {
                 write!(f, "browser session cannot perform `{action}`")
@@ -261,9 +235,6 @@ impl fmt::Display for ToolError {
             Self::ConfidenceWithQuery => {
                 f.write_str("act takes confidence or locate fields, not both")
             }
-            Self::MixedDiffSources => {
-                f.write_str("diff takes before/after paths or snapshot ids, not both")
-            }
             Self::SnapshotEvicted { id, oldest } => {
                 write!(f, "snapshot {id} was evicted; oldest kept is {oldest}")
             }
@@ -276,13 +247,10 @@ impl fmt::Display for ToolError {
                 write!(f, "expected text `{expected}` did not appear")
             }
             Self::RegionStillPresent { id } => write!(f, "region `{id}` is still present"),
-            Self::DimsRequireHgra => f.write_str("dims is only valid with matcher hgra"),
-            Self::BadDims(dims) => write!(f, "unsupported dims `{dims}`"),
             Self::BadConfidence(value) => write!(f, "bad confidence `{value}`"),
             Self::ConfidenceOutOfRange(value) => {
                 write!(f, "confidence `{value}` must be between 0 and 1")
             }
-            Self::MissingRegion => f.write_str("act and inspect require region"),
             Self::MissingExpect => f.write_str("verify requires expect_text or expect_absent"),
             Self::BothExpectations => {
                 f.write_str("verify accepts expect_text or expect_absent, not both")
@@ -318,7 +286,6 @@ impl fmt::Display for ToolError {
             Self::Io { path, message } => write!(f, "cannot read {path}: {message}"),
             Self::Fixture(message) => write!(f, "fixture: {message}"),
             Self::Browser(message) => write!(f, "browser: {message}"),
-            Self::Ranker(message) => write!(f, "locate: {message}"),
         }
     }
 }

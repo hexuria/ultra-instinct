@@ -93,8 +93,6 @@ jobs:
         with:
           tool: cargo-nextest
       - run: cargo nextest run --workspace --locked --profile ci --no-tests=pass
-      # Optional HGRA experiment still compiles and tests behind its feature.
-      - run: cargo nextest run -p ultra-instinct-resonance --features hgra --locked --profile ci
       # Optional remote escalation behind its feature.
       - run: cargo nextest run -p ultra-instinct-policy -p ultra-instinct-agent --features ultra-instinct-agent/remote,ultra-instinct-policy/remote --locked --profile ci
       # Optional model-text TextResolver: scripted / local-command models only (no network, no keys).

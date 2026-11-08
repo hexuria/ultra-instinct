@@ -1,8 +1,8 @@
 //! Mock environment over the real stdio process.
 //!
 //! One `ultra-instinct mcp` child, driven line by line the way an MCP client would:
-//! initialize, tools/list, then observe, locate, act, and diff, where each
-//! act is built from the previous reply. The pages are CDP replay scripts
+//! initialize, tools/list, then observe, guard, and verify, where each call
+//! is built from the previous reply. The pages are CDP replay scripts
 //! written by `ScriptBuilder` into a temp dir. Fixture origins open a fresh
 //! replay per call; the live-session paths are covered in
 //! `ultra-instinct-mcp/tests/mock_env.rs`. No Chrome, no network, no API key.
@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use serde_json::{json, Value};
-use ultra_instinct_browser::script::{Control, HistorySpec, PageSpec, ScriptBuilder};
+use ultra_instinct_browser::script::{Control, PageSpec, ScriptBuilder};
 
 struct Client {
     child: Child,
@@ -150,33 +150,12 @@ impl Drop for Pages {
     }
 }
 
-#[ignore = "actuation removed in action-firewall pivot"]
 #[test]
-fn an_mcp_client_drives_the_closed_loop_over_stdio() {
+fn an_mcp_client_drives_observe_guard_verify_over_stdio() {
     let pages = Pages::new();
     let sign_in_page = pages.write("sign-in.cdp.json", ScriptBuilder::new().observe(&sign_in()));
     let twins_page = pages.write("twins.cdp.json", ScriptBuilder::new().observe(&twins()));
-    let press = pages.write(
-        "press.cdp.json",
-        ScriptBuilder::new()
-            .observe(&sign_in())
-            .dom_click(10)
-            .observe(&account()),
-    );
-    let dead = pages.write(
-        "dead.cdp.json",
-        ScriptBuilder::new()
-            .observe(&sign_in())
-            .dom_click(10)
-            .observe(&sign_in()),
-    );
-    let unknown_history = pages.write(
-        "history.cdp.json",
-        ScriptBuilder::new()
-            .observe(&sign_in())
-            .dom_click(10)
-            .observe(&sign_in().with_history(HistorySpec::ProtocolError)),
-    );
+    let account_page = pages.write("account.cdp.json", ScriptBuilder::new().observe(&account()));
 
     let mut client = Client::spawn();
     let init = client.request(
@@ -192,81 +171,48 @@ fn an_mcp_client_drives_the_closed_loop_over_stdio() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(
-        names,
-        ["observe", "locate", "inspect", "act", "diff", "verify"]
-    );
+    assert_eq!(names[..3], ["observe", "guard", "verify"]);
+    for removed in ["locate", "inspect", "act", "diff"] {
+        assert!(!names.contains(&removed), "{removed}");
+    }
 
     let observed = client.ok("observe", json!({"fixture": sign_in_page}));
     assert_eq!(observed["snapshot"], 1);
 
-    // Twins: the caller forwards locate's top two, and act refuses.
-    let located = client.ok("locate", json!({"fixture": twins_page, "text": "Send"}));
-    let top = &located["candidates"][0];
-    let runner = &located["candidates"][1];
-    let refused = client.ok(
-        "act",
+    // Twins: the same label twice escalates; nothing is pressed.
+    let twins = client.ok(
+        "guard",
+        json!({"fixture": twins_page, "target": "Send", "role": "button"}),
+    );
+    assert_eq!(twins["decision"], "escalate", "{twins}");
+    assert_eq!(twins["reason"], "ambiguous", "{twins}");
+    assert_eq!(twins["executed"], false);
+
+    // One Sign in: allowed with a ticket, still never clicked.
+    let allowed = client.ok(
+        "guard",
+        json!({"fixture": sign_in_page, "target": "Sign in", "role": "button"}),
+    );
+    assert_eq!(allowed["decision"], "allow", "{allowed}");
+    assert_eq!(allowed["target"]["id"], "n100");
+    assert_eq!(allowed["ticket"]["target_id"], "n100");
+    assert_eq!(allowed["executed"], false);
+
+    // The host pressed it itself; verify compares the two observations.
+    let after = client.ok("observe", json!({"fixture": account_page}));
+    let verified = client.ok(
+        "verify",
         json!({
-            "fixture": twins_page,
-            "region": top["id"],
-            "confidence": top["confidence"],
-            "runner_up": {"id": runner["id"], "confidence": runner["confidence"]}
+            "before_snapshot": observed["snapshot"],
+            "after_snapshot": after["snapshot"],
+            "expect_url_changed": true,
         }),
     );
-    assert_eq!(refused["executed"], false);
-    assert_eq!(refused["fallback"], "ambiguous");
+    assert_eq!(verified["verified"], true, "{verified}");
 
-    // Just below the gate: refused, no press (the script would allow one).
-    let low = client.ok(
-        "act",
-        json!({"fixture": press, "region": "n100", "confidence": 0.5496}),
-    );
-    assert_eq!(low["executed"], false);
-    assert_eq!(low["fallback"], "low-confidence");
-
-    // Locate fields on act: ranked inside the server, then pressed and verified.
-    let acted = client.ok(
-        "act",
-        json!({"fixture": press, "region": "n100", "text": "Sign in", "expect_text": "Welcome back"}),
-    );
-    assert_eq!(acted["executed"], true, "{acted}");
-    assert_eq!(acted["verified"], true);
-    assert_eq!(acted["state_delta"]["url_changed"], true);
-    assert_eq!(acted["state_delta"]["title_changed"], true);
-    let (before, after) = (
-        acted["before_snapshot"].clone(),
-        acted["after_snapshot"].clone(),
-    );
-    let diffed = client.ok(
-        "diff",
-        json!({"before_snapshot": before, "after_snapshot": after}),
-    );
-    assert_eq!(diffed["state_delta"], acted["state_delta"]);
-
-    // A fixture act observes after only when asked (a live cdp act does by
-    // default).
-    let no_effect = client.ok(
-        "act",
-        json!({"fixture": dead, "region": "n100", "observe_after": true}),
-    );
-    assert_eq!(no_effect["fallback"], "no-effect");
-    assert_eq!(no_effect["signals"], json!([{"kind": "no-op"}]));
-
-    let unknown = client.ok(
-        "act",
-        json!({"fixture": unknown_history, "region": "n100", "observe_after": true}),
-    );
-    assert_ne!(unknown["after_snapshot"], Value::Null);
-    assert_eq!(unknown["executed"], true);
-    assert_eq!(unknown["fallback"], Value::Null, "{unknown}");
-    assert_eq!(unknown["state_delta"]["url_changed"], false);
-
-    let (is_error, macos) = client.tool(
-        "act",
-        json!({"fixture": press, "region": "n100", "executor": "macos"}),
-    );
+    let (is_error, removed) = client.tool("locate", json!({"fixture": sign_in_page}));
     assert!(is_error);
-    assert_eq!(macos["variant"], "NotImplemented");
+    assert_eq!(removed["variant"], "UnknownTool");
 
     let (is_error, navigate) = client.tool("navigate", json!({"url": "https://example.test"}));
     assert!(is_error);

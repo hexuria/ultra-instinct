@@ -13,6 +13,10 @@
 
 #![forbid(unsafe_code)]
 
+mod state;
+
+pub use state::{Availability, RegionState, Visibility};
+
 use std::fmt;
 
 use ultra_instinct_core::{InteractionManifold, Rect, RegionId, Relation, SizeClass, Zone};

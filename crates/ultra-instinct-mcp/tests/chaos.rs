@@ -35,11 +35,10 @@ proptest! {
     fn structured_tool_calls_are_typed(
         tool in prop_oneof![
             Just("observe"),
+            // Removed helpers (ADR 0012): unknown tools now.
             Just("locate"),
-            Just("inspect"),
             Just("act"),
             Just("guard"),
-            Just("diff"),
             Just("verify"),
             Just("navigate"),
             Just("nope"),
@@ -67,17 +66,9 @@ proptest! {
             "locate" => {
                 arguments.insert("text".into(), json!("Sign in"));
             }
-            "inspect" => {
-                arguments.insert("region".into(), json!("n100"));
-            }
             "act" | "guard" => {
                 arguments.insert("target".into(), json!("Sign in"));
                 arguments.insert("role".into(), json!("button"));
-            }
-            "diff" => {
-                arguments.remove("fixture");
-                arguments.insert("before".into(), json!(fixture("sign-in.cdp.json")));
-                arguments.insert("after".into(), json!(fixture("welcome.cdp.json")));
             }
             "verify" => {
                 arguments.insert("expect_text".into(), json!("Sign in"));
@@ -113,10 +104,10 @@ proptest! {
             prop_assert_eq!(variant, "CoordinatesNotAccepted");
         } else if tool == "navigate" {
             prop_assert_eq!(variant, "GoalNotAccepted");
-        } else if tool == "nope" {
+        } else if matches!(tool, "nope" | "locate" | "act") {
             prop_assert_eq!(variant, "UnknownTool");
-        } else if tool == "act" || tool == "guard" {
-            // Guard never clicks. Confidence args are ignored; ranking decides.
+        } else if tool == "guard" {
+            // Guard never clicks. Confidence args are ignored; the label decides.
             prop_assert!(!is_error, "{tool}: {body}");
             prop_assert_eq!(&body["executed"], false);
             prop_assert!(body.get("decision").is_some(), "{body}");
@@ -132,8 +123,7 @@ proptest! {
         match result {
             Err(ToolError::MissingFixture)
             | Err(ToolError::GoalNotAccepted)
-            | Err(ToolError::UnknownTool(_))
-            | Err(ToolError::MissingBefore) => {}
+            | Err(ToolError::UnknownTool(_)) => {}
             other => prop_assert!(false, "unexpected {other:?}"),
         }
     }

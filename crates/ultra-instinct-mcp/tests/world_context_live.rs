@@ -4,23 +4,17 @@
 //! a throwaway Chrome and sets `ULTRA_INSTINCT_LIVE_CDP` + `ULTRA_INSTINCT_LIVE_SITE`.
 //! Tests must run with `--test-threads=1` so they share one tab without racing.
 //! No JEV, no Luna: observe → guard only.
-//! Rank traces: `RUST_LOG=ultra_instinct_resonance=debug`.
 
 use std::thread;
 use std::time::Duration;
 
 use serde_json::json;
 use ultra_instinct_browser::{BrowserSession, CdpTransport, WebSocketTransport};
-use ultra_instinct_core::{InteractionManifold, LocateQuery, Role};
-#[cfg(feature = "hgra")]
-use ultra_instinct_guard::guard_with;
+use ultra_instinct_core::{LocateQuery, Role};
+use ultra_instinct_geometry::RegionState;
 use ultra_instinct_guard::{
-    blocker, guard, with_front_layer, FrontLayer, GuardDecision, GuardError, GuardReason,
-    GuardRequest,
+    blocker, guard, with_front_layer, FrontLayer, GuardDecision, GuardReason, GuardRequest,
 };
-#[cfg(feature = "hgra")]
-use ultra_instinct_resonance::HgraMatcher;
-use ultra_instinct_resonance::RegionState;
 
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
@@ -87,31 +81,6 @@ fn find_ids_by_label(session: &BrowserSession<WebSocketTransport>, label: &str) 
         .collect()
 }
 
-/// Rank+decide with the matcher selected by `ULTRA_INSTINCT_MATCHER` (default weighted).
-/// Set `ULTRA_INSTINCT_MATCHER=hgra` and build with `--features hgra` for forced-HGRA remasure.
-fn decide(
-    manifold: &InteractionManifold,
-    request: &GuardRequest,
-) -> Result<GuardDecision, GuardError> {
-    let matcher = std::env::var("ULTRA_INSTINCT_MATCHER").unwrap_or_else(|_| "weighted".into());
-    match matcher.as_str() {
-        "weighted" | "" => guard(manifold, request),
-        "hgra" => {
-            #[cfg(feature = "hgra")]
-            {
-                eprintln!("matcher=hgra");
-                guard_with(manifold, request, &HgraMatcher::default())
-            }
-            #[cfg(not(feature = "hgra"))]
-            {
-                let _ = (manifold, request);
-                panic!("ULTRA_INSTINCT_MATCHER=hgra requires cargo --features hgra");
-            }
-        }
-        other => panic!("unknown ULTRA_INSTINCT_MATCHER={other} (want weighted|hgra)"),
-    }
-}
-
 fn dump_regions(session: &BrowserSession<WebSocketTransport>) -> String {
     let manifold = session.manifold().expect("observed");
     manifold
@@ -135,7 +104,7 @@ fn live_modal_confirm_refuses_buried_delete_and_allows_dialog_cancel() {
         dump_regions(&session)
     );
 
-    let buried = decide(
+    let buried = guard(
         &manifold,
         &GuardRequest::click(
             LocateQuery::new()
@@ -155,32 +124,44 @@ fn live_modal_confirm_refuses_buried_delete_and_allows_dialog_cancel() {
         }
     }
 
-    let twin = decide(
+    // Two exact "Cancel" labels: ambiguous until the host proposes one.
+    let cancel = || {
+        LocateQuery::new()
+            .text("Cancel")
+            .unwrap()
+            .role(Role::Button)
+    };
+    let twins = guard(&manifold, &GuardRequest::click(cancel())).unwrap();
+    let candidates = match twins {
+        GuardDecision::Escalate {
+            reason: GuardReason::Ambiguous,
+            candidates,
+        } => candidates,
+        other => panic!("expected escalate ambiguous for the Cancel twins, got {other:?}"),
+    };
+    let dialog_cancel = candidates
+        .iter()
+        .find(|candidate| {
+            let region = manifold.get(&candidate.id).expect("candidate region");
+            blocker(&manifold, region).is_none()
+        })
+        .expect("one Cancel sits in the dialog")
+        .id
+        .clone();
+    let twin = guard(
         &manifold,
-        &GuardRequest::click(
-            LocateQuery::new()
-                .text("Cancel")
-                .unwrap()
-                .role(Role::Button),
-        ),
+        &GuardRequest::click(cancel()).proposed(dialog_cancel.clone()),
     )
     .unwrap();
     match twin {
-        GuardDecision::Allow { ref target, .. } => {
-            let region = manifold.get(&target.id).expect("allow target");
-            assert!(
-                blocker(&manifold, region).is_none(),
-                "allowed Cancel must not be blocked; got {}",
-                target.id
-            );
-        }
+        GuardDecision::Allow { ref target, .. } => assert_eq!(target.id, dialog_cancel),
         other => panic!("expected allow dialog Cancel, got {other:?}"),
     }
 }
 
 #[test]
 #[ignore = "live Chrome: examples/world-context/smoke.sh"]
-fn live_twin_suspend_near_focus_picks_beta_row() {
+fn live_twin_suspend_within_the_focused_row_picks_beta() {
     let mut session = session_for("/twin-suspend.html");
     let manifold = session.observe().expect("observe twins").clone();
     let page = session.page().expect("page").clone();
@@ -201,7 +182,7 @@ fn live_twin_suspend_near_focus_picks_beta_row() {
         focused_region.label()
     );
 
-    let bare = decide(
+    let bare = guard(
         &manifold,
         &GuardRequest::click(
             LocateQuery::new()
@@ -219,33 +200,33 @@ fn live_twin_suspend_near_focus_picks_beta_row() {
         other => panic!("expected escalate ambiguous without context, got {other:?}"),
     }
 
-    let focused_guard = decide(
+    // The host scopes by the focused field's row (`near` went with the
+    // matcher): the innermost ancestor of focus that holds a Suspend.
+    let row = manifold
+        .ancestors(&focused)
+        .into_iter()
+        .find(|ancestor| {
+            manifold
+                .regions()
+                .any(|r| r.label() == "Suspend" && manifold.is_within(r.id(), ancestor))
+        })
+        .cloned()
+        .expect("focused field should sit in a row with Suspend");
+    let focused_guard = guard(
         &manifold,
         &GuardRequest::click(
             LocateQuery::new()
                 .text("Suspend")
                 .unwrap()
                 .role(Role::Button)
-                .near(Some(focused.clone())),
+                .within(row.clone()),
         ),
     )
     .unwrap();
     match focused_guard {
         GuardDecision::Allow { ref target, .. } => {
-            let region = manifold.get(&target.id).expect("target");
-            let row = manifold
-                .ancestors(&focused)
-                .into_iter()
-                .find(|ancestor| {
-                    manifold
-                        .regions()
-                        .any(|r| r.label() == "Suspend" && manifold.is_within(r.id(), ancestor))
-                })
-                .cloned()
-                .or_else(|| region.parent().cloned())
-                .expect("focused field should sit in a row with Suspend");
             assert!(
-                manifold.is_within(region.id(), &row) || region.id() == &row,
+                manifold.is_within(&target.id, &row),
                 "allowed Suspend {} not under focused row {row}",
                 target.id
             );
@@ -255,7 +236,7 @@ fn live_twin_suspend_near_focus_picks_beta_row() {
                 "allowed id missing from Suspend set"
             );
         }
-        other => panic!("expected allow Suspend near focus, got {other:?}"),
+        other => panic!("expected allow Suspend within the focused row, got {other:?}"),
     }
 }
 
@@ -278,7 +259,7 @@ fn live_cookie_backdrop_hit_test_refuses_save() {
         dump_regions(&session)
     );
 
-    let decision = decide(
+    let decision = guard(
         &manifold,
         &GuardRequest::click(LocateQuery::new().text("Save").unwrap().role(Role::Button)),
     )
@@ -291,7 +272,7 @@ fn live_cookie_backdrop_hit_test_refuses_save() {
         other => panic!("expected refuse occluded/front-layer for Save, got {other:?}"),
     }
 
-    let accept = decide(
+    let accept = guard(
         &manifold,
         &GuardRequest::click(
             LocateQuery::new()

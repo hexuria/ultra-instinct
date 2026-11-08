@@ -1,8 +1,8 @@
-//! MCP tools for the action-firewall product.
+//! MCP tools for the action-firewall product: observe, guard, verify.
 //!
-//! Product tools: observe, guard, verify. Locate, inspect, and diff remain as
-//! transitional helpers. `act` is deprecated: it runs the same decision path as
-//! `guard` and never clicks.
+//! `guard` finds its target by exact label (and role / `within`), unique or
+//! refuse, runs the hard gate, and never clicks. The locate, inspect, act and
+//! diff helpers and the matcher are gone (ADR 0012).
 
 use std::fs;
 use std::path::Path;
@@ -14,70 +14,28 @@ use ultra_instinct_browser::{
 };
 use ultra_instinct_core::{
     parse_fixture, Action, InteractionManifold, InteractionRegion, LocateQuery, RegionId, Role,
-    Zone,
 };
-use ultra_instinct_guard::{
-    blocker, guard_with, with_front_layer, FrontLayer, GuardRequest, WorldSnapshot,
-    MIN_ALLOW_CONFIDENCE,
-};
-use ultra_instinct_observe::{diff, history::SnapshotId, ManifoldDiff};
-use ultra_instinct_protocol::{GuardDecision, StateDelta};
-use ultra_instinct_resonance::{
-    separating_zone, ContextScope, Match, RegionMatcher, RegionState, WeightedMatcher,
-};
-#[cfg(feature = "hgra")]
-use ultra_instinct_resonance::{Dims, HgraMatcher, ResonanceModel};
+use ultra_instinct_geometry::RegionState;
+use ultra_instinct_guard::{guard, with_front_layer, FrontLayer, GuardRequest, WorldSnapshot};
+use ultra_instinct_observe::{diff, history::SnapshotId};
+use ultra_instinct_protocol::GuardDecision;
 
 use crate::error::ToolError;
-use crate::repeat::{QueryKey, REPEAT_THRESHOLD};
 use crate::server::Server;
 
 const PRODUCT: &str = "ultra-instinct";
 
-const _: () = assert!(ultra_instinct_resonance::TEXT_MISS_CAP < MIN_ALLOW_CONFIDENCE);
+/// Guard arguments the matcher understood. Refused by name so a caller that
+/// still sends them learns why instead of getting an unscoped decision.
+const REMOVED_GUARD_ARGUMENTS: [&str; 4] = ["near", "position", "matcher", "dims"];
 
 enum Origin {
     Fixture(String),
     Cdp(String),
 }
 
-/// The `near` argument: the focused region of the current observation (the
-/// "cursor"), or an explicit region id.
-enum Near {
-    Focus,
-    Region(RegionId),
-}
-
-impl Near {
-    /// The anchor for this observation. `focus` with no focused region is no
-    /// anchor, which is the default ranking.
-    fn anchor(&self, page: &PageState) -> Option<RegionId> {
-        match self {
-            Self::Focus => page.focused().cloned(),
-            Self::Region(id) => Some(id.clone()),
-        }
-    }
-}
-
-fn parse_near(arguments: &Value) -> Result<Option<Near>, ToolError> {
-    match opt_str(arguments, "near")? {
-        None => Ok(None),
-        Some("focus") => Ok(Some(Near::Focus)),
-        Some(raw) => RegionId::try_new(raw)
-            .map(|id| Some(Near::Region(id)))
-            .map_err(|_| ToolError::UnknownRegion(raw.to_owned())),
-    }
-}
-
-fn with_near(query: LocateQuery, near: Option<&Near>, page: &PageState) -> LocateQuery {
-    match near {
-        Some(near) => query.near(near.anchor(page)),
-        None => query,
-    }
-}
-
 /// `{"focused": id|null, "front_layer": [{id, label, modal}]}` facts of one
-/// observation, shared by observe, locate, and guard.
+/// observation, shared by observe and guard.
 fn world_json(manifold: &InteractionManifold, page: &PageState) -> (Value, Value) {
     let focused = page.focused().map_or(Value::Null, |id| json!(id.as_str()));
     let layer: Vec<Value> = FrontLayer::of(manifold)
@@ -92,29 +50,6 @@ fn world_json(manifold: &InteractionManifold, page: &PageState) -> (Value, Value
         })
         .collect();
     (focused, Value::Array(layer))
-}
-
-/// Explicit `matcher` arg wins; else `ULTRA_INSTINCT_MATCHER`; else weighted.
-fn resolve_matcher_name(arguments: &Value) -> Result<String, ToolError> {
-    if let Some(name) = opt_str(arguments, "matcher")? {
-        return Ok(name.to_owned());
-    }
-    match std::env::var("ULTRA_INSTINCT_MATCHER") {
-        Ok(name) if !name.is_empty() => Ok(name),
-        _ => Ok("weighted".into()),
-    }
-}
-
-#[cfg(feature = "hgra")]
-fn hgra_matcher(arguments: &Value) -> Result<HgraMatcher, ToolError> {
-    let dims = match opt_u64(arguments, "dims")? {
-        Some(n) => {
-            let width = usize::try_from(n).map_err(|_| ToolError::BadDims(n.to_string()))?;
-            Dims::try_from_usize(width).map_err(|_| ToolError::BadDims(n.to_string()))?
-        }
-        None => Dims::DEFAULT,
-    };
-    Ok(HgraMatcher::new(dims, ResonanceModel::V1))
 }
 
 /// Run one tool against a fresh [`Server`]. Keeps no state between calls.
@@ -164,12 +99,7 @@ pub(crate) fn dispatch(
     match name {
         "navigate" => Err(ToolError::GoalNotAccepted),
         "observe" => observe(server, arguments),
-        "locate" => locate(server, arguments),
-        "inspect" => inspect(server, arguments),
         "guard" => guard_tool(server, arguments),
-        // Deprecated: same decision as guard, never clicks.
-        "act" => guard_tool(server, arguments),
-        "diff" => diff_tool(server, arguments),
         "verify" => verify_tool(server, arguments),
         other => Err(ToolError::UnknownTool(other.to_owned())),
     }
@@ -210,151 +140,18 @@ fn observe(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     Ok(body)
 }
 
-fn locate(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
-    let origin = resolve_origin(arguments)?;
-    let (snapshot, raw, page) = observe_origin(server, &origin)?;
-    let near = parse_near(arguments)?;
-    let query = with_near(build_query(arguments)?, near.as_ref(), &page);
-    let manifold = with_front_layer(&raw);
-    let matcher_name = resolve_matcher_name(arguments)?;
-    if arguments.get("dims").is_some() && matcher_name != "hgra" {
-        return Err(ToolError::DimsRequireHgra);
-    }
-    let ranked = rank(manifold.as_ref(), &query, &matcher_name, arguments)?;
-    let key = QueryKey::new(&query, &matcher_name, opt_u64(arguments, "dims")?);
-    let count = server.record_locate(&origin_key(&origin), &raw, key);
-    let top = ranked.first();
-    let target = match top {
-        Some(candidate) => target_of(&manifold, candidate.id()),
-        None => Value::Null,
-    };
-    let confidence = top.map(Match::confidence);
-    // Omit executed and verified. ComputerResult always sets both, so a locate
-    // that carries executed: false looks like a refusal. This call does not press.
-    let mut body = without_act_flags(outcome(
-        "locate",
-        target,
-        None,
-        false,
-        false,
-        empty_delta(),
-        confidence,
-        None,
-        None,
-    ));
-    insert(&mut body, "matcher", json!(matcher_name));
-    insert(&mut body, "benchmark", json!(false));
-    insert(&mut body, "candidates", candidates_of(&manifold, &ranked));
-    insert(&mut body, "scope", scope_json(&query, &manifold));
-    insert(&mut body, "snapshot", json!(snapshot.get()));
-    let signals = if count >= REPEAT_THRESHOLD {
-        vec![repeated_query_json(&manifold, &ranked, count)]
-    } else {
-        Vec::new()
-    };
-    insert(&mut body, "signals", Value::Array(signals));
-    Ok(body)
-}
-
-/// `repeated_query`: this exact query already ran on this exact page state.
-/// Names the top and runner-up, each with a position zone that separates it
-/// from the other (or null). Data only. The ranking above is unchanged.
-fn repeated_query_json(manifold: &InteractionManifold, ranked: &[Match], count: usize) -> Value {
-    let rect = |candidate: &Match| manifold.get(candidate.id()).map(|region| region.rect());
-    let hint = |candidate: &Match, other: Option<&Match>| {
-        let zone = match (rect(candidate), other.and_then(rect)) {
-            (Some(own), Some(theirs)) => separating_zone(manifold.viewport(), own, theirs),
-            _ => None,
-        };
-        json!({
-            "id": candidate.id().as_str(),
-            "suggested_position": zone.map(|zone| zone.as_str()),
-        })
-    };
-    let top = ranked.first();
-    let runner_up = ranked.get(1);
-    json!({
-        "kind": "repeated_query",
-        "count": count,
-        "top": top.map_or(Value::Null, |top| hint(top, runner_up)),
-        "runner_up": runner_up.map_or(Value::Null, |runner| hint(runner, top)),
-    })
-}
-
-fn rank(
-    manifold: &InteractionManifold,
-    query: &LocateQuery,
-    matcher: &str,
-    arguments: &Value,
-) -> Result<Vec<Match>, ToolError> {
-    match matcher {
-        "weighted" => {
-            if opt_u64(arguments, "dims")?.is_some() {
-                return Err(ToolError::DimsRequireHgra);
-            }
-            WeightedMatcher::default()
-                .rank(query, manifold)
-                .map_err(|err| ToolError::Ranker(err.to_string()))
-        }
-        "hgra" => {
-            #[cfg(feature = "hgra")]
-            {
-                hgra_matcher(arguments)?
-                    .rank(query, manifold)
-                    .map_err(|err| ToolError::Ranker(err.to_string()))
-            }
-            #[cfg(not(feature = "hgra"))]
-            {
-                let _ = arguments;
-                Err(ToolError::UnknownMatcher(
-                    "hgra is an experiment; build with ultra-instinct-resonance feature `hgra`"
-                        .into(),
-                ))
-            }
-        }
-        other => Err(ToolError::UnknownMatcher(other.to_owned())),
-    }
-}
-
-fn inspect(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
-    let (snapshot, raw, _page) = observe_origin(server, &resolve_origin(arguments)?)?;
-    let manifold = with_front_layer(&raw);
-    let region = require_region(arguments)?;
-    let found = manifold
-        .get(&region)
-        .ok_or_else(|| ToolError::UnknownRegion(region.to_string()))?;
-    let target = json!({
-        "id": found.id().as_str(),
-        "role": found.role().as_str(),
-        "label": found.label(),
-        "state": state_json(manifold.as_ref(), found),
-        "parent": found.parent().map_or(Value::Null, |id| json!(id.as_str())),
-        "blocked_by": blocker(&raw, found).map_or(Value::Null, |dialog| json!(dialog.id().as_str())),
-        "x": found.rect().x(),
-        "y": found.rect().y(),
-        "width": found.rect().width(),
-        "height": found.rect().height(),
-    });
-    // Same omission as locate. Inspect reads one region and does not press.
-    let mut body = without_act_flags(outcome(
-        "inspect",
-        target,
-        None,
-        false,
-        false,
-        empty_delta(),
-        None,
-        None,
-        None,
-    ));
-    insert(&mut body, "snapshot", json!(snapshot.get()));
-    Ok(body)
-}
-
 fn guard_tool(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+    if let Some(removed) = REMOVED_GUARD_ARGUMENTS
+        .iter()
+        .find(|key| arguments.get(**key).is_some())
+    {
+        return Err(ToolError::InvalidArguments(format!(
+            "`{removed}` was removed with the matcher; guard matches the exact label: \
+             name the region with `proposed` or scope the label with `within`"
+        )));
+    }
     let origin = resolve_origin(arguments)?;
-    let base_query = build_guard_query(arguments)?;
-    let near = parse_near(arguments)?;
+    let query = build_guard_query(arguments)?;
     let proposed = match opt_str(arguments, "proposed")? {
         Some(raw) => Some(raw),
         None => opt_str(arguments, "region")?,
@@ -365,20 +162,6 @@ fn guard_tool(server: &mut Server, arguments: &Value) -> Result<Value, ToolError
         }
         None => None,
     };
-    let matcher_name = resolve_matcher_name(arguments)?;
-    if arguments.get("dims").is_some() && matcher_name != "hgra" {
-        return Err(ToolError::DimsRequireHgra);
-    }
-    match matcher_name.as_str() {
-        "weighted" | "hgra" => {}
-        other => return Err(ToolError::UnknownMatcher(other.to_owned())),
-    }
-    #[cfg(not(feature = "hgra"))]
-    if matcher_name == "hgra" {
-        return Err(ToolError::UnknownMatcher(
-            "hgra is an experiment; build with ultra-instinct-resonance feature `hgra`".into(),
-        ));
-    }
     // The observation the host decided on. Its world snapshot (focus, dialogs,
     // clickable ids, occluded set) is compared with the world observed now.
     let seen = match opt_snapshot(arguments, "seen_snapshot")? {
@@ -399,8 +182,7 @@ fn guard_tool(server: &mut Server, arguments: &Value) -> Result<Value, ToolError
         None => None,
     };
     let (snapshot, manifold, page) = observe_origin(server, &origin)?;
-    let query = with_near(base_query, near.as_ref(), &page);
-    let mut request = GuardRequest::click(query.clone())
+    let mut request = GuardRequest::click(query)
         .focused(page.focused().cloned())
         .snapshot_id(snapshot.get());
     if let Some(id) = proposed {
@@ -409,42 +191,17 @@ fn guard_tool(server: &mut Server, arguments: &Value) -> Result<Value, ToolError
     if let Some(seen) = seen {
         request = request.seen_world(seen);
     }
-    let decision = match matcher_name.as_str() {
-        "weighted" => guard_with(&manifold, &request, &WeightedMatcher::default())
-            .map_err(|err| ToolError::Ranker(err.to_string()))?,
-        #[cfg(feature = "hgra")]
-        "hgra" => guard_with(&manifold, &request, &hgra_matcher(arguments)?)
-            .map_err(|err| ToolError::Ranker(err.to_string()))?,
-        _ => unreachable!("matcher vetted above"),
-    };
+    let decision =
+        guard(&manifold, &request).map_err(|err| ToolError::InvalidArguments(err.to_string()))?;
     let mut body = decision_json("guard", snapshot, &manifold, decision);
-    insert(&mut body, "matcher", json!(matcher_name));
     let (focused, front_layer) = world_json(&manifold, &page);
     insert(&mut body, "focused", focused);
     insert(&mut body, "front_layer", front_layer);
-    insert(
-        &mut body,
-        "scope",
-        scope_json(&query, with_front_layer(&manifold).as_ref()),
-    );
     Ok(body)
 }
 
-/// `{"within": id|null, "near": anchor|null, "near_scope": id|null}`: the
-/// context the ranking used. `near_scope` null with an anchor means the
-/// anchor gave no scope and the default ranking ran.
-fn scope_json(query: &LocateQuery, manifold: &InteractionManifold) -> Value {
-    let scope = ContextScope::resolve(query, manifold);
-    let id = |id: Option<&RegionId>| id.map_or(Value::Null, |id| json!(id.as_str()));
-    json!({
-        "within": id(scope.within()),
-        "near": id(query.near_ref()),
-        "near_scope": id(scope.near_scope()),
-    })
-}
-
 fn build_guard_query(arguments: &Value) -> Result<LocateQuery, ToolError> {
-    // Accept locate-style fields, or `target` as the text label.
+    // `text` or `target` is the label; role, action and within narrow it.
     let mut args = arguments.clone();
     if args.get("text").is_none() {
         let target = args
@@ -558,50 +315,6 @@ fn decision_json(
         _ => {}
     }
     body
-}
-
-fn diff_tool(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
-    let before_path = opt_str(arguments, "before")?;
-    let after_path = opt_str(arguments, "after")?;
-    let before_id = opt_snapshot(arguments, "before_snapshot")?;
-    let after_id = opt_snapshot(arguments, "after_snapshot")?;
-    let by_path = before_path.is_some() || after_path.is_some();
-    let by_id = before_id.is_some() || after_id.is_some();
-    let (delta, pages) = match (by_path, by_id) {
-        (true, true) => return Err(ToolError::MixedDiffSources),
-        (false, true) => {
-            let before_id = before_id.ok_or(ToolError::MissingBefore)?;
-            let after_id = after_id.ok_or(ToolError::MissingAfter)?;
-            let (before_m, before_p, after_m, after_p) = {
-                let before = server.snapshot(before_id)?;
-                let after = server.snapshot(after_id)?;
-                (
-                    before.manifold.clone(),
-                    before.page.clone(),
-                    after.manifold.clone(),
-                    after.page.clone(),
-                )
-            };
-            (diff(&before_m, &after_m), page_delta(&before_p, &after_p))
-        }
-        _ => {
-            let (before_m, before_p) =
-                load_observation(before_path.ok_or(ToolError::MissingBefore)?)?;
-            let (after_m, after_p) = load_observation(after_path.ok_or(ToolError::MissingAfter)?)?;
-            (diff(&before_m, &after_m), page_delta(&before_p, &after_p))
-        }
-    };
-    Ok(outcome(
-        "diff",
-        Value::Null,
-        None,
-        false,
-        false,
-        delta_json(&delta, &pages),
-        None,
-        None,
-        None,
-    ))
 }
 
 fn opt_snapshot(arguments: &Value, key: &str) -> Result<Option<u64>, ToolError> {
@@ -795,29 +508,6 @@ fn verified_ok() -> Value {
     )
 }
 
-fn delta_json(delta: &ManifoldDiff, page: &ultra_instinct_browser::PageDelta) -> Value {
-    let changed: Vec<ultra_instinct_core::RegionId> = delta
-        .changed()
-        .iter()
-        .map(|change| change.id().clone())
-        .collect();
-    let state = StateDelta::new(delta.added().to_vec(), delta.removed().to_vec(), changed)
-        .with_moved(delta.moved().cloned().collect())
-        .with_text_changed(delta.relabeled().cloned().collect())
-        .with_focus_changed(page.focus_changed())
-        .with_url_changed(page.url_changed());
-    json!({
-        "added": id_strings(state.added()),
-        "removed": id_strings(state.removed()),
-        "changed": id_strings(state.changed()),
-        "moved": id_strings(state.moved()),
-        "text_changed": id_strings(state.text_changed()),
-        "focus_changed": state.focus_changed(),
-        "url_changed": state.url_changed(),
-        "title_changed": page.title_changed(),
-    })
-}
-
 fn resolve_origin(arguments: &Value) -> Result<Origin, ToolError> {
     let fixture = opt_str(arguments, "fixture")?;
     let cdp = opt_str(arguments, "cdp")?;
@@ -885,11 +575,6 @@ fn read_path(path: &str) -> Result<String, ToolError> {
     })
 }
 
-fn require_region(arguments: &Value) -> Result<RegionId, ToolError> {
-    let raw = opt_str(arguments, "region")?.ok_or(ToolError::MissingRegion)?;
-    RegionId::try_new(raw).map_err(|_| ToolError::UnknownRegion(raw.to_owned()))
-}
-
 fn build_query(arguments: &Value) -> Result<LocateQuery, ToolError> {
     let mut query = LocateQuery::new();
     if let Some(text) = opt_str(arguments, "text")? {
@@ -899,11 +584,6 @@ fn build_query(arguments: &Value) -> Result<LocateQuery, ToolError> {
         let parsed = Role::parse(&role.to_ascii_lowercase())
             .ok_or_else(|| ToolError::UnknownRole(role.to_owned()))?;
         query = query.role(parsed);
-    }
-    if let Some(position) = opt_str(arguments, "position")? {
-        let parsed = Zone::parse(&position.to_ascii_lowercase())
-            .ok_or_else(|| ToolError::UnknownPosition(position.to_owned()))?;
-        query = query.position(parsed);
     }
     if let Some(action) = opt_str(arguments, "action")? {
         let parsed = Action::parse(&action.to_ascii_lowercase())
@@ -925,17 +605,6 @@ fn opt_str<'a>(arguments: &'a Value, key: &str) -> Result<Option<&'a str>, ToolE
         Some(_) => Err(ToolError::InvalidArguments(format!(
             "{key} must be a string"
         ))),
-    }
-}
-
-fn opt_u64(arguments: &Value, key: &str) -> Result<Option<u64>, ToolError> {
-    match arguments.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Number(number)) => number
-            .as_u64()
-            .map(Some)
-            .ok_or_else(|| ToolError::BadDims(number.to_string())),
-        Some(other) => Err(ToolError::BadDims(other.to_string())),
     }
 }
 
@@ -965,14 +634,6 @@ fn outcome(
     })
 }
 
-fn without_act_flags(mut body: Value) -> Value {
-    if let Some(object) = body.as_object_mut() {
-        object.remove("executed");
-        object.remove("verified");
-    }
-    body
-}
-
 fn insert(body: &mut Value, key: &str, value: Value) {
     body.as_object_mut()
         .expect("tool result is a JSON object")
@@ -983,35 +644,6 @@ fn empty_delta() -> Value {
     json!({"added": [], "removed": [], "changed": []})
 }
 
-fn target_of(manifold: &InteractionManifold, id: &RegionId) -> Value {
-    match manifold.get(id) {
-        Some(region) => json!({
-            "id": region.id().as_str(),
-            "role": region.role().as_str(),
-            "label": region.label(),
-        }),
-        None => json!({"id": id.as_str()}),
-    }
-}
-
-fn candidates_of(manifold: &InteractionManifold, ranked: &[Match]) -> Value {
-    let rows: Vec<Value> = ranked
-        .iter()
-        .map(|candidate| {
-            let region = manifold.get(candidate.id());
-            json!({
-                "rank": candidate.rank(),
-                "id": candidate.id().as_str(),
-                "role": region.map(|region| region.role().as_str()).unwrap_or("unknown"),
-                "label": region.map(|region| region.label()).unwrap_or(""),
-                "state": region.map_or(Value::Null, |region| state_json(manifold, region)),
-                "confidence": candidate.confidence(),
-            })
-        })
-        .collect();
-    Value::Array(rows)
-}
-
 /// `{"availability": "enabled"|"disabled", "visibility": "visible"|"occluded"|"offscreen"|"hidden"}`.
 fn state_json(manifold: &InteractionManifold, region: &InteractionRegion) -> Value {
     let state = RegionState::of(manifold.viewport(), region);
@@ -1019,8 +651,4 @@ fn state_json(manifold: &InteractionManifold, region: &InteractionRegion) -> Val
         "availability": state.availability().as_str(),
         "visibility": state.visibility().as_str(),
     })
-}
-
-fn id_strings(ids: &[RegionId]) -> Vec<&str> {
-    ids.iter().map(RegionId::as_str).collect()
 }

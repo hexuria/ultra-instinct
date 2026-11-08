@@ -173,24 +173,6 @@ fn guard_refuses_a_text_miss() {
 }
 
 #[test]
-fn deprecated_act_is_an_alias_of_guard_and_never_clicks() {
-    let tab = "ws://mock/act-alias";
-    let mock = MockChrome::default();
-    mock.tab(tab, ScriptBuilder::new().observe(&sign_in_page()));
-    let mut server = mock.server();
-
-    let acted = call(
-        &mut server,
-        "act",
-        json!({"cdp": tab, "target": "Sign in", "role": "button"}),
-    );
-    assert_eq!(acted["tool"], "guard");
-    assert_eq!(acted["decision"], "allow");
-    assert_eq!(acted["executed"], false);
-    assert_eq!(mock.presses(), 0);
-}
-
-#[test]
 fn verify_checks_expected_text_without_clicking() {
     let tab = "ws://mock/verify";
     let mock = MockChrome::default();
@@ -207,7 +189,7 @@ fn verify_checks_expected_text_without_clicking() {
 }
 
 #[test]
-fn session_ring_observe_then_diff() {
+fn session_ring_observe_then_verify_by_snapshots() {
     let tab = "ws://mock/diff";
     let mock = MockChrome::default();
     mock.tab(
@@ -220,14 +202,15 @@ fn session_ring_observe_then_diff() {
 
     let first = call(&mut server, "observe", json!({"cdp": tab}));
     let second = call(&mut server, "observe", json!({"cdp": tab}));
-    let delta = call(
+    let verified = call(
         &mut server,
-        "diff",
+        "verify",
         json!({
             "before_snapshot": first["snapshot"],
             "after_snapshot": second["snapshot"],
+            "expect_url_changed": true,
         }),
     );
-    assert!(delta["state_delta"]["added"].as_array().is_some());
+    assert_eq!(verified["verified"], true, "{verified}");
     assert_eq!(mock.presses(), 0);
 }

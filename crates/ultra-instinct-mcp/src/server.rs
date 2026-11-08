@@ -10,9 +10,6 @@
 //! is [`WebSocketTransport::connect`]. Tests pass a connector that returns a
 //! [`ultra_instinct_browser::ReplayTransport`], so the live-session paths (reuse,
 //! stale observation, eviction, a dropped session) run without Chrome.
-//!
-//! The server also remembers the last few locate calls so a repeated
-//! identical query on an unchanged page can be reported (see `repeat`).
 
 use std::collections::BTreeMap;
 
@@ -28,7 +25,6 @@ use ultra_instinct_observe::history::{
 };
 
 use crate::error::ToolError;
-use crate::repeat::{LocateRepeats, QueryKey};
 
 /// Live sessions kept at once. Opening another drops the oldest key.
 pub const MAX_LIVE_SESSIONS: usize = 4;
@@ -52,7 +48,6 @@ pub struct Server {
     sessions: BTreeMap<String, LiveSession>,
     session_order: Vec<String>,
     history: SnapshotRing<Snapshot>,
-    locate_repeats: LocateRepeats,
     /// Endpoint → page-websocket url of the tab `browser_*` tools drive.
     tab_binding: BTreeMap<String, String>,
     /// Session key → one-shot ticket ledger for ticketed browser inputs.
@@ -98,7 +93,6 @@ impl Server {
             sessions: BTreeMap::new(),
             session_order: Vec::new(),
             history: SnapshotRing::default(),
-            locate_repeats: LocateRepeats::default(),
             tab_binding: BTreeMap::new(),
             ledgers: BTreeMap::new(),
             events: BTreeMap::new(),
@@ -154,18 +148,6 @@ impl Server {
         after: SnapshotId,
     ) -> Result<Vec<TemporalSignal>, HistoryError> {
         detect(&self.history, before, after)
-    }
-
-    /// Count this locate call among the recent ones with the same origin,
-    /// page signature, and normalized query. Data only. This does not retry.
-    pub(crate) fn record_locate(
-        &mut self,
-        origin: &str,
-        manifold: &InteractionManifold,
-        query: QueryKey,
-    ) -> usize {
-        self.locate_repeats
-            .record(origin, StateSignature::from_manifold(manifold), query)
     }
 
     /// Newest snapshot recorded for `origin`, if it is still in the ring.

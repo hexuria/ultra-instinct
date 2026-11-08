@@ -114,12 +114,11 @@ mod proptest_parse {
 #[cfg(test)]
 mod phase2 {
     use super::*;
-    use ultra_instinct_core::{Action, LocateQuery, RegionId, Role, SourceMask};
+    use ultra_instinct_core::{Action, RegionId, Role, SourceMask};
     use ultra_instinct_observe::diff;
-    use ultra_instinct_resonance::{default_matcher, RegionMatcher};
 
     #[test]
-    fn locate_sign_in_on_cdp_snapshot_ranks_the_button_first() {
+    fn observe_sign_in_on_cdp_snapshot_fuses_the_button() {
         let transport =
             ReplayTransport::parse(include_str!("../../../fixtures/sign-in.cdp.json")).unwrap();
         let mut session = BrowserSession::new(transport);
@@ -130,11 +129,6 @@ mod phase2 {
         assert!(sign_in.sources().contains(SourceMask::DOM));
         assert!(sign_in.sources().contains(SourceMask::ACCESSIBILITY));
         assert_eq!(sign_in.rect().x(), 400.0);
-        let query = LocateQuery::new().text("Sign in").unwrap();
-        let ranked = default_matcher().rank(&query, &manifold).unwrap();
-        assert_eq!(ranked[0].id().as_str(), "n100");
-        assert_eq!(ranked[0].rank(), 1);
-        assert!(ranked[0].confidence() > ranked[1].confidence());
     }
 
     #[test]

@@ -2,8 +2,9 @@
 
 The product is `ultra-instinct`; crates are `ultra-instinct-*` (Autonomous Ultra
 Instinct) and binaries are `ultra-instinct` plus its short alias `aui`.
-HGRA is an experimental matcher frozen under `experiments/hgra/`. A crate
-or binary named `hgra` on the product path is a bug.
+The HGRA matcher experiment and the weighted matcher are removed
+([ADR 0012](docs/adr/0012-borrow-and-prune.md)). A crate, binary or feature
+named `hgra` or `resonance` is a bug.
 
 **Product:** Ultra-Instinct is a **Rust-native browser-agent runtime**
 ([`docs/PRD.md`](docs/PRD.md), [ADR 0001](docs/adr/0001-agent-runtime-pivot.md)).
@@ -17,9 +18,7 @@ surface. Nothing on the product path requires MCP, Browser Use, CUA, or Jev.
 
 Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 (`rust-toolchain.toml`). Product crates publish to crates.io as
-`ultra-instinct-*` (incl. `ultra-instinct-hyper`: it stays off the
-product path but ships so `ultra-instinct-resonance`'s `hgra` feature
-resolves). `#![forbid(unsafe_code)]` on every crate.
+`ultra-instinct-*`. `#![forbid(unsafe_code)]` on every crate.
 
 ## Anti-drift (read before changing anything on the agent path)
 
@@ -40,9 +39,12 @@ resolves). `#![forbid(unsafe_code)]` on every crate.
 >    as state-changed (ADR 0009), without that state entering the fingerprint.
 > 3. **Hard invalidity is guard evidence, not a score.** Disabled, readonly
 >    (TYPE / SELECT), hidden / zero-area, occluded, front-layer, offscreen,
->    missing target, unsupported action → `ultra_instinct_guard::gate` refuses. The
->    ranked `guard()` + `0.55` / `0.05` float gate exists only for the MCP / CLI
->    preflight surface (historical A5 / A6 arms).
+>    missing target, unsupported action → `ultra_instinct_guard::gate` refuses.
+>    MCP / CLI `guard` finds its target by exact label (trimmed, whitespace
+>    collapsed, case ignored; plus role and `within`), unique or refuse
+>    (no match → `missing-target`, several visible → `ambiguous`, a
+>    `proposed` id must be a match), then runs the same hard gate and issues
+>    an `of_target` ticket. There is no score and no float gate.
 > 4. **One executor boundary, one staleness barrier.** `execute_ticketed` is
 >    the only path from a ticket to page input. Order: ledger (one-shot) →
 >    input kind == `ticket.action` → **fresh observe** → `revalidate`
@@ -148,7 +150,8 @@ resolves). `#![forbid(unsafe_code)]` on every crate.
 >    reply must be exactly an offered id + kind, else JEV's answer stands.
 >    Targets come before page controls in the request;
 >    near text and row text that echo the goal are not sent.
-> 9. **HGRA stays frozen.** No matcher tuning on the agent path.
+> 9. **No matcher.** HGRA and the weighted matcher are removed (ADR 0012).
+>    Do not reintroduce label ranking on the agent path or in `guard`.
 > 10. **One blocking CDP socket per agent.** Parallelism means separate agents
 >    in separate tabs with no shared state. Formal tools stay unjustified for
 >    this path (no `unsafe`, no atomics shared across threads, no recovery
@@ -169,21 +172,19 @@ resolves). `#![forbid(unsafe_code)]` on every crate.
 | `ultra-instinct-cdp` | CDP transport trait, websocket, replay transport, replay script builder |
 | `ultra-instinct-browser` | CDP observe (DOM/AX fusion, identity, stacking), raw CDP inputs |
 | `ultra-instinct-observe` | Observation history and id diff |
-| `ultra-instinct-geometry` | Geometry helpers |
+| `ultra-instinct-geometry` | Geometry helpers; `RegionState` (availability / visibility of a region) |
 | `ultra-instinct-policy` | `BrowserPolicy` + `PolicyContext` (`set_situation`, default no-op), `InstinctPolicy` (`instinct-*` 0.1.0 from crates.io) + `TRUST_CAP_MILLIS`/`set_evidence_adjustments` (bounded learned-trust evidence), `TextResolver`, `ModelTextResolver` (feature `model-text`), `RemotePolicy` (feature `remote`), multi-step clause split |
-| `ultra-instinct-guard` | Hard `gate`, `ActionTicket` issue / `revalidate`, `TicketLedger`, `consume_ticket_once`, front layer + `WorldSnapshot`; ranked `guard()` for MCP preflight |
+| `ultra-instinct-guard` | Hard `gate`, `ActionTicket` issue / `revalidate`, `TicketLedger`, `consume_ticket_once`, front layer + `WorldSnapshot`; exact-label `guard()` for MCP / CLI preflight |
 | `ultra-instinct-agent` | `Agent` state machine, `execute_ticketed`, `BrowserRuntime`, verification mapping, `MockBrowser` |
 | `ultra-instinct-protocol` | Guard / ticket / verify wire types |
-| `ultra-instinct-resonance` | `WeightedMatcher` (MCP / CLI locate + ranked guard only) |
 | `ultra-instinct-mcp` | Optional JSON-RPC adapter (observe / guard / verify) |
 | `ultra-instinct-remote` | Remote decision transports and the HTTP text model, the only crate with a model SDK / HTTP client: `typesafe` (feature `jev`), `clef` (feature `clef`), `http_text` (feature `model-text`); re-exported by `ultra-instinct` |
-| `ultra-instinct` | `ultra-instinct run` (agent loop, `--policy instinct|jev|clef|clef-flash`, `--diary <dir>`); `replay --diary` (offline arena: agree / would-abstain / regress per recorded decision); `observe` / `guard` / `verify` / `locate` / `inspect` / `diff` preflight helpers; `mcp` (stdio); `TypesafeTransport` (feature `jev`: JEV-primary over the closed remote wire); `ClefTransport` (feature `clef`: Cloudflare Workers AI Clef / Clef-Flash over the same wire through `typesafe-sdk`'s Clef provider, one decision call, single-candidate heads answered locally) |
+| `ultra-instinct` | `ultra-instinct run` (agent loop, `--policy instinct|jev|clef|clef-flash`, `--diary <dir>`); `replay --diary` (offline arena: agree / would-abstain / regress per recorded decision); `observe` / `guard` / `verify` preflight commands; `mcp` (stdio); `TypesafeTransport` (feature `jev`: JEV-primary over the closed remote wire); `ClefTransport` (feature `clef`: Cloudflare Workers AI Clef / Clef-Flash over the same wire through `typesafe-sdk`'s Clef provider, one decision call, single-candidate heads answered locally) |
 | `ultra-instinct-dojo` | Battle diary schema v1 (`DiaryLine` JSONL), `DiaryWriter` / `read_diary`, site + situation keys, decision→`ActionSpace` rebuild for the replay arena; versioned `LessonStore` (words / places / moves / trust, keyed per situation, carrying proving diary ids); lessons only adjust evidence inside the finite `ActionSpace` |
 
 Instinct (`instinct-core` / `-text` / `-lexicon`) is pinned to 0.1.0 from
 crates.io in the workspace `Cargo.toml` (`INSTINCT_VERSION_REQ`); bump only with a
-deliberate eval. HGRA lives in `experiments/hgra/` and the resonance `hgra`
-feature, not the default product path.
+deliberate eval.
 
 ## Verification owners
 
@@ -196,7 +197,11 @@ feature, not the default product path.
   `tests/ticket_props.rs` (radius boundary 159 / 160 / 161, focus-only change,
   consumed never stale), `tests/world_context.rs`.
 - Instinct evidence: `ultra-instinct-policy` unit tests. Do not add a second model of
-  Instinct scoring or of `WeightedMatcher::rank`.
+  Instinct scoring.
+- MCP / CLI `guard` (exact label, unique or refuse): `ultra-instinct-guard`
+  unit tests and `tests/world_context.rs`; over the wire,
+  `ultra-instinct-mcp` `tests/server.rs`, `tests/world_context.rs`,
+  `tests/acme_mail.rs`.
 - `write_fixture` / `parse_fixture` own the manifold fixture grammar. CDP
   replay is a different grammar. Fusion is the only DOM/accessibility merge.
   Region identity across observations is owned by the browser `IdentityMap`.
@@ -243,13 +248,14 @@ Tests or proofs updated: <owner tests>
 ## MCP (optional adapter)
 
 `ultra-instinct mcp` is a newline-delimited JSON-RPC server: observe, guard,
-verify (locate / inspect / diff remain as deprecated helpers; `act` is a
-deprecated alias of guard that never clicks). It owns a 16-entry snapshot
-ring and up to four live CDP sessions; a failed live call drops its session,
-no retry. Ranked guard keeps the `0.55` / `0.05` float gate for the historical
-A5 / A6 bench arms, runs `gate::check` before Allow, and issues `of_target`
-tickets like the agent. MCP never bypasses tickets and is never required to
-run the agent.
+verify. The locate, inspect, act and diff helpers are removed (ADR 0012):
+`observe` carries every region's id, label, parent and state, and `verify`
+compares two snapshots. It owns a 16-entry snapshot ring and up to four live
+CDP sessions; a failed live call drops its session, no retry. Guard finds its
+target by exact label (and `role` / `within`; `proposed` picks one of several
+matches), refuses `near` / `position` / `matcher` / `dims` by name, runs
+`gate::check` before Allow, and issues `of_target` tickets like the agent. MCP
+never bypasses tickets and is never required to run the agent.
 
 `browser_*` tools are the browser-use-compatible host surface (drop-in MCP
 names: `browser_navigate`, `browser_get_state`, `browser_click`,
@@ -274,5 +280,5 @@ press runs; `browser_hover`, `browser_drag` (index→index), `browser_zoom`,
 
 ## Signals
 
-Signals (`no-op`, `loop-detected`, `repeated_query`) are data for the MCP host
+Signals (`no-op`, `loop-detected`) are data for the MCP host
 journal. They do not retry and do not select an executor.

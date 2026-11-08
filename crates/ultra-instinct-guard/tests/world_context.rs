@@ -1,17 +1,15 @@
 //! Adversarial world-context fixtures for the guard.
 //!
-//! These are the bar for "variable change", not the 5-case HGRA corpus
-//! (`hgra_remeasure.rs`). That corpus only ranks labels on static pages that
-//! never open a dialog and never repeat a label under two parents, so a
-//! matcher can score 5/5 on it and still click behind a modal. Every fixture
-//! here is built so a label-only gate gets it wrong, and each test first
-//! shows that failure before it shows the context that fixes it.
+//! Every fixture here is built so a label-only check gets it wrong: twin
+//! labels under two parents, a page button that matches its label exactly
+//! while an open modal buries it, a world that changed after the host looked.
+//! The guard finds its target by exact label, then `within`, the front layer,
+//! and the seen world decide.
 
 use ultra_instinct_core::{parse_fixture, InteractionManifold, LocateQuery, RegionId, Role};
 use ultra_instinct_guard::{
-    guard, FrontLayer, GuardDecision, GuardReason, GuardRequest, WorldSnapshot,
+    guard, FrontLayer, GuardDecision, GuardError, GuardReason, GuardRequest, WorldSnapshot,
 };
-use ultra_instinct_resonance::{RegionMatcher, WeightedMatcher};
 
 const TWINS: &str = include_str!("../../../fixtures/twin-suspend-rows.manifold");
 const MODAL: &str = include_str!("../../../fixtures/modal-confirm.manifold");
@@ -50,23 +48,11 @@ fn escalated(decision: &GuardDecision) -> GuardReason {
     }
 }
 
-/// The label-only gate: what the guard did before world context. Top must
-/// clear 0.55 and the margin 0.05 on the raw observation.
-fn label_only_gate_allows(manifold: &InteractionManifold, query: &LocateQuery) -> Option<String> {
-    let ranked = WeightedMatcher::default().rank(query, manifold).unwrap();
-    let top = &ranked[0];
-    let margin = ranked
-        .get(1)
-        .map_or(f64::INFINITY, |next| top.confidence() - next.confidence());
-    (top.confidence() >= 0.55 && margin >= 0.05 - 1e-9).then(|| top.id().as_str().to_owned())
-}
-
 // ---------------------------------------------------------------- twins ---
 
 #[test]
 fn twin_suspend_without_context_cannot_be_resolved() {
     let m = load(TWINS);
-    assert_eq!(label_only_gate_allows(&m, &button("Suspend")), None);
     let decision = guard(&m, &GuardRequest::click(button("Suspend"))).unwrap();
     assert_eq!(escalated(&decision), GuardReason::Ambiguous);
 }
@@ -96,33 +82,15 @@ fn twin_suspend_within_a_row_allows_that_row_only() {
 }
 
 #[test]
-fn twin_suspend_near_the_focused_field_allows_the_focused_row() {
+fn near_the_focused_field_is_an_error_now() {
+    // `near` went with the matcher: the host scopes with `within` or names
+    // the region with `proposed`.
     let m = load(TWINS);
-    let decision = guard(
-        &m,
-        &GuardRequest::click(button("Suspend").near(Some(id("beta-host")))),
-    )
-    .unwrap();
-    assert_eq!(allowed(&decision), "beta-suspend");
-    match decision {
-        GuardDecision::Allow { margin, .. } => assert!(margin.unwrap().get() >= 0.05),
-        _ => unreachable!(),
-    }
-}
-
-#[test]
-fn focus_outside_every_row_falls_back_to_the_default_ranking() {
-    // Cargo-runner rule: no cursor context, default command. Here the default
-    // is still ambiguous, so the guard escalates instead of guessing.
-    let m = load(TWINS);
-    for anchor in [Some(id("search")), Some(id("vanished")), None] {
-        let decision = guard(
-            &m,
-            &GuardRequest::click(button("Suspend").near(anchor.clone())),
-        )
-        .unwrap();
-        assert_eq!(escalated(&decision), GuardReason::Ambiguous, "{anchor:?}");
-    }
+    let request = GuardRequest::click(button("Suspend").near(Some(id("beta-host"))));
+    assert_eq!(
+        guard(&m, &request).unwrap_err(),
+        GuardError::RemovedQueryField("near")
+    );
 }
 
 #[test]
@@ -141,11 +109,7 @@ fn proposing_the_other_twin_under_context_refuses() {
 #[test]
 fn a_page_button_under_an_open_modal_is_refused_not_allowed() {
     let m = load(MODAL);
-    // Before world context, the gate allowed the buried button.
-    assert_eq!(
-        label_only_gate_allows(&m, &button("Delete project")).as_deref(),
-        Some("page-delete")
-    );
+    // The buried button is the only exact label match.
     let decision = guard(&m, &GuardRequest::click(button("Delete project"))).unwrap();
     assert_eq!(refused(&decision), GuardReason::FrontLayer);
     // Proposing it by id is refused for the same reason.
@@ -157,12 +121,14 @@ fn a_page_button_under_an_open_modal_is_refused_not_allowed() {
 }
 
 #[test]
-fn a_twin_label_resolves_to_the_dialog_and_the_buried_twin_is_refused() {
+fn a_twin_label_escalates_and_the_buried_twin_is_refused() {
     let m = load(MODAL);
-    // Raw ranking ties the two "Cancel" buttons: the old gate escalated.
-    assert_eq!(label_only_gate_allows(&m, &button("Cancel")), None);
+    // Two visible "Cancel" buttons match exactly: the guard does not guess.
     let decision = guard(&m, &GuardRequest::click(button("Cancel"))).unwrap();
-    assert_eq!(allowed(&decision), "confirm-cancel");
+    assert_eq!(escalated(&decision), GuardReason::Ambiguous);
+    // The host proposes the dialog's Cancel: allowed.
+    let request = GuardRequest::click(button("Cancel")).proposed(id("confirm-cancel"));
+    assert_eq!(allowed(&guard(&m, &request).unwrap()), "confirm-cancel");
     // The host (for example a vision model that saw the page before the
     // dialog) proposes the page's Cancel. Refused: it is behind the dialog.
     let request = GuardRequest::click(button("Cancel")).proposed(id("page-cancel"));
@@ -170,7 +136,7 @@ fn a_twin_label_resolves_to_the_dialog_and_the_buried_twin_is_refused() {
         refused(&guard(&m, &request).unwrap()),
         GuardReason::FrontLayer
     );
-    // The dialog's own Delete is allowed over the buried "Delete project".
+    // The dialog's own Delete is allowed; "Delete project" is another label.
     let delete = guard(&m, &GuardRequest::click(button("Delete"))).unwrap();
     assert_eq!(allowed(&delete), "confirm-delete");
 }
@@ -189,7 +155,7 @@ fn a_host_that_decided_before_the_dialog_opened_is_escalated_world_changed() {
     let seen = WorldSnapshot::of(&before, None);
     assert!(seen.front_layer().is_empty());
     // Even for a target inside the dialog: the host never saw it.
-    for text in ["Delete project", "Cancel"] {
+    for text in ["Delete project", "Cancel", "Delete"] {
         let request = GuardRequest::click(button(text)).seen_world(seen.clone());
         assert_eq!(
             escalated(&guard(&now, &request).unwrap()),
@@ -198,22 +164,22 @@ fn a_host_that_decided_before_the_dialog_opened_is_escalated_world_changed() {
         );
     }
     // A host that saw the dialog gets the normal decision.
-    let request = GuardRequest::click(button("Cancel")).seen_world(WorldSnapshot::of(&now, None));
-    assert_eq!(allowed(&guard(&now, &request).unwrap()), "confirm-cancel");
+    let request = GuardRequest::click(button("Delete")).seen_world(WorldSnapshot::of(&now, None));
+    assert_eq!(allowed(&guard(&now, &request).unwrap()), "confirm-delete");
 }
 
 #[test]
 fn world_changed_when_focus_moves_between_observations() {
     let m = load(TWINS);
     let seen = WorldSnapshot::of(&m, Some(id("beta-host")));
-    let request = GuardRequest::click(button("Suspend").near(Some(id("alpha-host"))))
+    let request = GuardRequest::click(button("Suspend").within(id("row-alpha")))
         .focused(Some(id("alpha-host")))
         .seen_world(seen);
     assert_eq!(
         escalated(&guard(&m, &request).unwrap()),
         GuardReason::WorldChanged
     );
-    let same = GuardRequest::click(button("Suspend").near(Some(id("alpha-host"))))
+    let same = GuardRequest::click(button("Suspend").within(id("row-alpha")))
         .focused(Some(id("alpha-host")))
         .seen_world(WorldSnapshot::of(&m, Some(id("alpha-host"))));
     assert_eq!(allowed(&guard(&m, &same).unwrap()), "alpha-suspend");

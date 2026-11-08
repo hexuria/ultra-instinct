@@ -47,7 +47,7 @@ use std::collections::BTreeSet;
 use ultra_instinct_core::{
     Action, InteractionManifold, InteractionRegion, Rect, RegionId, Role, SourceMask,
 };
-use ultra_instinct_resonance::{RegionState, Visibility};
+use ultra_instinct_geometry::{RegionState, Visibility};
 
 /// One dialog in the front layer.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

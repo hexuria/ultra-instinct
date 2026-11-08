@@ -4,7 +4,6 @@ members = [
     "crates/ultra-instinct-core",
     "crates/ultra-instinct-geometry",
     "crates/ultra-instinct-observe",
-    "crates/ultra-instinct-resonance",
     "crates/ultra-instinct-cdp",
     "crates/ultra-instinct-browser",
     "crates/ultra-instinct-protocol",
@@ -15,12 +14,10 @@ members = [
     "crates/ultra-instinct-remote",
     "crates/ultra-instinct",
     "crates/ultra-instinct-dojo",
-    # Experimental. Not on the product path. Build with -p ultra-instinct-hyper --features unused
-    # or via ultra-instinct-resonance's `hgra` feature.
-    "experiments/hgra/ultra-instinct-hyper",
 ]
 # Deleted from the product graph (see docs/DECISIONS.md product pivot):
-# ultra-instinct-browser-use, ultra-instinct-cua, ultra-instinct-macos, ultra-instinct-executor
+# ultra-instinct-browser-use, ultra-instinct-cua, ultra-instinct-macos, ultra-instinct-executor;
+# ultra-instinct-resonance and the HGRA experiment ultra-instinct-hyper (ADR 0012)
 
 [workspace.package]
 version = "0.1.0"

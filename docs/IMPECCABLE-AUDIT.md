@@ -8,9 +8,10 @@ Chrome / paid remote). It is not a proof.
 
 This supersedes the pre-pivot note (baseline `9baa21e`, observe / MCP
 preflight / legacy executor), which is in git history. Its findings on the
-MCP preflight surface (gate rounding, confidence range, text-miss cap,
-`repeated_query`, CDP endpoint resolution) still hold and still have their
-owner tests; they are not repeated here.
+MCP preflight surface (confidence range, CDP endpoint resolution) still hold
+and still have their owner tests; they are not repeated here. Gate rounding,
+the text-miss cap and `repeated_query` went with the matcher and the locate
+tool (ADR 0012).
 
 `#![forbid(unsafe_code)]` stays on every crate. Rust is pinned to 1.99.0 and
 every crate is `publish = false`.
