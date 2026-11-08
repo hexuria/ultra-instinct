@@ -24,6 +24,10 @@ struct Evented {
     log: Log,
     triggers: VecDeque<(&'static str, CdpEvent)>,
     pending: Vec<CdpEvent>,
+    /// A trigger on this method also ends the call with
+    /// `CdpError::DialogOpened`, as the websocket does when the event
+    /// arrives before the reply.
+    interrupt: Option<&'static str>,
 }
 
 impl CdpTransport for Evented {
@@ -36,6 +40,12 @@ impl CdpTransport for Evented {
         if self.triggers.front().is_some_and(|(m, _)| *m == method) {
             let (_, event) = self.triggers.pop_front().expect("front checked");
             self.pending.push(event);
+            if self.interrupt == Some(method) {
+                self.interrupt = None;
+                return Err(CdpError::DialogOpened {
+                    method: method.to_owned(),
+                });
+            }
         }
         result
     }
@@ -53,6 +63,14 @@ fn event(method: &str, params: Value) -> CdpEvent {
 }
 
 fn server_with(script: ScriptBuilder, triggers: Vec<(&'static str, CdpEvent)>) -> (Server, Log) {
+    server_interrupted(script, triggers, None)
+}
+
+fn server_interrupted(
+    script: ScriptBuilder,
+    triggers: Vec<(&'static str, CdpEvent)>,
+    interrupt: Option<&'static str>,
+) -> (Server, Log) {
     let log: Log = Rc::new(RefCell::new(Vec::new()));
     let shared = Rc::clone(&log);
     let mut script = Some((script, triggers));
@@ -65,6 +83,7 @@ fn server_with(script: ScriptBuilder, triggers: Vec<(&'static str, CdpEvent)>) -
             log: Rc::clone(&shared),
             triggers: triggers.into(),
             pending: Vec::new(),
+            interrupt,
         }) as Box<dyn CdpTransport>)
     });
     (server, log)
@@ -206,6 +225,60 @@ fn dialog_status_accept_dismiss_and_the_blocked_tool_hint() {
     );
     // Page is enabled once per tab.
     assert_eq!(calls(&log, "Page.enable").len(), 1);
+}
+
+/// A click whose handler calls `alert()`: Chrome sends the opening event
+/// and no reply, so the transport stops waiting with `DialogOpened`. The
+/// tool fails at once with the dialog hint, the press is not retried (no
+/// pointer or second DOM tier), and the dialog is tracked for
+/// `browser_dialog`.
+#[test]
+fn a_press_that_opens_an_alert_fails_fast_with_the_hint_and_is_not_retried() {
+    let (mut server, log) = server_interrupted(
+        ScriptBuilder::new()
+            .call("Page.enable", json!({}))
+            .observe_compact(&login(false))
+            .observe_compact(&login(false))
+            .dom_click(11)
+            .call("Page.handleJavaScriptDialog", json!({})),
+        vec![
+            (
+                "Runtime.callFunctionOn",
+                event(
+                    "Page.javascriptDialogOpening",
+                    json!({"url": "http://127.0.0.1/form", "message": "Saved", "type": "alert",
+                           "hasBrowserHandler": false, "defaultPrompt": ""}),
+                ),
+            ),
+            (
+                "Page.handleJavaScriptDialog",
+                event("Page.javascriptDialogClosed", json!({"result": true})),
+            ),
+        ],
+        Some("Runtime.callFunctionOn"),
+    );
+    let err = server
+        .call_tool("browser_click", &json!({"cdp": CDP, "index": "@e2"}))
+        .expect_err("the alert interrupts the press");
+    let ToolError::Browser(message) = &err else {
+        panic!("{err:?}");
+    };
+    assert!(
+        message.contains("dialog opened while `Runtime.callFunctionOn` ran")
+            && message.ends_with("a alert dialog is open; call browser_dialog"),
+        "{message}"
+    );
+    assert_eq!(presses(&log), 1, "dispatched once, never retried");
+    let status = call(&mut server, "browser_dialog", json!({"cdp": CDP}));
+    assert_eq!(status["open"], true, "{status}");
+    assert_eq!(status["message"], "Saved");
+    let accepted = call(
+        &mut server,
+        "browser_dialog",
+        json!({"cdp": CDP, "action": "accept"}),
+    );
+    assert_eq!(accepted["handled"], "accept", "{accepted}");
+    assert_eq!(presses(&log), 1);
 }
 
 #[test]

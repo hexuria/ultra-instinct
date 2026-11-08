@@ -8,6 +8,10 @@
 //! buffered events, runs the tool, folds those events into the tab's
 //! dialog state, appends `a <type> dialog is open; call browser_dialog` to
 //! any failure while one is open, and cuts text outputs to `max_chars`.
+//! A call that opens a dialog does not wait for it: the websocket stops
+//! waiting at `Page.javascriptDialogOpening` (`CdpError::DialogOpened`), so
+//! a press that opened an `alert()` fails at once with the hint. The press
+//! was dispatched: its ticket stays consumed and nothing retries it.
 //!
 //! Element presses here keep the boundary of `browser_tools`: `browser_check`
 //! presses through `execute_ticketed`, `browser_focus` through gate → ticket
@@ -26,7 +30,7 @@ use serde_json::{json, Map, Value};
 
 use ultra_instinct_agent::{execute_ticketed, ExecError, Input};
 use ultra_instinct_browser::BrowserError;
-use ultra_instinct_cdp::{CdpEvent, DEFAULT_CDP_HTTP};
+use ultra_instinct_cdp::{CdpError, CdpEvent, DEFAULT_CDP_HTTP};
 use ultra_instinct_core::{Action, InteractionManifold, InteractionRegion, RegionId, Role};
 use ultra_instinct_guard::{consume_ticket_once, gate, ConsumeError};
 
@@ -172,7 +176,11 @@ fn enable_page_events(server: &mut Server, key: &str) -> Result<(), ToolError> {
         return Ok(());
     }
     let mut session = server.take_session(key)?;
-    if session.transport_mut().call("Page.enable", "{}").is_ok() {
+    // A dialog already open is reported as the enable runs: Page is on.
+    if matches!(
+        session.transport_mut().call("Page.enable", "{}"),
+        Ok(_) | Err(CdpError::DialogOpened { .. })
+    ) {
         server.enable_domain(key, PAGE_BIT);
     }
     keep(server, key, session);

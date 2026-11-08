@@ -26,6 +26,14 @@ pub enum CdpError {
     Transport {
         message: String,
     },
+    /// A JavaScript dialog (`alert` / `confirm` / `prompt` / `beforeunload`)
+    /// opened while the call to `method` waited: the page answers nothing
+    /// until the dialog is handled, so the wait stopped. The call was sent
+    /// (an input counts as dispatched); its result is unknown. The
+    /// `Page.javascriptDialogOpening` event stays in the transport's buffer.
+    DialogOpened {
+        method: String,
+    },
 }
 
 impl fmt::Display for CdpError {
@@ -41,6 +49,10 @@ impl fmt::Display for CdpError {
             Self::BadJson { message } => write!(f, "invalid CDP JSON: {message}"),
             Self::BadScript { message } => write!(f, "invalid CDP script: {message}"),
             Self::Transport { message } => write!(f, "CDP transport: {message}"),
+            Self::DialogOpened { method } => write!(
+                f,
+                "a JavaScript dialog opened while `{method}` ran; the call was sent and the page waits on the dialog"
+            ),
         }
     }
 }

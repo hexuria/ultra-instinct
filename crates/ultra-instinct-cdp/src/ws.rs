@@ -19,6 +19,9 @@ const MAX_BUFFERED_EVENTS: usize = 1024;
 /// must already be listening; ultra-instinct does not launch a browser.
 pub const DEFAULT_CDP_HTTP: &str = "http://127.0.0.1:9222";
 
+/// The event that ends a call's wait early: see [`CdpError::DialogOpened`].
+const DIALOG_OPENING: &str = "Page.javascriptDialogOpening";
+
 /// Maximum time to wait for a CDP response after sending a call.
 const CALL_DEADLINE: Duration = Duration::from_secs(30);
 
@@ -263,12 +266,25 @@ impl CdpTransport for WebSocketTransport {
                 .and_then(|raw| raw.get().parse::<i64>().ok())
                 != Some(id)
             {
-                if let Some(method) = frame.get("method").and_then(|raw| raw_string(raw)) {
+                if let Some(event) = frame.get("method").and_then(|raw| raw_string(raw)) {
                     if let Some(params) = event_params(&frame) {
+                        let dialog = event == DIALOG_OPENING;
                         if self.events.len() >= MAX_BUFFERED_EVENTS {
                             self.events.pop_front();
                         }
-                        self.events.push_back(CdpEvent { method, params });
+                        self.events.push_back(CdpEvent {
+                            method: event,
+                            params,
+                        });
+                        // The page answers nothing while a dialog is open:
+                        // stop waiting. The event stays buffered. A late
+                        // response to this id is ignored like any stray one
+                        // (ids only grow).
+                        if dialog {
+                            return Err(CdpError::DialogOpened {
+                                method: method.to_owned(),
+                            });
+                        }
                     }
                 }
                 continue;
@@ -802,5 +818,91 @@ mod tests {
             "handshake took {:?}",
             started.elapsed()
         );
+    }
+
+    /// A peer that answers the focus-emulation call `connect` makes, then
+    /// runs `script` on the next frames it reads (one request id each).
+    fn fake_page(script: fn(&mut WebSocket<TcpStream>, i64)) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let mut socket = tungstenite::accept(stream).expect("ws upgrade");
+            let mut answered_connect = false;
+            while let Ok(message) = socket.read() {
+                let Message::Text(text) = message else {
+                    continue;
+                };
+                let id = serde_json::from_str::<Value>(text.as_ref()).expect("json")["id"]
+                    .as_i64()
+                    .expect("id");
+                if !answered_connect {
+                    answered_connect = true;
+                    let reply = json!({"id": id, "result": {}}).to_string();
+                    socket.send(Message::Text(reply.into())).expect("send");
+                    continue;
+                }
+                script(&mut socket, id);
+            }
+        });
+        format!("ws://127.0.0.1:{port}/devtools/page/X")
+    }
+
+    #[test]
+    fn a_dialog_opening_ends_the_wait_and_stays_buffered() {
+        // Chrome does not answer the call that opened an alert until the
+        // alert closes; the opening event arrives while the call waits.
+        // The press call sends the event and no reply (the reply comes
+        // late, before the next call's own reply).
+        let url = fake_page(|socket, id| {
+            let send = |socket: &mut WebSocket<TcpStream>, value: Value| {
+                socket
+                    .send(Message::Text(value.to_string().into()))
+                    .expect("send");
+            };
+            if id == 2 {
+                send(
+                    socket,
+                    json!({"method": "Page.javascriptDialogOpening",
+                           "params": {"type": "alert", "message": "hi", "url": "http://x/"}}),
+                );
+            } else {
+                // The abandoned call's late reply, then this call's own.
+                send(socket, json!({"id": 2, "result": {"late": true}}));
+                send(
+                    socket,
+                    json!({"method": "Page.javascriptDialogClosed", "params": {"result": true}}),
+                );
+                send(socket, json!({"id": id, "result": {"handled": id}}));
+            }
+        });
+        let mut transport = WebSocketTransport::connect(&url).expect("connect");
+        let started = Instant::now();
+        let err = transport
+            .call("Runtime.callFunctionOn", "{}")
+            .expect_err("the dialog interrupts the wait");
+        assert_eq!(
+            err,
+            CdpError::DialogOpened {
+                method: "Runtime.callFunctionOn".into()
+            }
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "returned after {:?}",
+            started.elapsed()
+        );
+        let events = transport.drain_events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].method, "Page.javascriptDialogOpening");
+        assert_eq!(events[0].params["type"], "alert");
+        // The late reply to id 2 is not mistaken for the next call's.
+        let body = transport
+            .call("Page.handleJavaScriptDialog", r#"{"accept":true}"#)
+            .expect("next call");
+        assert_eq!(body, r#"{"handled":3}"#);
+        let events = transport.drain_events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].method, "Page.javascriptDialogClosed");
     }
 }
