@@ -28,6 +28,7 @@
 //!
 //! Unix only (std `UnixListener` / `UnixStream`); elsewhere every verb is a
 //! clear error.
+#![cfg_attr(not(unix), allow(dead_code))]
 
 use serde_json::{json, Value};
 
@@ -434,33 +435,15 @@ pub(crate) fn verb_command(verb: &str, args: &[String]) -> Result<String, CliErr
 
 /// `aui daemon --session <name> [--cdp <url>]` (hidden).
 pub(crate) fn daemon_command(args: &[String]) -> Result<String, CliError> {
-    let mut session = None;
-    let mut cdp = None;
-    let mut i = 0;
-    while i < args.len() {
-        let flag = args[i].as_str();
-        let slot = match flag {
-            "--session" => &mut session,
-            "--cdp" => &mut cdp,
+    let (mut session, mut cdp) = (None, None);
+    for pair in args.chunks(2) {
+        let (flag, slot): (&'static str, _) = match pair[0].as_str() {
+            "--session" => ("--session", &mut session),
+            "--cdp" => ("--cdp", &mut cdp),
             other => return Err(CliError::UnknownFlag(other.to_owned())),
         };
-        i += 1;
-        let value = args
-            .get(i)
-            .cloned()
-            .ok_or(CliError::MissingValue(if flag == "--cdp" {
-                "--cdp"
-            } else {
-                "--session"
-            }))?;
-        if slot.replace(value).is_some() {
-            return Err(CliError::DuplicateFlag(if flag == "--cdp" {
-                "--cdp"
-            } else {
-                "--session"
-            }));
-        }
-        i += 1;
+        let value = pair.get(1).cloned().ok_or(CliError::MissingValue(flag))?;
+        set(slot, flag, value)?;
     }
     let session = SessionName::parse(session.as_deref().unwrap_or(DEFAULT_SESSION))?;
     let cdp = cdp.unwrap_or_else(|| ultra_instinct_browser::DEFAULT_CDP_HTTP.to_owned());
@@ -759,9 +742,6 @@ mod imp {
         let reply = send(path, &request_line(&verb.request))?;
         render(verb, &reply)
     }
-
-    #[cfg(test)]
-    pub(super) use self::run_verb_at as run_verb_with;
 }
 
 #[cfg(not(unix))]
@@ -976,7 +956,7 @@ mod tests {
 
     #[cfg(unix)]
     mod socket {
-        use super::super::imp::run_verb_with;
+        use super::super::imp::run_verb_at as run_verb_with;
         use super::super::*;
         use super::a;
         use std::os::unix::fs::PermissionsExt;
