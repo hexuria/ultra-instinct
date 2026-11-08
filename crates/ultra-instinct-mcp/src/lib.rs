@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+mod browser_env;
 mod error;
 mod repeat;
 mod rpc;
@@ -35,7 +36,7 @@ pub const TOOL_DIFF: &str = "diff";
 pub const TOOL_VERIFY: &str = "verify";
 
 #[allow(deprecated)]
-pub const TOOLS: [&str; 44] = [
+pub const TOOLS: [&str; 47] = [
     TOOL_OBSERVE,
     TOOL_LOCATE,
     TOOL_INSPECT,
@@ -80,11 +81,15 @@ pub const TOOLS: [&str; 44] = [
     "browser_extract_content",
     "browser_read_console",
     "browser_read_network",
+    "browser_set",
+    "browser_download",
+    "browser_network",
 ];
 
 pub const PRODUCT_TOOLS: [&str; 3] = [TOOL_OBSERVE, TOOL_GUARD, TOOL_VERIFY];
 
 mod browser_tools;
+pub use browser_env::ENV_TOOLS;
 pub use browser_tools::BROWSER_TOOLS;
 
 /// Tool name for a legacy protocol phase.
@@ -116,6 +121,10 @@ mod tests {
         // The `browser_*` host surface sits beside the firewall tools; it
         // never enters PRODUCT_TOOLS.
         for name in crate::browser_tools::BROWSER_TOOLS {
+            assert!(TOOLS.contains(&name));
+            assert!(!PRODUCT_TOOLS.contains(&name));
+        }
+        for name in crate::browser_env::ENV_TOOLS {
             assert!(TOOLS.contains(&name));
             assert!(!PRODUCT_TOOLS.contains(&name));
         }
