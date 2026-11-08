@@ -343,6 +343,40 @@ struct WaitFor {
     url: Option<String>,
     /// Case-insensitive substring of a control label in the interactive index.
     control: Option<String>,
+    /// No control in the interactive index has exactly this label (trimmed,
+    /// case-insensitive).
+    gone: Option<String>,
+    /// `document.readyState` has reached this (`domcontentloaded`:
+    /// interactive or complete; `load`: complete).
+    load: Option<LoadState>,
+}
+
+/// A `browser_wait` `load` condition.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LoadState {
+    DomContentLoaded,
+    Load,
+}
+
+impl LoadState {
+    fn parse(raw: &str) -> Result<Self, ToolError> {
+        match raw {
+            "domcontentloaded" => Ok(Self::DomContentLoaded),
+            "load" => Ok(Self::Load),
+            other => Err(ToolError::InvalidArguments(format!(
+                "`load` must be domcontentloaded|load, got `{other}`"
+            ))),
+        }
+    }
+
+    /// Whether `document.readyState` (None: unreadable, e.g. mid-navigation)
+    /// has reached this state.
+    fn reached(self, ready: Option<&str>) -> bool {
+        matches!(
+            (self, ready),
+            (_, Some("complete")) | (Self::DomContentLoaded, Some("interactive"))
+        )
+    }
 }
 
 impl WaitFor {
@@ -359,11 +393,17 @@ impl WaitFor {
             text: part("text")?.map(|t| t.to_lowercase()),
             url: part("url")?,
             control: part("control")?.map(|c| c.trim().to_lowercase()),
+            gone: part("gone")?.map(|g| collapse_label(&g)),
+            load: opt_str(arguments, "load")?
+                .map(LoadState::parse)
+                .transpose()?,
         };
-        Ok(
-            (until.text.is_some() || until.url.is_some() || until.control.is_some())
-                .then_some(until),
-        )
+        Ok((until.text.is_some()
+            || until.url.is_some()
+            || until.control.is_some()
+            || until.gone.is_some()
+            || until.load.is_some())
+        .then_some(until))
     }
 
     /// One look: observe, then check each part. Page text is read only when
@@ -392,6 +432,25 @@ impl WaitFor {
                 return Ok((false, url));
             }
         }
+        if let Some(gone) = &self.gone {
+            let manifold = session
+                .manifold()
+                .ok_or_else(|| browser_err(BrowserError::NotObserved))?;
+            let present = interactive_index(manifold).iter().any(|id| {
+                manifold
+                    .get(id)
+                    .is_some_and(|r| collapse_label(r.label()) == *gone)
+            });
+            if present {
+                return Ok((false, url));
+            }
+        }
+        if let Some(load) = self.load {
+            let ready = session.ready_state().map_err(browser_err)?;
+            if !load.reached(ready.as_deref()) {
+                return Ok((false, url));
+            }
+        }
         if let Some(want) = &self.text {
             let text = session.page_text().map_err(browser_err)?;
             if !text.to_lowercase().contains(want.as_str()) {
@@ -402,8 +461,17 @@ impl WaitFor {
     }
 }
 
-/// With no condition: sleep `seconds` (default 3). With `text`, `url`, or
-/// `control`: observe about every 200 ms until the condition holds or
+/// Trimmed, whitespace collapsed, lowercased: the `gone` label match.
+fn collapse_label(label: &str) -> String {
+    label
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// With no condition: sleep `seconds` (default 3). With `text`, `url`,
+/// `control`, `gone`, or `load`: observe about every 200 ms until the condition holds or
 /// `seconds` (default 10) runs out. Both are capped at 60 s. Never acts.
 fn wait(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let until = WaitFor::parse(arguments)?;
@@ -1500,7 +1568,9 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             props.insert("text".into(), json!({"type": "string", "description": "Stop once the page's visible text contains this (case-insensitive)."}));
             props.insert("url".into(), json!({"type": "string", "description": "Stop once the current URL contains this."}));
             props.insert("control".into(), json!({"type": "string", "description": "Stop once a control label in the browser_get_state index contains this (case-insensitive)."}));
-            "Wait. With text, url, or control: observe about every 200 ms until every given condition holds or seconds (default 10) runs out; returns seen, after_ms, looks, and the last url. With no condition: sleep seconds (default 3). Capped at 60 s."
+            props.insert("gone".into(), json!({"type": "string", "description": "Stop once no control in the browser_get_state index has exactly this label (case-insensitive)."}));
+            props.insert("load".into(), json!({"type": "string", "enum": ["domcontentloaded", "load"], "description": "Stop once document.readyState is interactive or complete (domcontentloaded) or complete (load). Not network idle."}));
+            "Wait. With text, url, control, gone, or load: observe about every 200 ms until every given condition holds or seconds (default 10) runs out; returns seen, after_ms, looks, and the last url. With no condition: sleep seconds (default 3). Capped at 60 s."
         }
         "browser_get_state" => {
             props.insert(

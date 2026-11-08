@@ -768,6 +768,97 @@ fn wait_timeout_reports_not_seen_and_the_last_url() {
         .all(|m| m != "Input.dispatchMouseEvent" && m != "DOM.resolveNode"));
 }
 
+/// `gone` holds once no control has exactly that label: "Sign" (a
+/// substring) never blocks it, "  SIGN   in " (same label) does until the
+/// button leaves.
+#[test]
+fn wait_for_gone_observes_until_the_exact_label_leaves() {
+    let after = PageSpec::of(
+        &[Control::text_field(
+            10,
+            100,
+            "Email",
+            (20.0, 20.0, 300.0, 28.0),
+        )],
+        "http://127.0.0.1/form",
+        "Form",
+    );
+    let (mut srv, _log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&after),
+    );
+    let out = call(
+        &mut srv,
+        "browser_wait",
+        json!({"cdp": CDP, "gone": "  SIGN   in ", "seconds": 5}),
+    );
+    assert_eq!(out["seen"], true, "{out}");
+    assert_eq!(out["looks"], 2, "{out}");
+
+    let (mut srv, _log) = server(ScriptBuilder::new().observe_compact(&page()));
+    let out = call(
+        &mut srv,
+        "browser_wait",
+        json!({"cdp": CDP, "gone": "Sign"}),
+    );
+    assert_eq!(out["seen"], true, "a substring is not the label: {out}");
+    assert_eq!(out["looks"], 1, "{out}");
+}
+
+/// `load` reads `document.readyState` after each observe: `domcontentloaded`
+/// holds at interactive, `load` waits for complete.
+#[test]
+fn wait_for_load_reads_ready_state() {
+    let (mut srv, log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .ready_state("loading")
+            .observe_compact(&page())
+            .ready_state("interactive"),
+    );
+    let out = call(
+        &mut srv,
+        "browser_wait",
+        json!({"cdp": CDP, "load": "domcontentloaded", "seconds": 5}),
+    );
+    assert_eq!(out["seen"], true, "{out}");
+    assert_eq!(out["looks"], 2, "{out}");
+    assert!(log.borrow().iter().any(|m| m == "Runtime.evaluate"));
+
+    let (mut srv, _log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .ready_state("interactive")
+            .observe_compact(&page())
+            .ready_state("complete"),
+    );
+    let out = call(
+        &mut srv,
+        "browser_wait",
+        json!({"cdp": CDP, "load": "load", "seconds": 5}),
+    );
+    assert_eq!(out["seen"], true, "{out}");
+    assert_eq!(out["looks"], 2, "{out}");
+}
+
+/// A `load` other than domcontentloaded|load is refused before any CDP call.
+#[test]
+fn wait_rejects_an_unknown_load_state() {
+    let (mut server, log) = server(ScriptBuilder::new());
+    for load in ["networkidle", ""] {
+        let err = server
+            .call_tool("browser_wait", &json!({"cdp": CDP, "load": load}))
+            .expect_err("unknown load state");
+        assert!(matches!(err, ToolError::InvalidArguments(_)), "{err:?}");
+    }
+    let err = server
+        .call_tool("browser_wait", &json!({"cdp": CDP, "gone": " "}))
+        .expect_err("empty gone");
+    assert!(matches!(err, ToolError::InvalidArguments(_)), "{err:?}");
+    assert!(log.borrow().is_empty());
+}
+
 /// No condition keeps the plain sleep and never connects.
 #[test]
 fn wait_without_a_condition_only_sleeps() {

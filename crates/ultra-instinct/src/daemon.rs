@@ -134,10 +134,12 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
             "--confirm" if verb == "click" => set(&mut confirm, "--confirm", value("--confirm")?)?,
             "--mouse" if verb == "click" && inline.is_none() => mouse = true,
             "--json" if verb == "snap" && inline.is_none() => json_out = true,
-            "--text" | "--url" | "--control" if verb == "wait" => {
+            "--text" | "--url" | "--control" | "--load" | "--gone" if verb == "wait" => {
                 let flag = match name {
                     "--text" => "--text",
                     "--url" => "--url",
+                    "--load" => "--load",
+                    "--gone" => "--gone",
                     _ => "--control",
                 };
                 let v = value(flag)?;
@@ -241,11 +243,18 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
             tool("browser_scroll", json!({"down": down}))
         }
         "wait" => {
-            arity(0..=0, "--text|--url|--control <v> [--timeout s]")?;
+            const USAGE: &str =
+                "--text|--url|--control|--gone <v> | --load domcontentloaded|load [--timeout s]";
+            arity(0..=0, USAGE)?;
             if wait.is_empty() {
-                return Err(CliError::Config(
-                    "usage: aui wait --text|--url|--control <v> [--timeout s]".into(),
-                ));
+                return Err(CliError::Config(format!("usage: aui wait {USAGE}")));
+            }
+            if let Some(load) = wait.get("load").and_then(Value::as_str) {
+                if !matches!(load, "domcontentloaded" | "load") {
+                    return Err(CliError::Config(format!(
+                        "--load is domcontentloaded or load, got `{load}`"
+                    )));
+                }
             }
             if let Some(secs) = timeout {
                 wait.insert("seconds".into(), json!(secs));
@@ -838,6 +847,14 @@ mod tests {
             tool("wait", &["--text", "Welcome", "--timeout", "2.5"]),
             ("browser_wait", json!({"text": "Welcome", "seconds": 2.5}))
         );
+        assert_eq!(
+            tool("wait", &["--load", "domcontentloaded"]),
+            ("browser_wait", json!({"load": "domcontentloaded"}))
+        );
+        assert_eq!(
+            tool("wait", &["--gone", "Loading…", "--load=load"]),
+            ("browser_wait", json!({"gone": "Loading…", "load": "load"}))
+        );
         assert_eq!(tool("tabs", &[]), ("browser_list_tabs", json!({})));
         assert_eq!(tool("close", &[]), ("stop", Value::Null));
         let (name, arguments) = tool("shot", &["out.png"]);
@@ -878,6 +895,8 @@ mod tests {
             ("scroll", &["left"][..]),
             ("wait", &[][..]),
             ("wait", &["--timeout", "x", "--url", "/a"][..]),
+            ("wait", &["--load", "networkidle"][..]),
+            ("wait", &["--gone"][..]),
             ("snap", &["--confirm", "x"][..]),
             ("click", &["@e1", "--allow-domain", "x"][..]),
             ("open", &["https://a/", "--allow-domain", "https://a/"][..]),
