@@ -36,9 +36,10 @@ pub mod world;
 use std::fmt;
 
 use ultra_instinct_core::{Action, InteractionManifold, InteractionRegion, LocateQuery, RegionId};
+use ultra_instinct_geometry::{Availability, RegionState, Visibility};
 use ultra_instinct_protocol::MatcherConfidence;
 use ultra_instinct_resonance::{
-    default_matcher, weighted_semantic, Match, RegionMatcher, RegionState, TEXT_MISS_CAP,
+    default_matcher, weighted_semantic, Match, RegionMatcher, TEXT_MISS_CAP,
 };
 
 pub use gate::{
@@ -416,7 +417,6 @@ fn candidate_from(manifold: &InteractionManifold, m: &Match) -> Option<GuardCand
 
 fn evidence_of(viewport: ultra_instinct_core::Rect, region: &InteractionRegion) -> GuardEvidence {
     let state = RegionState::of(viewport, region);
-    use ultra_instinct_resonance::{Availability, Visibility};
     GuardEvidence {
         visible: state.visibility() == Visibility::Visible,
         enabled: state.availability() == Availability::Enabled,

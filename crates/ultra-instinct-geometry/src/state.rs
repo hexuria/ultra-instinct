@@ -1,11 +1,12 @@
-//! What a caller can see about a region without ranking it.
+//! What a caller can see about a region.
 //!
-//! [`RegionState`] reads the same flags and the same viewport test that the
-//! locate penalties use, so `observe` and `locate` cannot disagree about
-//! whether a control is disabled or off screen.
+//! [`RegionState`] reads the region flags and the viewport test
+//! [`is_fully_offscreen`], so `observe`, the world snapshot and `guard`
+//! cannot disagree about whether a control is disabled or off screen.
 
 use ultra_instinct_core::{InteractionRegion, Rect, Zone};
-use ultra_instinct_geometry::{is_fully_offscreen, normalize, zones};
+
+use crate::{is_fully_offscreen, normalize, zones};
 
 /// Whether the control accepts input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -27,8 +28,7 @@ impl Availability {
 /// set, the most limiting one wins, in the order hidden, offscreen,
 /// occluded, visible. Each step down is less reachable by a click.
 ///
-/// Zero size is not a step here; locate penalizes it separately and the
-/// region's rect already shows it.
+/// Zero size is not a step here; the region's rect already shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Visibility {
     Visible,
@@ -56,8 +56,7 @@ pub struct RegionState {
 }
 
 impl RegionState {
-    /// Offscreen means the offscreen flag or a rect fully outside `viewport`,
-    /// the same test as the locate penalty.
+    /// Offscreen means the offscreen flag or a rect fully outside `viewport`.
     pub fn of(viewport: Rect, region: &InteractionRegion) -> Self {
         let flags = region.flags();
         let availability = if flags.disabled() {
@@ -136,7 +135,7 @@ mod tests {
         assert_eq!(state("occluded", 40.0), ("enabled", "occluded"));
         assert_eq!(state("offscreen", 40.0), ("enabled", "offscreen"));
         assert_eq!(state("hidden", 40.0), ("enabled", "hidden"));
-        // Geometry alone puts a region off screen, as the locate penalty does.
+        // Geometry alone puts a region off screen.
         assert_eq!(state("", 900.0), ("enabled", "offscreen"));
         assert_eq!(state("", 871.0), ("enabled", "visible"));
     }

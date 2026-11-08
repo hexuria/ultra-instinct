@@ -1691,6 +1691,7 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "ultra-instinct-core",
+ "ultra-instinct-geometry",
  "ultra-instinct-protocol",
  "ultra-instinct-resonance",
 ]
@@ -1714,6 +1715,7 @@ dependencies = [
  "ultra-instinct-browser",
  "ultra-instinct-cdp",
  "ultra-instinct-core",
+ "ultra-instinct-geometry",
  "ultra-instinct-guard",
  "ultra-instinct-observe",
  "ultra-instinct-protocol",

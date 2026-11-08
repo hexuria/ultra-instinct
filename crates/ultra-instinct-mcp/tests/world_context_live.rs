@@ -12,6 +12,7 @@ use std::time::Duration;
 use serde_json::json;
 use ultra_instinct_browser::{BrowserSession, CdpTransport, WebSocketTransport};
 use ultra_instinct_core::{InteractionManifold, LocateQuery, Role};
+use ultra_instinct_geometry::RegionState;
 #[cfg(feature = "hgra")]
 use ultra_instinct_guard::guard_with;
 use ultra_instinct_guard::{
@@ -20,7 +21,6 @@ use ultra_instinct_guard::{
 };
 #[cfg(feature = "hgra")]
 use ultra_instinct_resonance::HgraMatcher;
-use ultra_instinct_resonance::RegionState;
 
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()

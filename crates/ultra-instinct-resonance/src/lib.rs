@@ -19,7 +19,6 @@ mod matcher;
 mod model;
 #[cfg(feature = "hgra")]
 mod signature;
-mod state;
 
 #[cfg(feature = "hgra")]
 pub use matcher::HgraMatcher;
@@ -38,7 +37,7 @@ use ultra_instinct_hyper::{cosine, Encoder};
 pub use context::ContextScope;
 pub use error::ResonanceError;
 pub use model::{PenaltyBasisPoints, ResonanceModel, WeightBasisPoints};
-pub use state::{separating_zone, Availability, RegionState, Visibility};
+pub use ultra_instinct_geometry::{separating_zone, Availability, RegionState, Visibility};
 #[cfg(feature = "hgra")]
 pub use ultra_instinct_hyper::{BipolarVector, Dims};
 

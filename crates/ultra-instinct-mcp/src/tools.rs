@@ -16,15 +16,14 @@ use ultra_instinct_core::{
     parse_fixture, Action, InteractionManifold, InteractionRegion, LocateQuery, RegionId, Role,
     Zone,
 };
+use ultra_instinct_geometry::{separating_zone, RegionState};
 use ultra_instinct_guard::{
     blocker, guard_with, with_front_layer, FrontLayer, GuardRequest, WorldSnapshot,
     MIN_ALLOW_CONFIDENCE,
 };
 use ultra_instinct_observe::{diff, history::SnapshotId, ManifoldDiff};
 use ultra_instinct_protocol::{GuardDecision, StateDelta};
-use ultra_instinct_resonance::{
-    separating_zone, ContextScope, Match, RegionMatcher, RegionState, WeightedMatcher,
-};
+use ultra_instinct_resonance::{ContextScope, Match, RegionMatcher, WeightedMatcher};
 #[cfg(feature = "hgra")]
 use ultra_instinct_resonance::{Dims, HgraMatcher, ResonanceModel};
 
