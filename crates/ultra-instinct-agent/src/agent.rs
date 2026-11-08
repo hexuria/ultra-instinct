@@ -24,7 +24,9 @@ use ultra_instinct_browser::ScrollDirection;
 use ultra_instinct_core::{
     Action, ActionId, ActionKind, ActionSpace, InteractionManifold, InteractionRegion, RegionId,
 };
-use ultra_instinct_guard::{blocker, gate, neighborhood_of, with_front_layer, TicketLedger};
+use ultra_instinct_guard::{
+    blocker, gate, neighborhood_of, with_front_layer, GuardReason, Policy, TicketLedger,
+};
 use ultra_instinct_policy::{
     ground_select, is_secret_field, label_covers_target, label_names_target,
     split_sequential_clauses, AgentGoal, BrowserPolicy, DeterministicTextResolver, HistoryEntry,
@@ -34,7 +36,7 @@ use ultra_instinct_policy::{
 use ultra_instinct_policy::{ModelTextResolver, TextModel};
 
 use crate::error::AgentError;
-use crate::executor::{execute_ticketed, ExecError};
+use crate::executor::{execute_ticketed_with, ExecError};
 use crate::journal::JournalEvent;
 use crate::outcome::{AgentOutcome, StepRecord, VerificationKind};
 use crate::runtime::{BrowserRuntime, Input};
@@ -320,6 +322,11 @@ pub struct Agent<B, P, T = DeterministicTextResolver> {
     typed_steps: std::collections::BTreeMap<u32, TypedStep>,
     /// The last step's effect was seen only on the late second look.
     late_effect: bool,
+    /// The user's policy (allowed domains, confirm-before-press), checked
+    /// after the gate and again by the executor on the fresh observation.
+    guard_policy: Policy,
+    /// The policy refusal that ended the run BLOCKED, with the target label.
+    policy_refusal: Option<(GuardReason, String)>,
 }
 
 /// Where and into what a successful TYPE_TEXT step typed.
@@ -339,6 +346,7 @@ pub struct AgentBuilder<B, P, T = DeterministicTextResolver> {
     max_consecutive_stale: u32,
     max_wait_polls: u32,
     max_wait: std::time::Duration,
+    guard_policy: Policy,
 }
 
 impl<B, P> AgentBuilder<B, P, DeterministicTextResolver> {
@@ -353,6 +361,7 @@ impl<B, P> AgentBuilder<B, P, DeterministicTextResolver> {
             max_consecutive_stale: 5,
             max_wait_polls: DEFAULT_WAIT_POLLS,
             max_wait: DEFAULT_MAX_WAIT,
+            guard_policy: Policy::default(),
         }
     }
 }
@@ -369,7 +378,16 @@ impl<B, P, T> AgentBuilder<B, P, T> {
             max_consecutive_stale: self.max_consecutive_stale,
             max_wait_polls: self.max_wait_polls,
             max_wait: self.max_wait,
+            guard_policy: self.guard_policy,
         }
+    }
+
+    /// The user's policy: allowed domains and confirm-before-press. A
+    /// refusal ends the run BLOCKED; it is never retried. Default: empty
+    /// (allows everything).
+    pub fn guard_policy(mut self, policy: Policy) -> Self {
+        self.guard_policy = policy;
+        self
     }
 
     /// Use a model for TYPE_TEXT / SELECT payloads (feature `model-text`).
@@ -464,6 +482,8 @@ impl<B, P, T> AgentBuilder<B, P, T> {
             journal: Vec::new(),
             typed_steps: std::collections::BTreeMap::new(),
             late_effect: false,
+            guard_policy: self.guard_policy,
+            policy_refusal: None,
         };
         agent.journal.push(JournalEvent::Run {
             goal: goal_text,
@@ -669,6 +689,14 @@ where
 
     pub fn policy_calls(&self) -> u32 {
         self.policy_calls
+    }
+
+    /// The policy refusal (`domain-not-allowed` / `needs-confirm`) and the
+    /// target label that ended this run BLOCKED, if one did.
+    pub fn policy_refusal(&self) -> Option<(GuardReason, &str)> {
+        self.policy_refusal
+            .as_ref()
+            .map(|(reason, label)| (*reason, label.as_str()))
     }
 
     /// Stale predictions discarded so far (ticket revalidation caught a change).
@@ -1148,6 +1176,20 @@ where
             ),
         }
         .map_err(|reason| AgentError::Guard(format!("refuse: {reason}")))?;
+        // The user's policy, after the gate and before the ticket is used.
+        // The executor checks it again on the fresh observation.
+        let region = predicted
+            .manifold
+            .get(&target)
+            .ok_or_else(|| AgentError::Guard("refuse: missing-target".into()))?;
+        let url = self.browser.page().and_then(|page| page.url());
+        self.guard_policy
+            .check(url, region, action)
+            .map_err(|reason| AgentError::PolicyRefused {
+                reason,
+                label: region.label().to_owned(),
+            })?;
+        let target_label = region.label().to_owned();
 
         let input = match kind {
             // A pointer click on this same label just showed no visible
@@ -1217,11 +1259,24 @@ where
             Input::Type(_) => "type",
             Input::Select(_) => "select",
         };
-        let executed = match execute_ticketed(&mut self.browser, &mut self.ledger, &ticket, &input)
-        {
+        let executed = match execute_ticketed_with(
+            &mut self.browser,
+            &mut self.ledger,
+            &ticket,
+            &input,
+            &self.guard_policy,
+        ) {
             Ok(executed) => executed,
             Err(err) if err.is_stale() => return Err(AgentError::Stale(err.to_string())),
             Err(ExecError::Rejected(msg)) => return Err(AgentError::InputRejected(msg)),
+            Err(ExecError::Gate(
+                reason @ (GuardReason::DomainNotAllowed | GuardReason::NeedsConfirm),
+            )) => {
+                return Err(AgentError::PolicyRefused {
+                    reason,
+                    label: target_label,
+                })
+            }
             Err(ExecError::Gate(reason)) => {
                 return Err(AgentError::Guard(format!("refuse at executor: {reason}")))
             }
@@ -1510,6 +1565,27 @@ where
                     return Err(AgentError::TooManyStale(self.consecutive_stale));
                 }
                 Ok(TickResult::StaleDiscarded { reason })
+            }
+            // Not stale and never retried: observing again gives the same
+            // answer, so the run stops for the user.
+            Err(AgentError::PolicyRefused { reason, label }) => {
+                self.state = AgentState::Blocked;
+                let why = match reason {
+                    GuardReason::NeedsConfirm => format!(
+                        "{reason}: {label:?} matches a confirm-press pattern; confirm {label:?} to press it"
+                    ),
+                    _ => {
+                        let host = self
+                            .browser
+                            .page()
+                            .and_then(|page| page.url())
+                            .and_then(ultra_instinct_guard::host_of)
+                            .unwrap_or_else(|| "(unknown url)".to_owned());
+                        format!("{reason}: {host} is not an allowed domain")
+                    }
+                };
+                self.policy_refusal = Some((reason, label));
+                Ok(TickResult::Finished(self.finish_blocked(why)))
             }
             Err(e) => Err(e),
         }

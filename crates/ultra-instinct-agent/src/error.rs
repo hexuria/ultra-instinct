@@ -20,6 +20,12 @@ pub enum AgentError {
     MaxPolicyCalls,
     /// Consecutive stale discards hit the bound (page never settles).
     TooManyStale(u32),
+    /// The user's policy refused the press (`domain-not-allowed`,
+    /// `needs-confirm`). Not stale; the run ends BLOCKED.
+    PolicyRefused {
+        reason: ultra_instinct_protocol::GuardReason,
+        label: String,
+    },
 }
 
 impl fmt::Display for AgentError {
@@ -37,6 +43,9 @@ impl fmt::Display for AgentError {
             Self::MaxSteps => f.write_str("max steps exceeded"),
             Self::MaxPolicyCalls => f.write_str("max policy calls exceeded"),
             Self::TooManyStale(n) => write!(f, "{n} consecutive stale predictions"),
+            Self::PolicyRefused { reason, label } => {
+                write!(f, "policy refused: {reason} {label:?}")
+            }
         }
     }
 }

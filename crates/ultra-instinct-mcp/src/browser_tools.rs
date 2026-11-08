@@ -14,7 +14,9 @@
 
 use serde_json::{json, Value};
 
-use ultra_instinct_agent::{execute_ticketed, ExecError, Input};
+use ultra_instinct_agent::{
+    classify_delta, classify_value, execute_ticketed_with, BrowserRuntime, ExecError, Input,
+};
 use ultra_instinct_browser::BrowserError;
 use ultra_instinct_cdp::{
     activate_target, close_target, create_target, page_targets, DEFAULT_CDP_HTTP,
@@ -22,7 +24,9 @@ use ultra_instinct_cdp::{
 use ultra_instinct_core::{
     Action, ActionSpace, InteractionManifold, InteractionRegion, RegionId, Role,
 };
-use ultra_instinct_guard::{check_drop_target, consume_ticket_once, gate, gate_drag, ConsumeError};
+use ultra_instinct_guard::{
+    check_drop_target, consume_ticket_once_checked, gate, gate_drag, host_of, ConsumeError, Policy,
+};
 use ultra_instinct_protocol::GuardReason;
 
 use crate::error::ToolError;
@@ -213,9 +217,45 @@ fn exec_error(err: ExecError) -> ToolError {
 fn consume_error(err: ConsumeError<BrowserError>) -> ToolError {
     match err {
         ConsumeError::Invalid(_) => ToolError::TicketInvalid(err.to_string()),
+        ConsumeError::Refused(reason) => refused(reason, ""),
         ConsumeError::Press(e) => browser_err(e),
         other => browser_err(other),
     }
+}
+
+/// A policy refusal as the tool error a host matches on (not stale; a
+/// retry gets the same answer): `needs-confirm: "Pay $18"` (the label is a
+/// JSON string; pass it back as `confirm`) or `domain-not-allowed: <host>`.
+fn refused(reason: GuardReason, label_or_url: &str) -> ToolError {
+    let detail = match reason {
+        GuardReason::NeedsConfirm => Value::String(label_or_url.to_owned()).to_string(),
+        GuardReason::DomainNotAllowed => {
+            host_of(label_or_url).unwrap_or_else(|| label_or_url.to_owned())
+        }
+        _ => label_or_url.to_owned(),
+    };
+    if detail.is_empty() {
+        ToolError::TicketInvalid(reason.to_string())
+    } else {
+        ToolError::TicketInvalid(format!("{reason}: {detail}"))
+    }
+}
+
+/// The server's policy plus this call's `confirm` label, if any.
+fn press_policy(server: &Server, arguments: &Value) -> Result<Policy, ToolError> {
+    let policy = server.policy()?.clone();
+    Ok(match opt_str(arguments, "confirm")? {
+        Some(label) => policy.with_confirmed(label),
+        None => policy,
+    })
+}
+
+/// Refuse a navigation the policy does not allow, before any CDP call.
+fn check_navigation(server: &Server, url: &str) -> Result<(), ToolError> {
+    server
+        .policy()?
+        .check_url(url)
+        .map_err(|reason| refused(reason, url))
 }
 
 /// The page-websocket key a `cdp` endpoint currently drives.
@@ -244,6 +284,7 @@ fn keep(server: &mut Server, key: &str, mut session: crate::server::LiveSession)
 fn navigate(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let url = req_str(arguments, "url")?;
+    check_navigation(server, url)?;
     if opt_bool(arguments, "new_tab")? == Some(true) {
         return new_tab_at(server, &endpoint, url);
     }
@@ -261,6 +302,7 @@ fn navigate(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> 
 fn new_tab(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let url = opt_str(arguments, "url")?.unwrap_or("about:blank");
+    check_navigation(server, url)?;
     new_tab_at(server, &endpoint, url)
 }
 
@@ -583,11 +625,14 @@ fn gated_input(
         other => return Err(ToolError::UnknownTool(other.to_owned())),
     };
     let action = input.action();
+    let policy = press_policy(server, arguments)?;
+    let verify = opt_bool(arguments, "verify")? == Some(true);
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
     let outcome = (|| {
         session.observe().map_err(browser_err)?;
         let focused = session.page().and_then(|p| p.focused().cloned());
+        let url = session.page().and_then(|p| p.url().map(str::to_owned));
         let manifold = session
             .manifold()
             .ok_or_else(|| browser_err(BrowserError::NotObserved))?;
@@ -606,20 +651,74 @@ fn gated_input(
             manifold.captured_at_ms(),
         )
         .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
+        // The user's policy after the gate, before the ticket is used; the
+        // executor checks it again on its fresh observation.
+        let label = ticket.target_label.clone();
+        if let Some(region) = manifold.get(&region_id) {
+            policy
+                .check(url.as_deref(), region, action)
+                .map_err(|reason| refusal_for(reason, &label, url.as_deref()))?;
+        }
         let mut ledger = server.take_ledger(&key);
-        let executed =
-            execute_ticketed(&mut session, &mut ledger, &ticket, &input).map_err(exec_error);
+        let executed = execute_ticketed_with(&mut session, &mut ledger, &ticket, &input, &policy);
         server.keep_ledger(&key, ledger);
-        executed.map(|done| {
-            json!({
-                "acted": input_kind,
-                "index": index,
-                "region": done.target.as_str(),
-            })
-        })
+        let done = executed.map_err(|err| match err {
+            ExecError::Gate(
+                reason @ (GuardReason::DomainNotAllowed | GuardReason::NeedsConfirm),
+            ) => {
+                let fresh_url = session.page().and_then(|p| p.url().map(str::to_owned));
+                refusal_for(reason, &label, fresh_url.as_deref())
+            }
+            other => exec_error(other),
+        })?;
+        let mut body = json!({
+            "acted": input_kind,
+            "index": index,
+            "region": done.target.as_str(),
+            "ticket": done.ticket_id,
+        });
+        if verify {
+            body["verification"] = json!(verify_after(&mut session, &done, &input)?);
+        }
+        Ok(body)
     })();
     keep(server, &key, session);
     outcome
+}
+
+/// [`refused`] with the right detail: the label for a confirm, the URL for
+/// a domain.
+fn refusal_for(reason: GuardReason, label: &str, url: Option<&str>) -> ToolError {
+    match reason {
+        GuardReason::NeedsConfirm => refused(reason, label),
+        _ => refused(reason, url.unwrap_or("")),
+    }
+}
+
+/// `verify: true`: settle, observe again, and name what the input did
+/// (the agent's verification mapping: a typed value is read back).
+fn verify_after(
+    session: &mut crate::server::LiveSession,
+    done: &ultra_instinct_agent::Executed,
+    input: &Input,
+) -> Result<&'static str, ToolError> {
+    BrowserRuntime::settle_after_input(session, &done.target, input);
+    BrowserRuntime::observe(session).map_err(browser_err)?;
+    let page_delta = match (done.before_page.as_ref(), BrowserRuntime::page(session)) {
+        (Some(before), Some(after)) => Some(session.page_delta_between(before, after)),
+        _ => None,
+    };
+    let value = input
+        .payload()
+        .and_then(|_| BrowserRuntime::read_value(session, &done.target));
+    let after = session
+        .manifold()
+        .ok_or_else(|| browser_err(BrowserError::NotObserved))?;
+    let kind = input
+        .payload()
+        .and_then(|expected| classify_value(expected, value.as_ref()))
+        .unwrap_or_else(|| classify_delta(&done.before, after, page_delta.as_ref()));
+    Ok(kind.as_str())
 }
 
 fn click(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
@@ -649,11 +748,13 @@ fn gated_press_at(
     if index == 0 {
         return Err(ToolError::InvalidArguments("`index` is 1-based".into()));
     }
+    let policy = press_policy(server, arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
     let outcome = (|| {
         let manifold = session.observe().map_err(browser_err)?.clone();
         let focused = session.page().and_then(|p| p.focused().cloned());
+        let url = session.page().and_then(|p| p.url().map(str::to_owned));
         let order = interactive_index(&manifold);
         let region_id = order.get(index - 1).cloned().ok_or_else(|| {
             ToolError::InvalidArguments(format!(
@@ -670,17 +771,24 @@ fn gated_press_at(
         )
         .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
         let mut ledger = server.take_ledger(&key);
-        let result = consume_ticket_once(
+        let result = consume_ticket_once_checked(
             &mut ledger,
             &ticket,
             &manifold,
             focused,
+            &policy,
+            url.as_deref(),
             |target: &RegionId, _action: Action| press(&mut session, target),
         );
         server.keep_ledger(&key, ledger);
         result
-            .map(|_| json!({"acted": true, "index": index}))
-            .map_err(consume_error)
+            .map(|_| json!({"acted": true, "index": index, "ticket": ticket.ticket_id}))
+            .map_err(|err| match err {
+                ConsumeError::Refused(reason) => {
+                    refusal_for(reason, &ticket.target_label, url.as_deref())
+                }
+                other => consume_error(other),
+            })
     })();
     keep(server, &key, session);
     outcome
@@ -736,6 +844,7 @@ fn drag(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     if from == 0 || to == 0 {
         return Err(ToolError::InvalidArguments("indexes are 1-based".into()));
     }
+    let policy = press_policy(server, arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
     let outcome = (|| {
@@ -752,6 +861,7 @@ fn drag(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
         let from_id = resolve(from)?;
         let to_id = resolve(to)?;
         let focused = session.page().and_then(|p| p.focused().cloned());
+        let url = session.page().and_then(|p| p.url().map(str::to_owned));
         // Drag is a mutation: the source goes through the same
         // gate → ticket → consume-before-press path as clicks. A drag-marked
         // source binds both ends like the agent's DRAG; any other source
@@ -787,17 +897,24 @@ fn drag(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
         }
         .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
         let mut ledger = server.take_ledger(&key);
-        let result = consume_ticket_once(
+        let result = consume_ticket_once_checked(
             &mut ledger,
             &ticket,
             &manifold,
             focused,
+            &policy,
+            url.as_deref(),
             |target: &RegionId, _action: Action| session.drag(target, &to_id),
         );
         server.keep_ledger(&key, ledger);
         result
             .map(|_| json!({"dragged": {"from": from, "to": to}}))
-            .map_err(consume_error)
+            .map_err(|err| match err {
+                ConsumeError::Refused(reason) => {
+                    refusal_for(reason, &ticket.target_label, url.as_deref())
+                }
+                other => consume_error(other),
+            })
     })();
     keep(server, &key, session);
     outcome
@@ -1330,6 +1447,16 @@ fn index_prop() -> Value {
     json!({"type": ["integer", "string"], "description": "1-based index from browser_get_state: 5, \"5\" or \"@e5\""})
 }
 
+/// Schema of the `confirm` argument of a press.
+fn confirm_prop() -> Value {
+    json!({"type": "string", "description": "The label of a press the user confirmed; lifts a needs-confirm refusal (ULTRA_INSTINCT_CONFIRM_PRESS) for that label only."})
+}
+
+/// Schema of the `verify` argument of a ticketed input.
+fn verify_prop() -> Value {
+    json!({"type": "boolean", "description": "Observe again after the input and return `verification` (success, state-changed, navigation, dispatched-no-visible-change, wrong-effect, …)."})
+}
+
 /// Tool spec fragments shared by every `browser_*` tool.
 pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&'static str>) {
     let cdp = || {
@@ -1382,12 +1509,15 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
         "browser_click" => {
             props.insert("index".into(), index_prop());
             props.insert("mouse".into(), json!({"type": "boolean"}));
+            props.insert("confirm".into(), confirm_prop());
+            props.insert("verify".into(), verify_prop());
             required.push("index");
             "Left-click the interactive element at a browser_get_state index, through the ticketed executor (re-observes and refuses on drift). Default is a script click; mouse: true presses a real mouse at its center instead (moves focus, fires mousedown) — use it when a script click does nothing."
         }
         "browser_type" => {
             props.insert("index".into(), index_prop());
             props.insert("text".into(), json!({"type": "string"}));
+            props.insert("verify".into(), verify_prop());
             required.extend(["index", "text"]);
             "Set the text of the interactive element at a browser_get_state index, through the ticketed executor."
         }
@@ -1430,6 +1560,7 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
         "browser_right_click" | "browser_middle_click" | "browser_double_click"
         | "browser_triple_click" => {
             props.insert("index".into(), index_prop());
+            props.insert("confirm".into(), confirm_prop());
             required.push("index");
             "Click the element at a browser_get_state index with the named button/count, through gate + one-shot ticket + consume-before-press."
         }
@@ -1441,6 +1572,7 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
         "browser_drag" => {
             props.insert("from_index".into(), index_prop());
             props.insert("to_index".into(), index_prop());
+            props.insert("confirm".into(), confirm_prop());
             required.extend(["from_index", "to_index"]);
             "Press at one element's center, drag to another's, release — both by index."
         }
@@ -1466,6 +1598,7 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             props.insert("index".into(), index_prop());
             props.insert("path".into(), json!({"type": "string"}));
             props.insert("paths".into(), json!({"type": "array", "items": {"type": "string"}}));
+            props.insert("confirm".into(), confirm_prop());
             required.push("index");
             "Set files on the file input at a browser_get_state index (DOM.setFileInputFiles; paths resolved by the Chrome process)."
         }
@@ -1484,6 +1617,7 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
         "browser_select_dropdown" => {
             props.insert("index".into(), index_prop());
             props.insert("text".into(), json!({"type": "string"}));
+            props.insert("verify".into(), verify_prop());
             required.extend(["index", "text"]);
             "Select exactly one option of the <select> at an index by label/value, through the ticketed executor."
         }

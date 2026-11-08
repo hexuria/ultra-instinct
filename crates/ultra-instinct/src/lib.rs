@@ -83,6 +83,9 @@ pub enum CliError {
         flag: &'static str,
         value: String,
     },
+    /// The guard or the user's policy refused (shell verbs, `run --url`).
+    /// The message is the whole line to show.
+    Refused(String),
 }
 
 impl std::fmt::Display for CliError {
@@ -165,6 +168,7 @@ impl std::fmt::Display for CliError {
             }
             Self::Agent(transcript) => write!(f, "agent run failed\n{transcript}"),
             Self::BadNumber { flag, value } => write!(f, "{flag} expects a number, got `{value}`"),
+            Self::Refused(message) => f.write_str(message),
         }
     }
 }

@@ -766,3 +766,98 @@ fn wait_without_a_condition_only_sleeps() {
     assert_eq!(out, json!({"waited": 0.0}));
     assert!(log.borrow().is_empty());
 }
+
+fn policy(allow: &str, confirm: &str) -> ultra_instinct_guard::Policy {
+    ultra_instinct_guard::Policy::from_lists(allow, confirm).unwrap()
+}
+
+/// `browser_navigate` checks the URL against the allowlist before any CDP
+/// call; an allowed host navigates as before.
+#[test]
+fn navigate_off_the_allowlist_is_refused_before_cdp() {
+    let (server_, log) =
+        server(ScriptBuilder::new().call("Page.navigate", json!({"frameId": "F1"})));
+    let mut server = server_.with_policy(policy("127.0.0.1, *.shop.example", ""));
+    for url in ["https://evil.test/", "https://shop.example/"] {
+        let err = server
+            .call_tool("browser_navigate", &json!({"cdp": CDP, "url": url}))
+            .expect_err("off the allowlist");
+        assert!(
+            matches!(&err, ToolError::TicketInvalid(m) if m.starts_with("domain-not-allowed")),
+            "{url}: {err:?}"
+        );
+    }
+    assert!(log.borrow().is_empty(), "no CDP call: {:?}", log.borrow());
+    let out = call(
+        &mut server,
+        "browser_navigate",
+        json!({"cdp": CDP, "url": "http://127.0.0.1/next"}),
+    );
+    assert_eq!(out["navigated"], "http://127.0.0.1/next", "{out}");
+}
+
+/// A click on a label that matches a confirm pattern refuses with the
+/// label (no press); `confirm` naming that label presses it.
+#[test]
+fn click_needs_confirm_until_confirm_names_the_label() {
+    let (server_, log) = server(ScriptBuilder::new().observe_compact(&page()));
+    let mut refusing = server_.with_policy(policy("", "sign*"));
+    let err = refusing
+        .call_tool("browser_click", &json!({"cdp": CDP, "index": "@e2"}))
+        .expect_err("needs confirm");
+    assert_eq!(
+        err,
+        ToolError::TicketInvalid("needs-confirm: \"Sign in\"".into())
+    );
+    assert!(log.borrow().iter().all(|m| m != "DOM.resolveNode"));
+
+    let (server_, log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&page())
+            .dom_click(11),
+    );
+    let mut server = server_.with_policy(policy("", "sign*"));
+    let out = call(
+        &mut server,
+        "browser_click",
+        json!({"cdp": CDP, "index": 2, "confirm": "sign in"}),
+    );
+    assert_eq!(out["acted"], "click", "{out}");
+    assert!(out["ticket"].as_u64().is_some(), "{out}");
+    assert!(log.borrow().iter().any(|m| m == "DOM.resolveNode"));
+}
+
+/// The consume_ticket_once press path (double click) checks the page URL
+/// too, and refuses before any mouse event.
+#[test]
+fn double_click_on_a_page_off_the_allowlist_is_refused() {
+    let (server_, log) = server(ScriptBuilder::new().observe_compact(&page()));
+    let mut server = server_.with_policy(policy("shop.example", ""));
+    let err = server
+        .call_tool("browser_double_click", &json!({"cdp": CDP, "index": 2}))
+        .expect_err("off the allowlist");
+    assert_eq!(
+        err,
+        ToolError::TicketInvalid("domain-not-allowed: 127.0.0.1".into())
+    );
+    assert!(log.borrow().iter().all(|m| m != "Input.dispatchMouseEvent"));
+}
+
+/// Typing is not a press: a confirm pattern on its label does not refuse.
+#[test]
+fn confirm_patterns_do_not_refuse_typing() {
+    let (server_, _log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&page())
+            .dom_input(10),
+    );
+    let mut server = server_.with_policy(policy("127.0.0.1", "email"));
+    let out = call(
+        &mut server,
+        "browser_type",
+        json!({"cdp": CDP, "index": 1, "text": "kid@example.com"}),
+    );
+    assert_eq!(out["acted"], "type", "{out}");
+}

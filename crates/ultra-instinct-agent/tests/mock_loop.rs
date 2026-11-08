@@ -1714,3 +1714,81 @@ fn a_selection_verifies_by_the_selected_text() {
         "nothing selected"
     );
 }
+
+const PAY_PAGE: &str = r#"
+    viewport w=800 h=600
+    region id=pay role=button label="Pay $18" x=10 y=10 w=80 h=24 actions=click sources=dom,accessibility
+    region id=back role=button label="Back to cart" x=10 y=50 w=80 h=24 actions=click sources=dom,accessibility
+"#;
+
+/// A press whose label matches a confirm pattern ends the run BLOCKED with
+/// nothing pressed; the refusal names the label to confirm. Confirming
+/// that label lets the same goal press it.
+#[test]
+fn needs_confirm_ends_blocked_without_pressing() {
+    let policy = ultra_instinct_guard::Policy::from_lists("", "Pay*").unwrap();
+    let mut agent = AgentBuilder::new(
+        MockBrowser::new(manifold(PAY_PAGE)),
+        InstinctPolicy::default(),
+    )
+    .max_steps(3)
+    .guard_policy(policy.clone())
+    .build("click Pay $18");
+    let outcome = agent.run();
+    match &outcome {
+        AgentOutcome::Blocked { reason, steps } => {
+            assert!(reason.starts_with("needs-confirm: \"Pay $18\""), "{reason}");
+            assert!(steps.is_empty());
+        }
+        other => panic!("expected Blocked, got {other:?}"),
+    }
+    assert_eq!(
+        agent.policy_refusal(),
+        Some((
+            ultra_instinct_protocol::GuardReason::NeedsConfirm,
+            "Pay $18"
+        ))
+    );
+    assert!(agent.browser_mut().press_log().is_empty());
+
+    let mut agent = AgentBuilder::new(
+        MockBrowser::new(manifold(PAY_PAGE)),
+        InstinctPolicy::default(),
+    )
+    .max_steps(1)
+    .guard_policy(policy.with_confirmed("pay $18"))
+    .build("click Pay $18");
+    let _ = agent.run();
+    assert_eq!(
+        agent
+            .browser_mut()
+            .press_log()
+            .first()
+            .map(|(id, a)| (id.as_str(), *a)),
+        Some(("pay", Action::Click))
+    );
+}
+
+/// A page off the allowlist gets no input: BLOCKED, never retried.
+#[test]
+fn domain_off_the_allowlist_ends_blocked() {
+    let policy = ultra_instinct_guard::Policy::from_lists("shop.example", "").unwrap();
+    let mut agent = AgentBuilder::new(
+        MockBrowser::new(manifold(PAY_PAGE)),
+        InstinctPolicy::default(),
+    )
+    .max_steps(3)
+    .guard_policy(policy)
+    .build("click Back to cart");
+    let outcome = agent.run();
+    match &outcome {
+        AgentOutcome::Blocked { reason, .. } => {
+            assert_eq!(
+                reason,
+                "domain-not-allowed: mock.invalid is not an allowed domain"
+            );
+        }
+        other => panic!("expected Blocked, got {other:?}"),
+    }
+    assert!(agent.browser_mut().input_log().is_empty());
+}

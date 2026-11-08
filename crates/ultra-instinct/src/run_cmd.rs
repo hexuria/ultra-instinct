@@ -12,7 +12,16 @@
 //! ultra-instinct run ... --policy clef                # feature `clef`: Cloudflare Clef (27B) decides
 //! ultra-instinct run ... --policy clef-flash          # feature `clef`: Cloudflare Clef-Flash (9B) decides
 //! ultra-instinct run ... --policy instinct            # offline; `pua` is a deprecated alias
+//! ultra-instinct run ... --allow-domain shop.example --confirm-press "Pay*" [--confirm "Pay $18"]
 //! ```
+//!
+//! `--allow-domain <host>` (repeatable; `shop.example` or `*.shop.example`)
+//! limits the hosts the agent gives input to and `--url` must pass it.
+//! `--confirm-press <glob>` (repeatable, `*` wildcard, case-insensitive) makes
+//! a click on a matching label end the run BLOCKED with
+//! `rerun with --confirm "<label>"`; `--confirm <label>` (repeatable) allows
+//! that one press. Both are checked after the gate and again by the executor
+//! on its fresh observation, before the ticket is consumed.
 //!
 //! Live mode with `--url` opens an owned background tab; it closes when the run
 //! ends, after the output records the page's `final_url`. Without `--url`, it drives the first existing Chrome page. The loop is
@@ -56,6 +65,7 @@ use ultra_instinct_browser::{
     open_tab, BrowserSession, CdpTransport, ReplayTransport, WebSocketTransport,
 };
 use ultra_instinct_core::parse_fixture;
+use ultra_instinct_guard::{HostPattern, LabelGlob, Policy};
 use ultra_instinct_policy::{BrowserPolicy, InstinctPolicy, TextResolver};
 
 use crate::CliError;
@@ -92,6 +102,8 @@ struct RunArgs {
     /// when JEV is unsure (features `jev` + `model-text`).
     #[cfg_attr(not(feature = "jev"), allow(dead_code))]
     second_opinion: bool,
+    /// `--allow-domain` / `--confirm-press` / `--confirm`.
+    guard_policy: Policy,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -121,6 +133,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     let mut allow_derived_text = false;
     let mut no_derived_text = false;
     let mut second_opinion = false;
+    let mut guard_policy = Policy::default();
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
@@ -191,6 +204,15 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
                 set(&mut wait_secs, "--wait-secs", n)?;
             }
             "--diary" => set(&mut diary, "--diary", value("--diary")?)?,
+            "--allow-domain" => guard_policy.allow_domains.push(
+                HostPattern::parse(&value("--allow-domain")?)
+                    .map_err(|err| CliError::Config(err.to_string()))?,
+            ),
+            "--confirm-press" => guard_policy.confirm_press.push(
+                LabelGlob::parse(&value("--confirm-press")?)
+                    .map_err(|err| CliError::Config(err.to_string()))?,
+            ),
+            "--confirm" => guard_policy.confirmed.push(value("--confirm")?),
             "--cdp" => {
                 if cdp.is_some() {
                     return Err(CliError::DuplicateFlag("--cdp"));
@@ -221,6 +243,19 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     if url.is_some() && cdp.is_none() {
         return Err(CliError::UnknownFlag("--url requires --cdp".into()));
     }
+    if let Some(url) = &url {
+        guard_policy.check_url(url).map_err(|reason| {
+            CliError::Refused(format!(
+                "{reason}: --url {url} is not on --allow-domain {}",
+                guard_policy
+                    .allow_domains
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?;
+    }
     if allow_derived_text && no_derived_text {
         return Err(CliError::UnknownFlag(
             "--allow-derived-text and --no-derived-text contradict each other".into(),
@@ -245,6 +280,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
         allow_derived_text,
         no_derived_text,
         second_opinion,
+        guard_policy,
     })
 }
 
@@ -453,7 +489,9 @@ fn drive_dojo<T: CdpTransport>(
     session: BrowserSession<T>,
     args: &RunArgs,
 ) -> Result<String, CliError> {
-    let mut builder = AgentBuilder::new(session, dojo_policy(args)?).max_steps(args.max_steps);
+    let mut builder = AgentBuilder::new(session, dojo_policy(args)?)
+        .max_steps(args.max_steps)
+        .guard_policy(args.guard_policy.clone());
     if let Some(secs) = args.wait_secs {
         let polls = u64::from(secs) * 1_000 / ultra_instinct_agent::WAIT_POLL_MS;
         builder = builder
@@ -498,7 +536,9 @@ fn drive_with<T: CdpTransport, P: BrowserPolicy>(
     policy: P,
     args: &RunArgs,
 ) -> Result<String, CliError> {
-    let mut builder = AgentBuilder::new(session, policy).max_steps(args.max_steps);
+    let mut builder = AgentBuilder::new(session, policy)
+        .max_steps(args.max_steps)
+        .guard_policy(args.guard_policy.clone());
     if let Some(secs) = args.wait_secs {
         // One re-check per WAIT_POLL_MS.
         let polls = u64::from(secs) * 1_000 / ultra_instinct_agent::WAIT_POLL_MS;
@@ -749,10 +789,28 @@ where
     if let Some(url) = agent.browser().page().and_then(|page| page.url()) {
         out.push_str(&format!("final_url {url}\n"));
     }
+    if let Some((ultra_instinct_protocol::GuardReason::NeedsConfirm, label)) =
+        agent.policy_refusal()
+    {
+        out.push_str(&format!("rerun with --confirm {}\n", shell_quote(label)));
+    }
     if matches!(outcome, AgentOutcome::Failed { .. }) {
         return Err(CliError::Agent(out));
     }
     Ok(out)
+}
+
+/// `label` in double quotes a POSIX shell reads back verbatim.
+pub(crate) fn shell_quote(label: &str) -> String {
+    let mut out = String::from("\"");
+    for c in label.chars() {
+        if matches!(c, '"' | '\\' | '$' | '`') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('"');
+    out
 }
 
 #[cfg(test)]
@@ -761,6 +819,55 @@ mod tests {
 
     fn a(raw: &[&str]) -> Vec<String> {
         raw.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn policy_flags_repeat_and_url_must_be_allowed() {
+        let parsed = parse(&a(&[
+            "--goal",
+            "buy",
+            "--cdp",
+            "--allow-domain",
+            "shop.example",
+            "--allow-domain=*.cdn.example",
+            "--confirm-press",
+            "Pay*",
+            "--confirm",
+            "Pay $18",
+            "--confirm",
+            "Pay $20",
+        ]))
+        .unwrap();
+        assert_eq!(parsed.guard_policy.allow_domains.len(), 2);
+        assert_eq!(parsed.guard_policy.confirm_press.len(), 1);
+        assert_eq!(parsed.guard_policy.confirmed, ["Pay $18", "Pay $20"]);
+        let err = parse(&a(&[
+            "--goal",
+            "buy",
+            "--cdp",
+            "--url",
+            "https://evil.test/",
+            "--allow-domain",
+            "shop.example",
+        ]))
+        .err()
+        .expect("url off the allowlist");
+        assert!(
+            matches!(&err, CliError::Refused(m) if m.starts_with("domain-not-allowed")),
+            "{err:?}"
+        );
+        assert!(matches!(
+            parse(&a(&[
+                "--goal",
+                "x",
+                "--cdp",
+                "--allow-domain",
+                "https://x.y/"
+            ]))
+            .err(),
+            Some(CliError::Config(_))
+        ));
+        assert_eq!(shell_quote("Pay $18 \"now\""), "\"Pay \\$18 \\\"now\\\"\"");
     }
 
     #[test]

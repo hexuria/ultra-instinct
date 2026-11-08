@@ -21,7 +21,7 @@ mod tools;
 pub use error::ToolError;
 pub use repeat::{REPEAT_THRESHOLD, REPEAT_WINDOW};
 pub use rpc::{handle_line, serve_stdio};
-pub use server::{CdpConnector, Server, MAX_LIVE_SESSIONS};
+pub use server::{CdpConnector, Server, ENV_ALLOW_DOMAINS, ENV_CONFIRM_PRESS, MAX_LIVE_SESSIONS};
 pub use tools::call_tool;
 
 pub const TOOL_OBSERVE: &str = "observe";

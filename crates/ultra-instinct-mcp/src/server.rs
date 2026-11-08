@@ -22,7 +22,7 @@ use ultra_instinct_browser::{
 };
 use ultra_instinct_cdp::CdpEvent;
 use ultra_instinct_core::InteractionManifold;
-use ultra_instinct_guard::TicketLedger;
+use ultra_instinct_guard::{Policy, TicketLedger};
 use ultra_instinct_observe::history::{
     detect, HistoryError, SignedSnapshot, SnapshotId, SnapshotRing, StateSignature, TemporalSignal,
 };
@@ -35,6 +35,14 @@ pub const MAX_LIVE_SESSIONS: usize = 4;
 
 /// Buffered CDP events kept per session key; oldest drop past this.
 const MAX_BUFFERED_EVENTS: usize = 2048;
+
+/// Comma list of hosts (`shop.example`, `*.shop.example`) the `browser_*`
+/// tools may navigate to and give input on. Read by [`Server::new`].
+pub const ENV_ALLOW_DOMAINS: &str = "ULTRA_INSTINCT_ALLOW_DOMAINS";
+
+/// Comma list of label globs (`Pay*`) whose CLICK-family press needs a
+/// `confirm` argument naming the label. Read by [`Server::new`].
+pub const ENV_CONFIRM_PRESS: &str = "ULTRA_INSTINCT_CONFIRM_PRESS";
 
 pub(crate) struct Snapshot {
     pub(crate) origin: String,
@@ -63,6 +71,9 @@ pub struct Server {
     dropped: BTreeMap<String, u64>,
     /// Session key → diagnostic domains already enabled (bit0 console, bit1 network).
     domains: BTreeMap<String, u8>,
+    /// The user's policy for navigation and presses, or why the configured
+    /// one is invalid (then every navigate and press refuses).
+    policy: Result<Policy, String>,
 }
 
 impl SignedSnapshot for Snapshot {
@@ -76,12 +87,30 @@ impl SignedSnapshot for Snapshot {
 }
 
 impl Server {
-    /// A server whose `cdp` endpoints are live websockets.
+    /// A server whose `cdp` endpoints are live websockets, under the policy
+    /// in [`ENV_ALLOW_DOMAINS`] / [`ENV_CONFIRM_PRESS`] (unset: allow all).
     pub fn new() -> Self {
-        Self::with_connector(|url| {
+        let mut server = Self::with_connector(|url| {
             WebSocketTransport::connect(url)
                 .map(|transport| Box::new(transport) as Box<dyn CdpTransport>)
-        })
+        });
+        let var = |name: &str| std::env::var(name).unwrap_or_default();
+        server.policy = Policy::from_lists(&var(ENV_ALLOW_DOMAINS), &var(ENV_CONFIRM_PRESS))
+            .map_err(|err| format!("{ENV_ALLOW_DOMAINS} / {ENV_CONFIRM_PRESS}: {err}"));
+        server
+    }
+
+    /// This server under `policy` instead of the environment's.
+    pub fn with_policy(mut self, policy: Policy) -> Self {
+        self.policy = Ok(policy);
+        self
+    }
+
+    /// The policy navigation and presses run under.
+    pub(crate) fn policy(&self) -> Result<&Policy, ToolError> {
+        self.policy
+            .as_ref()
+            .map_err(|err| ToolError::InvalidArguments(err.clone()))
     }
 
     /// A server whose `cdp` endpoints are opened by `connector`. Used by the
@@ -100,6 +129,7 @@ impl Server {
             events: BTreeMap::new(),
             dropped: BTreeMap::new(),
             domains: BTreeMap::new(),
+            policy: Ok(Policy::default()),
         }
     }
 
