@@ -182,7 +182,9 @@ aui close                                     # stops the daemon and its Chrome
 `aui batch "snap" "click @e5" --bail` runs several verbs in order on one
 session (`--json` for `[{cmd, ok, output}]`; no args reads a JSON array on
 stdin). `--session <name>` picks the browser; `aui session` prints the
-current one and `aui session list` the live ones. `aui skills get core` prints
+current one and `aui session list` the live ones. The daemon (and a
+`--launch` Chrome) exits after 60 minutes without a verb; `aui open --idle
+<secs>` sets that for the session (1 s to 24 h). `aui skills get core` prints
 the full guide.
 
 ## MCP tools (optional adapter)

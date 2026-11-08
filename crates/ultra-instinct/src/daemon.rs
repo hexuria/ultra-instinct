@@ -15,7 +15,8 @@
 //! connection and one line at a time, in a single thread: each line is a
 //! JSON-RPC request for one [`ultra_instinct_mcp::Server`], so a session owns
 //! one CDP socket (anti-drift #10). Every press goes through the existing
-//! ticketed `browser_*` tools. The daemon exits after 60 minutes idle or on
+//! ticketed `browser_*` tools. The daemon exits after 60 minutes idle
+//! (`aui open --idle <secs>`, 1 s to 24 h, sets it for the session) or on
 //! `aui close`, and removes its socket.
 //!
 //! A verb whose socket is missing or stale spawns the daemon (this binary,
@@ -27,6 +28,8 @@
 //! binds its socket; that Chrome lives exactly as long as the daemon
 //! (`close`, idle exit and daemon exit all end it). A failed launch answers
 //! the waiting verb with the launch error, unchanged, and the daemon exits.
+//! `--idle`, `--allow-domain` and `--confirm-press` are start-time settings
+//! like `--launch`: a running session refuses them.
 //! `--allow-domain` / `--confirm-press` on `open` reach the spawned daemon as
 //! `ULTRA_INSTINCT_ALLOW_DOMAINS` / `ULTRA_INSTINCT_CONFIRM_PRESS`;
 //! `--confirm <label>` on a press verb is the tool's `confirm` argument.
@@ -45,6 +48,12 @@ pub const DEFAULT_SESSION: &str = "default";
 
 /// Longest session name: the socket path must fit `sun_path`.
 const MAX_SESSION_CHARS: usize = 32;
+
+/// Idle exit when `--idle` is not given: 60 minutes.
+pub const DEFAULT_IDLE_SECS: u64 = 60 * 60;
+
+/// Longest `--idle`: 24 hours.
+pub const MAX_IDLE_SECS: u64 = 24 * 60 * 60;
 
 /// JSON-RPC method that stops the daemon (answered by the daemon itself).
 const STOP_METHOD: &str = "aui/stop";
@@ -100,6 +109,8 @@ pub struct Verb {
     pub launch: bool,
     /// `--headed` (with `--launch`).
     pub headed: bool,
+    /// `--idle <secs>` (`open` only): the spawned daemon's idle exit.
+    pub idle_secs: Option<u64>,
 }
 
 impl Verb {
@@ -110,8 +121,25 @@ impl Verb {
 
     /// Settings that only take effect when this verb spawns the daemon.
     fn spawn_settings(&self) -> bool {
-        !self.allow_domains.is_empty() || !self.confirm_press.is_empty() || self.launch
+        !self.allow_domains.is_empty()
+            || !self.confirm_press.is_empty()
+            || self.launch
+            || self.idle_secs.is_some()
     }
+}
+
+/// An `--idle` value: whole seconds, 1 to [`MAX_IDLE_SECS`].
+pub(crate) fn parse_idle(raw: &str) -> Result<u64, CliError> {
+    let secs: u64 = raw.trim().parse().map_err(|_| CliError::BadNumber {
+        flag: "--idle",
+        value: raw.to_owned(),
+    })?;
+    if secs == 0 || secs > MAX_IDLE_SECS {
+        return Err(CliError::Config(format!(
+            "--idle {secs}: give 1 to {MAX_IDLE_SECS} seconds (24 h)"
+        )));
+    }
+    Ok(secs)
 }
 
 /// The JSON-RPC line for `request`.
@@ -132,7 +160,7 @@ pub(crate) fn verb_command(verb: &str, args: &[String]) -> Result<String, CliErr
     imp::run_verb(&parsed)
 }
 
-/// `aui daemon --session <name> [--cdp <url>] [--launch [--headed]]` (hidden).
+/// `aui daemon --session <name> [--cdp <url>] [--launch [--headed]] [--idle <secs>]` (hidden).
 pub(crate) fn daemon_command(args: &[String]) -> Result<String, CliError> {
     let mut flags = crate::verbs::Flags::scan(args)?;
     let session = SessionName::parse(
@@ -144,11 +172,22 @@ pub(crate) fn daemon_command(args: &[String]) -> Result<String, CliError> {
     let cdp = flags.one("--cdp")?;
     let launch = flags.switch("--launch");
     let headed = flags.switch("--headed");
+    let idle = flags
+        .one("--idle")?
+        .map(|raw| parse_idle(&raw))
+        .transpose()?
+        .unwrap_or(DEFAULT_IDLE_SECS);
     flags.finish()?;
     if let Some(extra) = flags.positional().first() {
         return Err(CliError::UnknownFlag(extra.clone()));
     }
-    imp::serve_session(&session, cdp.as_deref(), launch, headed)?;
+    imp::serve_session(
+        &session,
+        cdp.as_deref(),
+        launch,
+        headed,
+        std::time::Duration::from_secs(idle),
+    )?;
     Ok(String::new())
 }
 
@@ -224,8 +263,6 @@ mod imp {
     };
     use crate::CliError;
 
-    /// The daemon exits after this long without a request.
-    const IDLE: Duration = Duration::from_secs(60 * 60);
     /// How long a verb waits for a spawned daemon's socket.
     const SPAWN_WAIT: Duration = Duration::from_secs(3);
     /// A verb's wait for one reply (`browser_wait` may take 60 s; a launch 20 s).
@@ -424,6 +461,7 @@ mod imp {
         cdp: Option<&str>,
         launch: bool,
         headed: bool,
+        idle: Duration,
     ) -> Result<(), CliError> {
         // Bind first: the spawning verb is already waiting on this socket,
         // and a launch can take longer than its 3 s spawn wait.
@@ -452,7 +490,7 @@ mod imp {
             _chrome: chrome,
         };
         // `daemon` (the socket) is dropped inside; `owned` after, in order.
-        serve_on(daemon, &mut owned.server, &endpoint, IDLE)
+        serve_on(daemon, &mut owned.server, &endpoint, idle)
     }
 
     /// `aui session list` over `dir`: each `*.sock` that answers is a live
@@ -544,7 +582,7 @@ mod imp {
     }
 
     /// Spawn `current_exe() daemon --session <name> [--cdp <url>] [--launch
-    /// [--headed]]`, detached (own process group, null stdio), with the
+    /// [--headed]] [--idle <secs>]`, detached (own process group, null stdio), with the
     /// policy env for `open`.
     fn spawn_daemon(verb: &Verb) -> Result<(), CliError> {
         let exe = std::env::current_exe().map_err(|err| CliError::Io {
@@ -561,6 +599,9 @@ mod imp {
             if verb.headed {
                 command.arg("--headed");
             }
+        }
+        if let Some(secs) = verb.idle_secs {
+            command.args(["--idle", &secs.to_string()]);
         }
         command
             .stdin(std::process::Stdio::null())
@@ -606,7 +647,7 @@ mod imp {
             let spawned = connect_or_spawn(path, spawn)?;
             if verb.spawn_settings() && !spawned {
                 return Err(CliError::Config(format!(
-                    "session {} is already running; --launch and its policy are set when it starts (aui close first)",
+                    "session {} is already running; --launch, --idle and its policy are set when it starts (aui close first)",
                     verb.session.as_str()
                 )));
             }
@@ -644,6 +685,7 @@ mod imp {
         _cdp: Option<&str>,
         _launch: bool,
         _headed: bool,
+        _idle: std::time::Duration,
     ) -> Result<(), CliError> {
         Err(CliError::Config(UNSUPPORTED.into()))
     }
@@ -863,6 +905,12 @@ mod tests {
             let launch = parse_verb("open", &a(&["https://a/", "--launch"])).unwrap();
             let err = run_verb_with(&launch, &path, || panic!("running")).unwrap_err();
             assert!(err.to_string().contains("already running"), "{err}");
+            let idle = parse_verb("open", &a(&["https://a/", "--idle", "5"])).unwrap();
+            let err = run_verb_with(&idle, &path, || panic!("running")).unwrap_err();
+            assert!(
+                err.to_string().contains("already running") && err.to_string().contains("--idle"),
+                "{err}"
+            );
             let close = parse_verb("close", &[]).unwrap();
             run_verb_with(&close, &path, || panic!("running")).unwrap();
             handle.unwrap().join().unwrap();
@@ -894,6 +942,50 @@ mod tests {
             serve_on(daemon, &mut server, "http://x", Duration::from_millis(50)).unwrap();
             assert!(!path.exists());
             let _ = std::fs::remove_dir(path.parent().unwrap());
+        }
+
+        /// `aui daemon --idle 1` (what `aui open --idle 1` spawns) binds its
+        /// session socket, serves, and exits about a second after the last
+        /// request, removing the socket.
+        #[test]
+        fn the_idle_flag_sets_the_daemon_idle_exit() {
+            let name = format!("t-idle-{}", std::process::id());
+            let session = SessionName::parse(&name).unwrap();
+            let socket = super::super::imp::socket_path(&session);
+            let started = std::time::Instant::now();
+            let daemon = std::thread::spawn(move || {
+                // Attaches to an endpoint nobody serves: idle needs no browser.
+                daemon_command(&a(&[
+                    "--session",
+                    &name,
+                    "--cdp",
+                    "http://127.0.0.1:9",
+                    "--idle",
+                    "1",
+                ]))
+            });
+            while !socket.exists() {
+                assert!(started.elapsed() < Duration::from_secs(5), "never bound");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            // A request resets the idle clock; the daemon still answers it.
+            let line = request_line(&Request::Tool {
+                name: "browser_dialog",
+                arguments: json!({"action": "status"}),
+            });
+            let reply = super::super::imp::send(&socket, &line).unwrap();
+            assert!(reply.contains("\"jsonrpc\""), "{reply}");
+            let asked = std::time::Instant::now();
+            assert_eq!(daemon.join().unwrap().unwrap(), "");
+            let idle_for = asked.elapsed();
+            assert!(
+                idle_for >= Duration::from_millis(900) && idle_for < Duration::from_secs(5),
+                "exited {idle_for:?} after the last request"
+            );
+            assert!(!socket.exists(), "socket removed on idle exit");
+            for bad in ["0", "86401"] {
+                assert!(daemon_command(&a(&["--idle", bad])).is_err(), "{bad}");
+            }
         }
 
         /// A directory someone else made first (`aui doctor` makes it 0700)

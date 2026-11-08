@@ -190,9 +190,10 @@ Every verb takes `--session <name>` (letters, digits, `-`; default
 `default`) and `--cdp <url>` (default `http://127.0.0.1:9222`). `aui open
 --launch [--headed]` makes the daemon start its own Chrome (headless unless
 `--headed`), which ends when the daemon does; without it, start Chrome first
-(step 2). `open` also takes `--allow-domain` and `--confirm-press`; these and
-`--launch` are fixed when the daemon starts, so `aui close` before you change
-them.
+(step 2). `open` also takes `--allow-domain`, `--confirm-press` and `--idle
+<secs>` (the daemon, and its Chrome, end after that long without a verb: 1 s
+to 24 h, default 60 min); these and `--launch` are fixed when the daemon
+starts, so `aui close` before you change them.
 
 Output is one short line. `✓ ticket 41 · navigation` means the click ran
 and what changed (`success`, `state-changed`, `navigation`,

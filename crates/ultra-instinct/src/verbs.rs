@@ -19,7 +19,7 @@ pub const VERBS: [&str; 27] = [
 ];
 
 /// Flags that take a value (`--flag v` or `--flag=v`).
-const VALUE_FLAGS: [&str; 20] = [
+const VALUE_FLAGS: [&str; 21] = [
     "--session",
     "--cdp",
     "--max-output",
@@ -40,6 +40,7 @@ const VALUE_FLAGS: [&str; 20] = [
     "--expires",
     "--same-site",
     "--timeout-ms",
+    "--idle",
 ];
 
 /// Flags that take no value.
@@ -197,7 +198,7 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         .map(|raw| number::<usize>("--max-output", &raw))
         .transpose()?;
     let (mut allow_domains, mut confirm_press) = (Vec::new(), Vec::new());
-    let (mut launch, mut headed) = (false, false);
+    let (mut launch, mut headed, mut idle_secs) = (false, false, None);
     if verb == "open" {
         allow_domains = flags.all("--allow-domain");
         confirm_press = flags.all("--confirm-press");
@@ -206,6 +207,10 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         if headed && !launch {
             return Err(CliError::Config("--headed needs --launch".into()));
         }
+        idle_secs = flags
+            .one("--idle")?
+            .map(|raw| crate::daemon::parse_idle(&raw))
+            .transpose()?;
     }
     for host in &allow_domains {
         ultra_instinct_guard::HostPattern::parse(host)
@@ -231,6 +236,7 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         confirm_press,
         launch,
         headed,
+        idle_secs,
     })
 }
 
@@ -243,7 +249,7 @@ fn build(verb: &'static str, flags: &mut Flags) -> Result<Request, CliError> {
     match verb {
         "open" => match p[..] {
             [url] => tool("browser_navigate", json!({"url": url})),
-            _ => usage("<url> [--launch [--headed]] [--allow-domain <host>]... [--confirm-press <glob>]..."),
+            _ => usage("<url> [--launch [--headed]] [--idle <secs>] [--allow-domain <host>]... [--confirm-press <glob>]..."),
         },
         "snap" => {
             let format = if flags.switch("--json") { "json" } else { "text" };
@@ -1356,7 +1362,18 @@ mod tests {
         assert_eq!(parse_verb("snap", &[]).unwrap().cdp, None);
         let launch = parse_verb("open", &a(&["https://a/", "--launch", "--headed"])).unwrap();
         assert!(launch.launch && launch.headed);
+        assert_eq!(launch.idle_secs, None);
+        let idle = parse_verb("open", &a(&["https://a/", "--launch", "--idle", "90"])).unwrap();
+        assert_eq!(idle.idle_secs, Some(90));
+        let max = parse_verb("open", &a(&["https://a/", "--idle=86400"])).unwrap();
+        assert_eq!(max.idle_secs, Some(86_400));
+        for bad in ["0", "86401", "-1", "1.5", "soon"] {
+            let err = parse_verb("open", &a(&["https://a/", "--idle", bad])).unwrap_err();
+            assert!(err.to_string().contains("--idle"), "{bad}: {err}");
+        }
         for (verb, args) in [
+            ("snap", &["--idle", "5"][..]),
+            ("open", &["https://a/", "--idle", "5", "--idle", "6"][..]),
             ("open", &[][..]),
             ("open", &["https://a/", "--headed"][..]),
             ("snap", &["--launch"][..]),
