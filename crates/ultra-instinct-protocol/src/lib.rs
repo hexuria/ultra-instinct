@@ -84,6 +84,8 @@ mod tests {
             GuardReason::UnsupportedAction.as_str(),
             "unsupported-action"
         );
+        assert_eq!(GuardReason::DomainNotAllowed.as_str(), "domain-not-allowed");
+        assert_eq!(GuardReason::NeedsConfirm.as_str(), "needs-confirm");
     }
 
     #[test]

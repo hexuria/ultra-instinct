@@ -2,8 +2,10 @@
 
 `ultra-instinct mcp` exposes a `browser_*` tool surface mirroring
 [browser-use](https://docs.browser-use.com) (toolsets-for-claude and the
-browser-use MCP server). 37 tools, alongside the seven product tools
-(`observe`, `guard`, `verify`, `locate`, `inspect`, `diff`, `act`).
+browser-use MCP server), plus ports from
+[vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser)
+([ADR 0012](adr/0012-borrow-and-prune.md)). 53 `browser_*` tools, alongside
+the three product tools (`observe`, `guard`, `verify`): 56 in `TOOLS`.
 
 **The edge over browser-use:** browser-use presses what the model says.
 Every element-mutating `browser_*` tool here resolves a 1-based index on a
@@ -33,7 +35,7 @@ resolve. Coordinate clicks are deliberately not offered: indices only.
 | `switch_tab` | `browser_switch_tab` | rebinds the session's tab (exact id or unique non-empty prefix) |
 | `close_tab` | `browser_close_tab` | falls back to a remaining page target |
 | `go_back` | `browser_go_back` | `Page.getNavigationHistory` + `navigateToHistoryEntry` |
-| `wait` | `browser_wait` | sleeps `seconds` (cap 60; blocks the single-threaded server) |
+| `wait` | `browser_wait` | sleeps `seconds`; with `text` / `url` / `control` / `gone` / `load` observes every 200 ms until it holds (cap 60; blocks the single-threaded server) |
 | `read_page` / state | `browser_get_state` | full observe → indexed `elements[]` |
 | `get_page_text` | `browser_get_page_text`, `browser_get_text` | `innerText` via evaluate |
 | `get_html` | `browser_get_html` | `outerHTML` via evaluate |
@@ -68,6 +70,47 @@ resolve. Coordinate clicks are deliberately not offered: indices only.
 | `list_sessions` / `close_session` / agent | — | browser-use Cloud surface; not local-browser tools |
 | `Bash` toolset | — | host-side process tool; out of scope by design |
 
+## agent-browser
+
+[agent-browser](https://github.com/vercel-labs/agent-browser) ([command reference](https://agent-browser.dev/commands), checked 2026-11-08) is a shell
+CLI. Its commands map to MCP tools here and to `aui` shell verbs over the
+session daemon (`aui skills get core`). Refs are `@eN` from `aui snap` /
+`browser_get_state`; there are no CSS / XPath selectors and no coordinate
+mouse.
+
+| agent-browser | MCP tool | `aui` verb |
+|---|---|---|
+| `open <url>` | `browser_navigate` | `open <url> [--launch [--headed]]` |
+| `snapshot` | `browser_get_state` (text default, `format:"json"`) | `snap [--json]` |
+| `click` / `dblclick` | `browser_click` / `browser_double_click` | `click <ref>` |
+| `fill` / `type` | `browser_type` / `browser_keyboard` | `type <ref> <text>`, `keyboard type\|insert <text>` |
+| `press <key>` | `browser_send_key` | `key <ref> <key>` |
+| `select` | `browser_select_dropdown` | `select <ref> <option>` |
+| `check` / `uncheck` | `browser_check` | `check <ref>`, `uncheck <ref>` |
+| `focus` / `hover` | `browser_focus` / `browser_hover` | `focus <ref>` |
+| `scroll` | `browser_scroll` | `scroll [up\|down]` |
+| `wait` (text, url, selector gone, load) | `browser_wait` | `wait --text\|--url\|--control\|--gone <v>`, `wait --load domcontentloaded\|load` |
+| `get text\|value\|attr\|box` | `browser_get`, `browser_get_text` | `get value\|label\|role\|box <ref>`, `get attr <ref> <name>` |
+| `is visible\|enabled\|checked` | `browser_is` | `is visible\|enabled\|checked\|editable <ref>` |
+| `get count` / `find` | `browser_count` / `browser_find` | `count [--label L] [--role R]` |
+| `screenshot [--annotate]` | `browser_screenshot` (`annotate`) | `shot [--annotate] [path]` |
+| `back` / `forward` / `reload` | `browser_go_back` / `browser_go_forward` / `browser_reload` | `forward`, `reload [--ignore-cache]` |
+| `dialog accept\|dismiss` | `browser_dialog` | `dialog [status]\|accept [text]\|dismiss` |
+| `tab` / `tab new\|close` / `tab <id>` | tab tools | `tabs` |
+| `state save\|load` | `browser_state_save` / `browser_state_load` | `state save\|load <path>` |
+| `cookies` | `browser_cookies` | `cookies [list]\|set\|clear` |
+| `storage local\|session` | `browser_storage` | `storage local\|session [list]\|get\|set\|clear` |
+| `set viewport\|device\|media\|offline\|headers` | `browser_set` | `set viewport W H [scale]\|device\|media\|offline\|headers K=V…\|reset` |
+| `download` | `browser_download` | `download <ref> <path>` |
+| `network route\|unroute`, `network har start\|stop` | `browser_network` (block / unblock, HAR) | `network block\|unblock`, `network har start\|stop <path>` |
+| `--max-output` | `max_chars` | `--max-output N` |
+| `batch` | — | `batch "<verb args>"…` |
+| `session` / `session list` | — | `session`, `session list` |
+| `install` / `doctor` | — | `aui install`, `aui doctor` |
+| `skills` | — | `aui skills list\|get` |
+| `mouse`, CSS / XPath selectors, `eval` | — (`browser_exec` for script) | not offered |
+| other engines, streaming, dashboard, auth vault, plugins, react / vitals / a11y / trace / record | — | not borrowed (ADR 0012) |
+
 ## Diagnostics caveat
 
 One blocking CDP socket, no reader thread (the repo's concurrency invariant):
@@ -84,7 +127,7 @@ replay harness (`ScriptBuilder` + `ReplayTransport`): call sequence, index
 resolution, gate→ticket→press order, observed-option grounding, and
 refusals (unobserved option, out-of-range index) are pinned without a live
 Chrome. Not yet covered at wire level: `browser_type`, the tab tools
-(HTTP-driven), `browser_wait`, `browser_scroll`, `browser_hold_key`,
+(HTTP-driven), `browser_scroll`, `browser_hold_key`,
 `browser_middle_click` / `browser_triple_click`, `browser_get_html` /
 `browser_get_text`, `browser_screenshot`, `browser_search`, and
 `browser_navigate`'s `new_tab` path.

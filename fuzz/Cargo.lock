@@ -61,8 +61,8 @@ name = "ultra-instinct-guard"
 version = "0.1.0"
 dependencies = [
  "ultra-instinct-core",
+ "ultra-instinct-geometry",
  "ultra-instinct-protocol",
- "ultra-instinct-resonance",
 ]
 
 [[package]]
@@ -71,10 +71,10 @@ version = "0.1.0"
 dependencies = [
  "ultra-instinct-browser",
  "ultra-instinct-core",
+ "ultra-instinct-geometry",
  "ultra-instinct-guard",
  "ultra-instinct-observe",
  "ultra-instinct-protocol",
- "ultra-instinct-resonance",
  "serde_json",
 ]
 
@@ -101,15 +101,6 @@ name = "ultra-instinct-protocol"
 version = "0.1.0"
 dependencies = [
  "ultra-instinct-core",
-]
-
-[[package]]
-name = "ultra-instinct-resonance"
-version = "0.1.0"
-dependencies = [
- "ultra-instinct-core",
- "ultra-instinct-geometry",
- "tracing",
 ]
 
 [[package]]

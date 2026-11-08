@@ -12,7 +12,19 @@
 //! ultra-instinct run ... --policy clef                # feature `clef`: Cloudflare Clef (27B) decides
 //! ultra-instinct run ... --policy clef-flash          # feature `clef`: Cloudflare Clef-Flash (9B) decides
 //! ultra-instinct run ... --policy instinct            # offline; `pua` is a deprecated alias
+//! ultra-instinct run ... --live-steps                 # print each `step` line as it happens
+//! ultra-instinct run ... --load-state <path>          # reuse a saved login before the first observe
+//! ultra-instinct run ... --save-state <path>          # save cookies + storage when the run ends
+//! ultra-instinct run ... --allow-domain shop.example --confirm-press "Pay*" [--confirm "Pay $18"]
 //! ```
+//!
+//! `--allow-domain <host>` (repeatable; `shop.example` or `*.shop.example`)
+//! limits the hosts the agent gives input to and `--url` must pass it.
+//! `--confirm-press <glob>` (repeatable, `*` wildcard, case-insensitive) makes
+//! a click on a matching label end the run BLOCKED with
+//! `rerun with --confirm "<label>"`; `--confirm <label>` (repeatable) allows
+//! that one press. Both are checked after the gate and again by the executor
+//! on its fresh observation, before the ticket is consumed.
 //!
 //! Live mode with `--url` opens an owned background tab; it closes when the run
 //! ends, after the output records the page's `final_url`. Without `--url`, it drives the first existing Chrome page. The loop is
@@ -51,11 +63,17 @@
 //! env drives an HTTP model — OpenAI-compatible, Anthropic, or Gemini wire,
 //! picked by `TEXT_MODEL_API` or the base URL host ([`crate::http_text`]).
 
-use ultra_instinct_agent::{Agent, AgentBuilder, AgentOutcome, BrowserRuntime, MockBrowser};
+use std::io::Write as _;
+
+use ultra_instinct_agent::{
+    Agent, AgentBuilder, AgentOutcome, BrowserRuntime, MockBrowser, StepRecord,
+};
+use ultra_instinct_browser::storage_state::BorrowedTransport;
 use ultra_instinct_browser::{
     open_tab, BrowserSession, CdpTransport, ReplayTransport, WebSocketTransport,
 };
 use ultra_instinct_core::parse_fixture;
+use ultra_instinct_guard::{HostPattern, LabelGlob, Policy};
 use ultra_instinct_policy::{BrowserPolicy, InstinctPolicy, TextResolver};
 
 use crate::CliError;
@@ -74,6 +92,10 @@ struct RunArgs {
     /// `--lessons <path>`: the dojo's lesson store (loaded at start,
     /// grown during the run, saved back at exit).
     lessons: Option<String>,
+    /// `--load-state <path>` / `--save-state <path>`: a saved login
+    /// (cookies + storage, `crate::state_cmd`); CDP runs only.
+    load_state: Option<String>,
+    save_state: Option<String>,
     /// `--no-screenshot`: a pixel-reading policy decides without the viewport.
     /// Only `jev` reads pixels today.
     #[cfg_attr(not(feature = "jev"), allow(dead_code))]
@@ -92,6 +114,15 @@ struct RunArgs {
     /// when JEV is unsure (features `jev` + `model-text`).
     #[cfg_attr(not(feature = "jev"), allow(dead_code))]
     second_opinion: bool,
+    /// `--live-steps`: print (and flush) each `step` line as the step is
+    /// recorded instead of in the end-of-run transcript, so a run stopped
+    /// from outside still leaves every step it took.
+    live_steps: bool,
+    /// `--launch [--headed]`: start this run's own Chrome when `--cdp` is absent.
+    launch: bool,
+    headed: bool,
+    /// `--allow-domain` / `--confirm-press` / `--confirm`.
+    guard_policy: Policy,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -116,11 +147,16 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     let mut policy = None;
     let mut diary = None;
     let mut lessons = None;
+    let mut load_state = None;
+    let mut save_state = None;
     let mut no_screenshot = false;
     let mut no_page_text = false;
     let mut allow_derived_text = false;
     let mut no_derived_text = false;
     let mut second_opinion = false;
+    let mut live_steps = false;
+    let (mut launch, mut headed) = (false, false);
+    let mut guard_policy = Policy::default();
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
@@ -164,6 +200,8 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
                 set(&mut policy, "--policy", kind)?;
             }
             "--lessons" => set(&mut lessons, "--lessons", value("--lessons")?)?,
+            "--load-state" => set(&mut load_state, "--load-state", value("--load-state")?)?,
+            "--save-state" => set(&mut save_state, "--save-state", value("--save-state")?)?,
             "--no-screenshot" => switch(&mut no_screenshot, "--no-screenshot", arg, &inline)?,
             "--no-page-text" => switch(&mut no_page_text, "--no-page-text", arg, &inline)?,
             "--allow-derived-text" => switch(
@@ -174,6 +212,9 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
             )?,
             "--no-derived-text" => switch(&mut no_derived_text, "--no-derived-text", arg, &inline)?,
             "--second-opinion" => switch(&mut second_opinion, "--second-opinion", arg, &inline)?,
+            "--live-steps" => switch(&mut live_steps, "--live-steps", arg, &inline)?,
+            "--launch" => switch(&mut launch, "--launch", arg, &inline)?,
+            "--headed" => switch(&mut headed, "--headed", arg, &inline)?,
             "--max-steps" => {
                 let raw = value("--max-steps")?;
                 let n: u32 = raw.parse().map_err(|_| CliError::BadNumber {
@@ -191,6 +232,15 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
                 set(&mut wait_secs, "--wait-secs", n)?;
             }
             "--diary" => set(&mut diary, "--diary", value("--diary")?)?,
+            "--allow-domain" => guard_policy.allow_domains.push(
+                HostPattern::parse(&value("--allow-domain")?)
+                    .map_err(|err| CliError::Config(err.to_string()))?,
+            ),
+            "--confirm-press" => guard_policy.confirm_press.push(
+                LabelGlob::parse(&value("--confirm-press")?)
+                    .map_err(|err| CliError::Config(err.to_string()))?,
+            ),
+            "--confirm" => guard_policy.confirmed.push(value("--confirm")?),
             "--cdp" => {
                 if cdp.is_some() {
                     return Err(CliError::DuplicateFlag("--cdp"));
@@ -215,11 +265,31 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     if cdp.is_some() && fixture.is_some() {
         return Err(CliError::DuplicateFlag("--cdp"));
     }
-    if cdp.is_none() && fixture.is_none() {
+    if launch && fixture.is_some() || headed && !launch {
+        return Err(CliError::UnknownFlag(
+            "--launch [--headed] drives a live Chrome; not with --fixture".into(),
+        ));
+    }
+    if cdp.is_none() && fixture.is_none() && !launch {
         return Err(CliError::MissingSource);
     }
-    if url.is_some() && cdp.is_none() {
-        return Err(CliError::UnknownFlag("--url requires --cdp".into()));
+    if url.is_some() && cdp.is_none() && !launch {
+        return Err(CliError::UnknownFlag(
+            "--url requires --cdp or --launch".into(),
+        ));
+    }
+    if let Some(url) = &url {
+        guard_policy.check_url(url).map_err(|reason| {
+            CliError::Refused(format!(
+                "{reason}: --url {url} is not on --allow-domain {}",
+                guard_policy
+                    .allow_domains
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?;
     }
     if allow_derived_text && no_derived_text {
         return Err(CliError::UnknownFlag(
@@ -240,11 +310,17 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
         policy: policy.unwrap_or(PolicyKind::Instinct),
         diary,
         lessons,
+        load_state,
+        save_state,
         no_screenshot,
         no_page_text,
         allow_derived_text,
         no_derived_text,
         second_opinion,
+        live_steps,
+        launch,
+        headed,
+        guard_policy,
     })
 }
 
@@ -274,7 +350,15 @@ fn set<T>(slot: &mut Option<T>, flag: &'static str, value: T) -> Result<(), CliE
 }
 
 pub(crate) fn run_command(args: &[String]) -> Result<String, CliError> {
-    let args = parse(args)?;
+    let mut args = parse(args)?;
+    // Declared before the session, so the run's tab closes before Chrome is killed.
+    let _chrome = match args.launch && args.cdp.is_none() {
+        true => Some(crate::doctor_cmd::launch_chrome(args.headed)?),
+        false => None,
+    };
+    if let Some(chrome) = &_chrome {
+        args.cdp = Some(chrome.endpoint());
+    }
     if let Some(endpoint) = &args.cdp {
         let transport = if args.url.is_some() {
             open_tab(endpoint)
@@ -282,14 +366,9 @@ pub(crate) fn run_command(args: &[String]) -> Result<String, CliError> {
             WebSocketTransport::connect(endpoint)
         }
         .map_err(|err| CliError::Browser(err.to_string()))?;
-        let mut session = BrowserSession::new(transport);
-        if let Some(url) = &args.url {
-            session
-                .navigate(url)
-                .map_err(|err| CliError::Browser(err.to_string()))?;
-            BrowserRuntime::settle(&mut session);
-        }
-        return drive(session, &args);
+        let mut transport = transport;
+        let result = run_session(&mut transport, &args);
+        return finish(&mut transport, &args, result);
     }
     let path = args.fixture.as_deref().expect("checked in parse");
     let body = std::fs::read_to_string(path).map_err(|err| CliError::Io {
@@ -297,9 +376,15 @@ pub(crate) fn run_command(args: &[String]) -> Result<String, CliError> {
         message: err.to_string(),
     })?;
     if body.trim_start().starts_with('{') {
-        let transport =
+        let mut transport =
             ReplayTransport::parse(&body).map_err(|err| CliError::Browser(err.to_string()))?;
-        return drive(BrowserSession::new(transport), &args);
+        let result = run_session(&mut transport, &args);
+        return finish(&mut transport, &args, result);
+    }
+    if args.load_state.is_some() || args.save_state.is_some() {
+        return Err(CliError::UnknownFlag(
+            "--load-state / --save-state need --cdp or a CDP replay fixture".into(),
+        ));
     }
     // Static manifold: predict once. Executing against a page that cannot
     // change would only measure the mock.
@@ -312,6 +397,48 @@ pub(crate) fn run_command(args: &[String]) -> Result<String, CliError> {
         PolicyKind::Clef => predict_clef(manifold, &args, "clef"),
         PolicyKind::ClefFlash => predict_clef(manifold, &args, "clef-flash"),
         PolicyKind::Dojo => predict_dojo(manifold, &args),
+    }
+}
+
+/// Load state (if asked), navigate (with `--url`), then drive the loop on
+/// a session that borrows `transport`, so the run's end can still save.
+fn run_session<T: CdpTransport>(transport: &mut T, args: &RunArgs) -> Result<String, CliError> {
+    use crate::state_cmd;
+    let mut session = BrowserSession::new(BorrowedTransport(transport));
+    let mut prefix = String::new();
+    let loaded = match &args.load_state {
+        Some(path) => {
+            let (state, line) = state_cmd::load(session.transport_mut(), path)?;
+            prefix.push_str(&line);
+            Some((path, state))
+        }
+        None => None,
+    };
+    if let Some(url) = &args.url {
+        session
+            .navigate(url)
+            .map_err(|err| CliError::Browser(err.to_string()))?;
+        BrowserRuntime::settle(&mut session);
+        if let Some((path, state)) = &loaded {
+            prefix.push_str(&state_cmd::after_navigation(
+                session.transport_mut(),
+                path,
+                state,
+            )?);
+        }
+    }
+    state_cmd::with_prefix(&prefix, drive(session, args))
+}
+
+/// `--save-state`: save when the run ends, successful or not.
+fn finish<T: CdpTransport>(
+    transport: &mut T,
+    args: &RunArgs,
+    result: Result<String, CliError>,
+) -> Result<String, CliError> {
+    match &args.save_state {
+        Some(path) => crate::state_cmd::save_after(transport, path, result),
+        None => result,
     }
 }
 
@@ -453,7 +580,9 @@ fn drive_dojo<T: CdpTransport>(
     session: BrowserSession<T>,
     args: &RunArgs,
 ) -> Result<String, CliError> {
-    let mut builder = AgentBuilder::new(session, dojo_policy(args)?).max_steps(args.max_steps);
+    let mut builder = AgentBuilder::new(session, dojo_policy(args)?)
+        .max_steps(args.max_steps)
+        .guard_policy(args.guard_policy.clone());
     if let Some(secs) = args.wait_secs {
         let polls = u64::from(secs) * 1_000 / ultra_instinct_agent::WAIT_POLL_MS;
         builder = builder
@@ -461,12 +590,12 @@ fn drive_dojo<T: CdpTransport>(
             .max_wait(std::time::Duration::from_secs(u64::from(secs)));
     }
     let mut agent = builder.build(args.goal.clone());
-    let outcome = agent.run();
+    let outcome = run_agent(&mut agent, args);
     let diary_path = write_run_diary(&mut agent, args)?;
     let diary = diary_path
         .as_ref()
         .map(|p| format!("diary: {}\n", p.display()));
-    let mut out = with_diary(render(&agent, &outcome), diary.as_deref())?;
+    let mut out = with_diary(render(&agent, &outcome, args), diary.as_deref())?;
     let policy = agent.into_policy();
     let credited = policy.credited_steps().to_vec();
     let learned = policy.learned_count();
@@ -498,7 +627,9 @@ fn drive_with<T: CdpTransport, P: BrowserPolicy>(
     policy: P,
     args: &RunArgs,
 ) -> Result<String, CliError> {
-    let mut builder = AgentBuilder::new(session, policy).max_steps(args.max_steps);
+    let mut builder = AgentBuilder::new(session, policy)
+        .max_steps(args.max_steps)
+        .guard_policy(args.guard_policy.clone());
     if let Some(secs) = args.wait_secs {
         // One re-check per WAIT_POLL_MS.
         let polls = u64::from(secs) * 1_000 / ultra_instinct_agent::WAIT_POLL_MS;
@@ -524,9 +655,9 @@ fn drive_with<T: CdpTransport, P: BrowserPolicy>(
         ));
     }
     let mut agent = builder.build(args.goal.clone());
-    let outcome = agent.run();
+    let outcome = run_agent(&mut agent, args);
     let diary = write_diary_line(&mut agent, args)?;
-    with_diary(render(&agent, &outcome), diary.as_deref())
+    with_diary(render(&agent, &outcome, args), diary.as_deref())
 }
 
 #[cfg(feature = "jev")]
@@ -650,7 +781,7 @@ fn drive_model_text<B: BrowserRuntime, P: BrowserPolicy>(
     let resolver =
         ultra_instinct_policy::ModelTextResolver::new(model).allow_derived(!args.no_derived_text);
     let mut agent = builder.text_resolver(resolver).build(args.goal.clone());
-    let outcome = agent.run();
+    let outcome = run_agent(&mut agent, args);
     let mut out = format!(
         "text resolver model ({source}) calls={}\n",
         agent.text_resolver().model_calls()
@@ -660,7 +791,7 @@ fn drive_model_text<B: BrowserRuntime, P: BrowserPolicy>(
         out.push_str(&format!("text derived from page: {value:?}\n"));
     }
     let diary = write_diary_line(&mut agent, args)?;
-    match with_diary(render(&agent, &outcome), diary.as_deref()) {
+    match with_diary(render(&agent, &outcome, args), diary.as_deref()) {
         Ok(rendered) => {
             out.push_str(&rendered);
             Ok(out)
@@ -719,21 +850,51 @@ fn with_diary(rendered: Result<String, CliError>, diary: Option<&str>) -> Result
     }
 }
 
-fn render<B, P, T>(agent: &Agent<B, P, T>, outcome: &AgentOutcome) -> Result<String, CliError>
+fn step_line(step: &StepRecord) -> String {
+    format!(
+        "step {} {} {:?} -> {}\n",
+        step.step,
+        step.action_id,
+        step.label,
+        step.verification.as_str()
+    )
+}
+
+/// Run the loop; with `--live-steps` each step line goes to stdout, flushed,
+/// the moment the step is recorded.
+fn run_agent<B, P, T>(agent: &mut Agent<B, P, T>, args: &RunArgs) -> AgentOutcome
+where
+    B: BrowserRuntime,
+    P: BrowserPolicy,
+    T: TextResolver,
+{
+    if !args.live_steps {
+        return agent.run();
+    }
+    agent.run_with(|step| {
+        let mut out = std::io::stdout().lock();
+        // Best effort: a closed stdout must not stop the run.
+        let _ = out.write_all(step_line(step).as_bytes());
+        let _ = out.flush();
+    })
+}
+
+fn render<B, P, T>(
+    agent: &Agent<B, P, T>,
+    outcome: &AgentOutcome,
+    args: &RunArgs,
+) -> Result<String, CliError>
 where
     B: BrowserRuntime,
     P: BrowserPolicy,
     T: TextResolver,
 {
     let mut out = String::new();
-    for step in outcome.steps() {
-        out.push_str(&format!(
-            "step {} {} {:?} -> {}\n",
-            step.step,
-            step.action_id,
-            step.label,
-            step.verification.as_str()
-        ));
+    // Live steps were already printed as they happened.
+    if !args.live_steps {
+        for step in outcome.steps() {
+            out.push_str(&step_line(step));
+        }
     }
     let (kind, why) = match outcome {
         AgentOutcome::Done { reason, .. } => ("done", reason.as_str()),
@@ -749,10 +910,28 @@ where
     if let Some(url) = agent.browser().page().and_then(|page| page.url()) {
         out.push_str(&format!("final_url {url}\n"));
     }
+    if let Some((ultra_instinct_protocol::GuardReason::NeedsConfirm, label)) =
+        agent.policy_refusal()
+    {
+        out.push_str(&format!("rerun with --confirm {}\n", shell_quote(label)));
+    }
     if matches!(outcome, AgentOutcome::Failed { .. }) {
         return Err(CliError::Agent(out));
     }
     Ok(out)
+}
+
+/// `label` in double quotes a POSIX shell reads back verbatim.
+pub(crate) fn shell_quote(label: &str) -> String {
+    let mut out = String::from("\"");
+    for c in label.chars() {
+        if matches!(c, '"' | '\\' | '$' | '`') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('"');
+    out
 }
 
 #[cfg(test)]
@@ -761,6 +940,55 @@ mod tests {
 
     fn a(raw: &[&str]) -> Vec<String> {
         raw.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn policy_flags_repeat_and_url_must_be_allowed() {
+        let parsed = parse(&a(&[
+            "--goal",
+            "buy",
+            "--cdp",
+            "--allow-domain",
+            "shop.example",
+            "--allow-domain=*.cdn.example",
+            "--confirm-press",
+            "Pay*",
+            "--confirm",
+            "Pay $18",
+            "--confirm",
+            "Pay $20",
+        ]))
+        .unwrap();
+        assert_eq!(parsed.guard_policy.allow_domains.len(), 2);
+        assert_eq!(parsed.guard_policy.confirm_press.len(), 1);
+        assert_eq!(parsed.guard_policy.confirmed, ["Pay $18", "Pay $20"]);
+        let err = parse(&a(&[
+            "--goal",
+            "buy",
+            "--cdp",
+            "--url",
+            "https://evil.test/",
+            "--allow-domain",
+            "shop.example",
+        ]))
+        .err()
+        .expect("url off the allowlist");
+        assert!(
+            matches!(&err, CliError::Refused(m) if m.starts_with("domain-not-allowed")),
+            "{err:?}"
+        );
+        assert!(matches!(
+            parse(&a(&[
+                "--goal",
+                "x",
+                "--cdp",
+                "--allow-domain",
+                "https://x.y/"
+            ]))
+            .err(),
+            Some(CliError::Config(_))
+        ));
+        assert_eq!(shell_quote("Pay $18 \"now\""), "\"Pay \\$18 \\\"now\\\"\"");
     }
 
     #[test]
@@ -777,6 +1005,18 @@ mod tests {
             run_command(&a(&["--goal", "Go", "--fixture", "x", "--url", "http://a"])).unwrap_err(),
             CliError::UnknownFlag(_)
         ));
+    }
+
+    #[test]
+    fn launch_is_a_live_source_and_headed_needs_it() {
+        let p = parse(&a(&[
+            "--goal", "Go", "--launch", "--headed", "--url", "http://a",
+        ]))
+        .unwrap();
+        assert!(p.launch && p.headed && p.cdp.is_none());
+        assert!(parse(&a(&["--goal", "Go", "--cdp", "--headed"])).is_err());
+        assert!(parse(&a(&["--goal", "Go", "--fixture", "x", "--launch"])).is_err());
+        assert!(parse(&a(&["--goal", "Go", "--launch=1"])).is_err());
     }
 
     #[test]
@@ -837,6 +1077,20 @@ mod tests {
         assert!(out.contains("TYPE_TEXT:"), "{out}");
         assert!(out.contains("-> success"), "{out}");
         assert!(out.contains("outcome done"), "{out}");
+        // `--live-steps` prints step lines as they happen, so the closing
+        // transcript must not repeat them.
+        let live = run_command(&a(&[
+            "--goal",
+            r#"Type "rust" into Search"#,
+            "--policy",
+            "instinct",
+            "--fixture",
+            path.to_str().unwrap(),
+            "--live-steps",
+        ]))
+        .unwrap();
+        assert!(!live.lines().any(|l| l.starts_with("step ")), "{live}");
+        assert!(live.contains("outcome done"), "{live}");
     }
 
     #[cfg(not(feature = "model-text"))]
@@ -879,6 +1133,30 @@ mod tests {
             matches!(err, CliError::UnknownFlag(ref m) if m.contains("--features jev")),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn live_steps_is_a_bare_switch_off_by_default() {
+        assert!(
+            !parse(&a(&["--goal", "Go", "--fixture", "x"]))
+                .unwrap()
+                .live_steps
+        );
+        assert!(
+            parse(&a(&["--goal", "Go", "--fixture", "x", "--live-steps"]))
+                .unwrap()
+                .live_steps
+        );
+        assert!(parse(&a(&["--goal", "Go", "--fixture", "x", "--live-steps=1"])).is_err());
+        assert!(parse(&a(&[
+            "--goal",
+            "Go",
+            "--fixture",
+            "x",
+            "--live-steps",
+            "--live-steps"
+        ]))
+        .is_err());
     }
 
     #[test]

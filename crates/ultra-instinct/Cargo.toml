@@ -7,10 +7,11 @@ repository.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 description = "ultra-instinct command line"
+# skills/*.md are embedded with include_str! (`aui skills get core`).
+include = ["Cargo.toml", "src/**/*.rs", "skills/*.md", "examples/**/*.rs", "tests/**/*.rs"]
 
 [dependencies]
 ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.0"}
-ultra-instinct-resonance = { path = "../ultra-instinct-resonance", version = "0.1.0"}
 ultra-instinct-browser = { path = "../ultra-instinct-browser", version = "0.1.0"}
 ultra-instinct-guard = { path = "../ultra-instinct-guard", version = "0.1.0"}
 ultra-instinct-observe = { path = "../ultra-instinct-observe", version = "0.1.0"}
@@ -28,11 +29,6 @@ serde_json = "1"
 name = "ultra_instinct"
 path = "src/lib.rs"
 
-[[example]]
-# Manual, opt-in live drive with JEV. Historical; product path is observe/guard/verify.
-name = "live_drive"
-required-features = ["jev"]
-
 [[bin]]
 name = "ultra-instinct"
 path = "src/main.rs"
@@ -45,16 +41,13 @@ path = "src/bin/aui.rs"
 [features]
 default = []
 # Optional System One client. Not part of `cargo build` or `cargo test`.
-jev = ["dep:ultra-instinct-remote", "ultra-instinct-remote/jev", "dep:serde_json", "ultra-instinct-policy/remote"]
+jev = ["dep:ultra-instinct-remote", "ultra-instinct-remote/jev", "ultra-instinct-policy/remote"]
 # Optional Cloudflare Workers AI Clef / Clef-Flash client (same closed remote wire).
 clef = ["jev", "ultra-instinct-remote/clef"]
-# Experimental HGRA matcher (wires into ultra-instinct-mcp / mcp locate+guard).
-hgra = ["ultra-instinct-mcp/hgra"]
 # Model-backed TYPE_TEXT / SELECT payloads via `run --text-model-cmd <program>`;
 # without the flag, jev-ultrafast's TEXT_MODEL_* env drives an HTTP model (OpenAI-compatible,
 # Anthropic, or Gemini wire; TEXT_MODEL_API or the base URL host picks it).
-model-text = ["ultra-instinct-agent/model-text", "ultra-instinct-policy/model-text", "dep:ultra-instinct-remote", "ultra-instinct-remote/model-text", "dep:serde_json"]
+model-text = ["ultra-instinct-agent/model-text", "ultra-instinct-policy/model-text", "dep:ultra-instinct-remote", "ultra-instinct-remote/model-text"]
 
 [dependencies.serde_json]
 version = "1"
-optional = true

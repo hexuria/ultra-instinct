@@ -37,7 +37,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{json, Value};
 
-use ultra_instinct_core::{Action, InteractionManifold, InteractionRegion, Rect, RegionId};
+use ultra_instinct_core::{Action, InteractionManifold, InteractionRegion, Rect, RegionId, Role};
 
 use crate::compact;
 use ultra_instinct_cdp::{CdpError, CdpTransport};
@@ -111,7 +111,18 @@ pub struct BrowserSession<T: CdpTransport> {
 /// with no text (empty, its class words, or a raw colour) takes its
 /// background's name ("orange", "orange color"); a shape whose markup names
 /// no fill takes its computed fill's ("red circle"). `None` keeps the label.
+/// Paint never names a form field (a white text box is not "white": its
+/// label names it, or nothing does) or a drawing surface (named by its
+/// markup, or not at all when display-only).
 fn painted_label(element: &extract::DomElement, node: &compact::CompactNode) -> Option<String> {
+    if element.surface
+        || matches!(
+            element.role,
+            Role::TextField | Role::ComboBox | Role::Checkbox | Role::Slider | Role::ListBox
+        )
+    {
+        return None;
+    }
     if element.svg_shape {
         let fill = node.fill.as_deref().and_then(crate::color::name)?;
         return element
@@ -1183,6 +1194,20 @@ impl<T: CdpTransport> BrowserSession<T> {
             }
             Err(other) => Err(other),
         }
+    }
+
+    /// `(nodeId, backendNodeId)` the observed region `id` is bound to, for a
+    /// host call that names the node (`DOM.focus`, `DOM.getAttributes`).
+    pub fn node_ids(&self, id: &RegionId) -> Result<(Option<i64>, Option<i64>), BrowserError> {
+        let binding = self.binding_for(id)?;
+        Ok((binding.dom_node_id, binding.backend_node_id))
+    }
+
+    /// One raw CDP call that may change the page (key input, focus, a
+    /// dialog answer, reload): the stored observation becomes stale.
+    pub fn page_input(&mut self, method: &str, params_json: &str) -> Result<String, BrowserError> {
+        self.stale = true;
+        self.call(method, params_json)
     }
 
     /// Read `(value, selected text)` without mutation; `None` if absent.

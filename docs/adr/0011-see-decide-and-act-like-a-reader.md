@@ -35,12 +35,22 @@ benchmark name, task name, or page class appears in `crates/`.
      own record, not a guess.
    - The compact walk collects evidence for every plain box, since whether a
      box has a listener is known only after the walk.
+   - A listener on an element that holds other click targets (a dialog that
+     raises itself on mousedown, a list delegating to its rows) is
+     bookkeeping, not a target: when its only click evidence is the
+     listener, its CLICK and points go, its children stay.
+   - A radio toggles like a checkbox (`Role::Checkbox`), a range slides
+     (`Role::Slider`), and `reset` / `image` inputs are buttons — radios
+     take no text and stop duplicating the AX region.
    - An icon-only control is named by its `title`, `alt`, or the words of
      its class or id (`fa fa-trash` → "trash", layout words dropped). Such a
      name carries its row's rendered text: "more · Conner @a 7h ago".
    - Label text skips subtrees that are not rendered (`display: none`).
    - A `canvas` or `svg` root claims `point` only with click evidence: a
-     listener, an `onclick` / `tabindex`, or a pointer cursor it sets itself.
+     listener, an `onclick` / `tabindex`, or a pointer cursor it sets
+     itself. Without that evidence it is display-only and gets no fallback
+     name either ("canvas" / "drawing" are claimed only by an interactive
+     surface), so it adds no near text around the targets beside it.
    - Targets that share a label get near text too; text several regions
      share is never near text.
    - Near text that repeats the goal (three or more words, four in five of
@@ -114,7 +124,9 @@ benchmark name, task name, or page class appears in `crates/`.
      a raw colour; a shape whose markup names no fill) takes its computed
      colour's name: the nearest basic keyword ("orange", "purple"), else a
      hue family with "light" / "dark" ("light green"). The compact walk reads
-     the computed `background-color` and `fill`.
+     the computed `background-color` and `fill`. Paint never names a form
+     field (a white text box is named by its label, or not at all, and its
+     near text says what it is) or a drawing surface.
    - Polygons say how many corners they have ("green 3-corner polygon").
    - A target whose row text is the goal sentence is flagged
      `in_instruction` in the request: a sample swatch in the instruction
@@ -144,6 +156,10 @@ benchmark name, task name, or page class appears in `crates/`.
 - Owners:
   - `ultra-instinct-browser` extract tests: listener boxes, markup names, row context,
     unrendered text, canvas evidence, snapshot parsing.
+  - `ultra-instinct-browser` extract tests: a listener holding a target
+    loses its own Click and points, a listener holding nothing keeps
+    them; `dom_role` / `ax_role` for radio and range; a bare svg or
+    canvas without click evidence is named `""`.
   - `ultra-instinct-browser` observe tests: a listener box and canvas end to end;
     `tests/call_budget.rs`.
   - `ultra-instinct-core` action-space tests: near text for shared labels.
@@ -163,6 +179,7 @@ benchmark name, task name, or page class appears in `crates/`.
     verification.
   - `ultra-instinct-policy` text tests: date / time / month value formats.
   - `ultra-instinct-remote` typesafe tests: the compact drag block, self pairs.
-  - `ultra-instinct-browser` colour tests and the painted-label observe test.
+  - `ultra-instinct-browser` colour tests and the painted-label observe tests
+    (`paint_never_names_a_form_field_or_a_drawing_surface`).
   - `ultra-instinct-remote` typesafe tests: when a second opinion is asked, and that
     advice must name an offered action.

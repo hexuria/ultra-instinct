@@ -10,9 +10,6 @@
 //! is [`WebSocketTransport::connect`]. Tests pass a connector that returns a
 //! [`ultra_instinct_browser::ReplayTransport`], so the live-session paths (reuse,
 //! stale observation, eviction, a dropped session) run without Chrome.
-//!
-//! The server also remembers the last few locate calls so a repeated
-//! identical query on an unchanged page can be reported (see `repeat`).
 
 use std::collections::BTreeMap;
 
@@ -22,19 +19,26 @@ use ultra_instinct_browser::{
 };
 use ultra_instinct_cdp::CdpEvent;
 use ultra_instinct_core::InteractionManifold;
-use ultra_instinct_guard::TicketLedger;
+use ultra_instinct_guard::{Policy, TicketLedger};
 use ultra_instinct_observe::history::{
     detect, HistoryError, SignedSnapshot, SnapshotId, SnapshotRing, StateSignature, TemporalSignal,
 };
 
 use crate::error::ToolError;
-use crate::repeat::{LocateRepeats, QueryKey};
 
 /// Live sessions kept at once. Opening another drops the oldest key.
 pub const MAX_LIVE_SESSIONS: usize = 4;
 
 /// Buffered CDP events kept per session key; oldest drop past this.
 const MAX_BUFFERED_EVENTS: usize = 2048;
+
+/// Comma list of hosts (`shop.example`, `*.shop.example`) the `browser_*`
+/// tools may navigate to and give input on. Read by [`Server::new`].
+pub const ENV_ALLOW_DOMAINS: &str = "ULTRA_INSTINCT_ALLOW_DOMAINS";
+
+/// Comma list of label globs (`Pay*`) whose CLICK-family press needs a
+/// `confirm` argument naming the label. Read by [`Server::new`].
+pub const ENV_CONFIRM_PRESS: &str = "ULTRA_INSTINCT_CONFIRM_PRESS";
 
 pub(crate) struct Snapshot {
     pub(crate) origin: String,
@@ -52,7 +56,6 @@ pub struct Server {
     sessions: BTreeMap<String, LiveSession>,
     session_order: Vec<String>,
     history: SnapshotRing<Snapshot>,
-    locate_repeats: LocateRepeats,
     /// Endpoint → page-websocket url of the tab `browser_*` tools drive.
     tab_binding: BTreeMap<String, String>,
     /// Session key → one-shot ticket ledger for ticketed browser inputs.
@@ -63,6 +66,13 @@ pub struct Server {
     dropped: BTreeMap<String, u64>,
     /// Session key → diagnostic domains already enabled (bit0 console, bit1 network).
     domains: BTreeMap<String, u8>,
+    /// Session key → HAR tap and blocked URLs (`browser_env`).
+    pub(crate) env: crate::browser_env::EnvState,
+    /// Session key → the JavaScript dialog open on that tab (`browser_dialog`).
+    dialogs: BTreeMap<String, crate::browser_extra::Dialog>,
+    /// The user's policy for navigation and presses, or why the configured
+    /// one is invalid (then every navigate and press refuses).
+    policy: Result<Policy, String>,
 }
 
 impl SignedSnapshot for Snapshot {
@@ -76,12 +86,37 @@ impl SignedSnapshot for Snapshot {
 }
 
 impl Server {
-    /// A server whose `cdp` endpoints are live websockets.
+    /// A server whose `cdp` endpoints are live websockets, under the policy
+    /// in [`ENV_ALLOW_DOMAINS`] / [`ENV_CONFIRM_PRESS`] (unset: allow all).
     pub fn new() -> Self {
         Self::with_connector(|url| {
             WebSocketTransport::connect(url)
                 .map(|transport| Box::new(transport) as Box<dyn CdpTransport>)
         })
+        .with_env_policy()
+    }
+
+    /// This server under the policy in [`ENV_ALLOW_DOMAINS`] /
+    /// [`ENV_CONFIRM_PRESS`] (unset: allow all; unparsable: every call that
+    /// needs the policy fails with the parse error).
+    pub fn with_env_policy(mut self) -> Self {
+        let var = |name: &str| std::env::var(name).unwrap_or_default();
+        self.policy = Policy::from_lists(&var(ENV_ALLOW_DOMAINS), &var(ENV_CONFIRM_PRESS))
+            .map_err(|err| format!("{ENV_ALLOW_DOMAINS} / {ENV_CONFIRM_PRESS}: {err}"));
+        self
+    }
+
+    /// This server under `policy` instead of the environment's.
+    pub fn with_policy(mut self, policy: Policy) -> Self {
+        self.policy = Ok(policy);
+        self
+    }
+
+    /// The policy navigation and presses run under.
+    pub(crate) fn policy(&self) -> Result<&Policy, ToolError> {
+        self.policy
+            .as_ref()
+            .map_err(|err| ToolError::InvalidArguments(err.clone()))
     }
 
     /// A server whose `cdp` endpoints are opened by `connector`. Used by the
@@ -94,12 +129,14 @@ impl Server {
             sessions: BTreeMap::new(),
             session_order: Vec::new(),
             history: SnapshotRing::default(),
-            locate_repeats: LocateRepeats::default(),
             tab_binding: BTreeMap::new(),
             ledgers: BTreeMap::new(),
             events: BTreeMap::new(),
             dropped: BTreeMap::new(),
             domains: BTreeMap::new(),
+            env: Default::default(),
+            dialogs: BTreeMap::new(),
+            policy: Ok(Policy::default()),
         }
     }
 
@@ -148,18 +185,6 @@ impl Server {
         after: SnapshotId,
     ) -> Result<Vec<TemporalSignal>, HistoryError> {
         detect(&self.history, before, after)
-    }
-
-    /// Count this locate call among the recent ones with the same origin,
-    /// page signature, and normalized query. Data only. This does not retry.
-    pub(crate) fn record_locate(
-        &mut self,
-        origin: &str,
-        manifold: &InteractionManifold,
-        query: QueryKey,
-    ) -> usize {
-        self.locate_repeats
-            .record(origin, StateSignature::from_manifold(manifold), query)
     }
 
     /// Newest snapshot recorded for `origin`, if it is still in the ring.
@@ -212,6 +237,8 @@ impl Server {
         self.events.remove(url);
         self.domains.remove(url);
         self.dropped.remove(url);
+        self.env.remove(url);
+        self.dialogs.remove(url);
     }
 
     /// Page-websocket url `browser_*` tools drive for `endpoint`, when bound.
@@ -242,6 +269,7 @@ impl Server {
 
     /// Buffer events drained from a session's transport under `key`.
     pub(crate) fn push_events(&mut self, key: &str, events: Vec<CdpEvent>) {
+        self.env.tee(key, &events);
         let buffer = self.events.entry(key.to_owned()).or_default();
         buffer.extend(events);
         if buffer.len() > MAX_BUFFERED_EVENTS {
@@ -264,6 +292,19 @@ impl Server {
     /// Diagnostic domains already enabled for `key` (bit0 console, bit1 network).
     pub(crate) fn enabled_domains(&self, key: &str) -> u8 {
         self.domains.get(key).copied().unwrap_or(0)
+    }
+
+    /// The JavaScript dialog open on `key`'s tab, when one is.
+    pub(crate) fn dialog(&self, key: &str) -> Option<&crate::browser_extra::Dialog> {
+        self.dialogs.get(key)
+    }
+
+    /// Record (`Some`) or clear (`None`) the dialog open on `key`'s tab.
+    pub(crate) fn set_dialog(&mut self, key: &str, dialog: Option<crate::browser_extra::Dialog>) {
+        match dialog {
+            Some(dialog) => self.dialogs.insert(key.to_owned(), dialog),
+            None => self.dialogs.remove(key),
+        };
     }
 
     /// Mark a diagnostic domain bit as enabled for `key`.

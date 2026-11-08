@@ -1,8 +1,7 @@
 //! stdio MCP server for ultra-instinct.
 //!
-//! Product tools: observe, guard, verify. Locate, inspect, and diff remain as
-//! transitional helpers. `act` is accepted as a deprecated alias of `guard` and
-//! never clicks.
+//! Product tools: observe, guard, verify. The locate, inspect, act and diff
+//! helpers are removed (ADR 0012).
 //!
 //! `browser_*` tools are the browser-use-compatible host surface (navigate,
 //! get_state, click, type, scroll, screenshot, tabs). Target-bound input still
@@ -11,37 +10,25 @@
 
 #![forbid(unsafe_code)]
 
+mod browser_env;
 mod error;
-mod repeat;
+mod page_text;
 mod rpc;
 mod server;
 mod tools;
 
 pub use error::ToolError;
-pub use repeat::{REPEAT_THRESHOLD, REPEAT_WINDOW};
 pub use rpc::{handle_line, serve_stdio};
-pub use server::{CdpConnector, Server, MAX_LIVE_SESSIONS};
+pub use server::{CdpConnector, Server, ENV_ALLOW_DOMAINS, ENV_CONFIRM_PRESS, MAX_LIVE_SESSIONS};
 pub use tools::call_tool;
 
 pub const TOOL_OBSERVE: &str = "observe";
-pub const TOOL_LOCATE: &str = "locate";
-pub const TOOL_INSPECT: &str = "inspect";
 pub const TOOL_GUARD: &str = "guard";
-/// Deprecated alias of [`TOOL_GUARD`]. Never clicks. Kept only because the
-/// historical bench arms (A5/A6, `bench/arms/`) call it over MCP; see ADR 0003.
-#[deprecated(since = "0.1.0", note = "use TOOL_GUARD; `act` never clicks")]
-pub const TOOL_ACT: &str = "act";
-pub const TOOL_DIFF: &str = "diff";
 pub const TOOL_VERIFY: &str = "verify";
 
-#[allow(deprecated)]
-pub const TOOLS: [&str; 44] = [
+pub const TOOLS: [&str; 56] = [
     TOOL_OBSERVE,
-    TOOL_LOCATE,
-    TOOL_INSPECT,
     TOOL_GUARD,
-    TOOL_ACT,
-    TOOL_DIFF,
     TOOL_VERIFY,
     "browser_navigate",
     "browser_new_tab",
@@ -80,23 +67,45 @@ pub const TOOLS: [&str; 44] = [
     "browser_extract_content",
     "browser_read_console",
     "browser_read_network",
+    "browser_set",
+    "browser_download",
+    "browser_network",
+    "browser_state_save",
+    "browser_state_load",
+    "browser_cookies",
+    "browser_storage",
+    "browser_dialog",
+    "browser_go_forward",
+    "browser_reload",
+    "browser_check",
+    "browser_focus",
+    "browser_keyboard",
+    "browser_get",
+    "browser_is",
+    "browser_count",
 ];
 
 pub const PRODUCT_TOOLS: [&str; 3] = [TOOL_OBSERVE, TOOL_GUARD, TOOL_VERIFY];
 
+mod browser_extra;
+mod browser_state;
 mod browser_tools;
+pub use browser_env::ENV_TOOLS;
+pub use browser_extra::EXTRA_TOOLS;
+pub use browser_state::STATE_TOOLS;
 pub use browser_tools::BROWSER_TOOLS;
 
-/// Tool name for a legacy protocol phase.
+/// Tool name for a legacy protocol phase. The locate, inspect and diff tools
+/// are removed, so their phases map onto the product tool that now covers
+/// them: Locate and Inspect read the page with `observe` (regions carry id,
+/// label, parent and state), Act is `guard`, and Diff is `verify` with
+/// `before_snapshot` / `after_snapshot`.
 pub fn tool_for_phase(phase: ultra_instinct_protocol::LoopPhase) -> &'static str {
     use ultra_instinct_protocol::LoopPhase;
     match phase {
-        LoopPhase::Observe => TOOL_OBSERVE,
-        LoopPhase::Locate => TOOL_LOCATE,
-        LoopPhase::Inspect => TOOL_INSPECT,
+        LoopPhase::Observe | LoopPhase::Locate | LoopPhase::Inspect => TOOL_OBSERVE,
         LoopPhase::Act => TOOL_GUARD,
-        LoopPhase::Diff => TOOL_DIFF,
-        LoopPhase::Verify => TOOL_VERIFY,
+        LoopPhase::Diff | LoopPhase::Verify => TOOL_VERIFY,
     }
 }
 
@@ -115,7 +124,14 @@ mod tests {
         assert!(!PRODUCT_TOOLS.contains(&"act"));
         // The `browser_*` host surface sits beside the firewall tools; it
         // never enters PRODUCT_TOOLS.
-        for name in crate::browser_tools::BROWSER_TOOLS {
+        for name in crate::browser_tools::BROWSER_TOOLS
+            .into_iter()
+            .chain(crate::browser_extra::EXTRA_TOOLS)
+        {
+            assert!(TOOLS.contains(&name));
+            assert!(!PRODUCT_TOOLS.contains(&name));
+        }
+        for name in crate::browser_env::ENV_TOOLS {
             assert!(TOOLS.contains(&name));
             assert!(!PRODUCT_TOOLS.contains(&name));
         }
@@ -127,6 +143,13 @@ mod tests {
         assert_eq!(names, PRODUCT_TOOLS);
         assert_eq!(tool_for_phase(LoopPhase::Act), TOOL_GUARD);
         assert_eq!(tool_for_phase(LoopPhase::Observe), TOOL_OBSERVE);
+        assert_eq!(tool_for_phase(LoopPhase::Locate), TOOL_OBSERVE);
+        assert_eq!(tool_for_phase(LoopPhase::Inspect), TOOL_OBSERVE);
+        assert_eq!(tool_for_phase(LoopPhase::Diff), TOOL_VERIFY);
+        assert_eq!(tool_for_phase(LoopPhase::Verify), TOOL_VERIFY);
+        for removed in ["locate", "inspect", "act", "diff"] {
+            assert!(!TOOLS.contains(&removed), "{removed}");
+        }
         let _ = LOOP_ORDER;
         let _ = FirewallPhase::Guard;
     }

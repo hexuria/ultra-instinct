@@ -29,6 +29,14 @@ impl CdpTransport for Logged {
     }
 }
 
+/// The logged CDP methods minus `Page.enable`, which `browser_extra` sends
+/// once per tab for dialog tracking before any page-driving call.
+fn page_driving(log: &[String]) -> Vec<&String> {
+    log.iter()
+        .filter(|method| method.as_str() != "Page.enable")
+        .collect()
+}
+
 fn server(script: ScriptBuilder) -> (Server, Rc<RefCell<Vec<String>>>) {
     let log = Rc::new(RefCell::new(Vec::new()));
     let shared = Rc::clone(&log);
@@ -89,12 +97,80 @@ fn navigate_sends_page_navigate() {
 #[test]
 fn get_state_indexes_elements_in_reading_order() {
     let (mut server, _log) = server(ScriptBuilder::new().observe_compact(&page()));
-    let out = call(&mut server, "browser_get_state", json!({"cdp": CDP}));
+    let out = call(
+        &mut server,
+        "browser_get_state",
+        json!({"cdp": CDP, "format": "json"}),
+    );
     let elements = out["elements"].as_array().expect("elements");
     assert_eq!(elements.len(), 3, "{elements:?}");
     assert_eq!(elements[0]["label"], "Email");
     assert_eq!(elements[1]["label"], "Sign in");
     assert_eq!(elements[2]["label"], "Country");
+}
+
+/// The default state is one line per control, in the same order and with
+/// the same 1-based refs the index-taking tools accept.
+#[test]
+fn get_state_text_is_one_line_per_control() {
+    let (mut server, _log) = server(ScriptBuilder::new().observe_compact(&page()));
+    let out = call(&mut server, "browser_get_state", json!({"cdp": CDP}));
+    assert_eq!(out["format"], "text", "{out}");
+    let text = out["text"].as_str().expect("text");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines[0], "Form  http://127.0.0.1/form", "{text}");
+    assert!(lines[1].starts_with("@e1 textbox \"Email\""), "{text}");
+    assert!(lines[2].starts_with("@e2 button \"Sign in\""), "{text}");
+    assert!(lines[3].starts_with("@e3 combobox \"Country\""), "{text}");
+    assert!(lines[3].contains("selected=\"Canada\""), "{text}");
+    assert!(lines[4].starts_with("3 controls · snapshot "), "{text}");
+    assert_eq!(lines.len(), 5, "{text}");
+}
+
+#[test]
+fn get_state_rejects_an_unknown_format() {
+    let (mut server, _log) = server(ScriptBuilder::new());
+    let err = server
+        .call_tool("browser_get_state", &json!({"cdp": CDP, "format": "yaml"}))
+        .expect_err("unknown format");
+    assert!(matches!(err, ToolError::InvalidArguments(_)), "{err:?}");
+}
+
+/// `index` is the same 1-based index as an integer, a digit string, or the
+/// `@eN` ref the text state prints.
+#[test]
+fn index_accepts_integer_digit_string_and_at_e_ref() {
+    for index in [json!(2), json!("2"), json!("@e2")] {
+        let (mut server, log) = server(
+            ScriptBuilder::new()
+                .observe_compact(&page())
+                .observe_compact(&page())
+                .dom_click(11),
+        );
+        let out = call(
+            &mut server,
+            "browser_click",
+            json!({"cdp": CDP, "index": index}),
+        );
+        assert_eq!(out["acted"], "click", "{index}: {out}");
+        assert!(log.borrow().iter().any(|m| m == "DOM.resolveNode"));
+    }
+    for bad in [json!("e2"), json!("@x2"), json!("two"), json!(-1)] {
+        let (mut server, log) = server(ScriptBuilder::new().observe_compact(&page()));
+        let err = server
+            .call_tool("browser_click", &json!({"cdp": CDP, "index": bad}))
+            .expect_err("bad index");
+        assert!(
+            matches!(err, ToolError::InvalidArguments(_)),
+            "{bad}: {err:?}"
+        );
+        // `Page.enable` (dialog tracking, browser_extra) may run first; it
+        // neither observes nor presses.
+        assert!(
+            page_driving(&log.borrow()).is_empty(),
+            "{bad}: nothing observed or pressed"
+        );
+    }
 }
 
 #[test]
@@ -536,7 +612,11 @@ fn go_back_uses_current_index_not_entry_id() {
 #[test]
 fn get_state_reports_url_and_title_after_observe() {
     let (mut server, _log) = server(ScriptBuilder::new().observe_compact(&page()));
-    let out = call(&mut server, "browser_get_state", json!({"cdp": CDP}));
+    let out = call(
+        &mut server,
+        "browser_get_state",
+        json!({"cdp": CDP, "format": "json"}),
+    );
     assert_eq!(out["url"], "http://127.0.0.1/form", "{out}");
     assert_eq!(out["title"], "Form", "{out}");
 }
@@ -610,4 +690,314 @@ fn unwritable_artifact_path_is_an_error() {
         )
         .expect_err("cannot write there");
     assert!(matches!(err, ToolError::InvalidArguments(_)), "{err:?}");
+}
+
+/// A conditional wait stops at the first look where the URL holds.
+#[test]
+fn wait_for_url_stops_on_the_first_look_that_holds() {
+    let (mut server, _log) = server(ScriptBuilder::new().observe_compact(&page()));
+    let out = call(
+        &mut server,
+        "browser_wait",
+        json!({"cdp": CDP, "url": "/form"}),
+    );
+    assert_eq!(out["seen"], true, "{out}");
+    assert_eq!(out["looks"], 1, "{out}");
+    assert!(out["after_ms"].as_u64().is_some(), "{out}");
+}
+
+/// A control that shows up on the second observe ends the wait there.
+#[test]
+fn wait_for_control_observes_again_until_it_appears() {
+    let before = PageSpec::of(
+        &[Control::button(
+            11,
+            101,
+            "Sign in",
+            (20.0, 80.0, 120.0, 28.0),
+        )],
+        "http://127.0.0.1/form",
+        "Form",
+    );
+    let (mut server, _log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&before)
+            .observe_compact(&page()),
+    );
+    let out = call(
+        &mut server,
+        "browser_wait",
+        json!({"cdp": CDP, "control": "country", "seconds": 5}),
+    );
+    assert_eq!(out["seen"], true, "{out}");
+    assert_eq!(out["looks"], 2, "{out}");
+}
+
+/// `text` reads the page text after the observe; it is matched
+/// case-insensitively.
+#[test]
+fn wait_for_text_reads_page_text() {
+    let (mut server, log) = server(ScriptBuilder::new().observe_compact(&page()).call(
+        "Runtime.evaluate",
+        json!({"result": {"type": "string", "value": "Welcome back, Kid"}}),
+    ));
+    let out = call(
+        &mut server,
+        "browser_wait",
+        json!({"cdp": CDP, "text": "welcome BACK"}),
+    );
+    assert_eq!(out["seen"], true, "{out}");
+    assert!(log.borrow().iter().any(|m| m == "Runtime.evaluate"));
+}
+
+/// Out of time: `seen: false` with the last URL, and nothing was pressed.
+#[test]
+fn wait_timeout_reports_not_seen_and_the_last_url() {
+    let (mut server, log) = server(ScriptBuilder::new().observe_compact(&page()));
+    let out = call(
+        &mut server,
+        "browser_wait",
+        json!({"cdp": CDP, "url": "/dashboard", "seconds": 0}),
+    );
+    assert_eq!(out["seen"], false, "{out}");
+    assert_eq!(out["url"], "http://127.0.0.1/form", "{out}");
+    assert_eq!(out["looks"], 1, "{out}");
+    assert!(log
+        .borrow()
+        .iter()
+        .all(|m| m != "Input.dispatchMouseEvent" && m != "DOM.resolveNode"));
+}
+
+/// `gone` holds once no control has exactly that label: "Sign" (a
+/// substring) never blocks it, "  SIGN   in " (same label) does until the
+/// button leaves.
+#[test]
+fn wait_for_gone_observes_until_the_exact_label_leaves() {
+    let after = PageSpec::of(
+        &[Control::text_field(
+            10,
+            100,
+            "Email",
+            (20.0, 20.0, 300.0, 28.0),
+        )],
+        "http://127.0.0.1/form",
+        "Form",
+    );
+    let (mut srv, _log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&after),
+    );
+    let out = call(
+        &mut srv,
+        "browser_wait",
+        json!({"cdp": CDP, "gone": "  SIGN   in ", "seconds": 5}),
+    );
+    assert_eq!(out["seen"], true, "{out}");
+    assert_eq!(out["looks"], 2, "{out}");
+
+    let (mut srv, _log) = server(ScriptBuilder::new().observe_compact(&page()));
+    let out = call(
+        &mut srv,
+        "browser_wait",
+        json!({"cdp": CDP, "gone": "Sign"}),
+    );
+    assert_eq!(out["seen"], true, "a substring is not the label: {out}");
+    assert_eq!(out["looks"], 1, "{out}");
+}
+
+/// `load` reads `document.readyState` after each observe: `domcontentloaded`
+/// holds at interactive, `load` waits for complete.
+#[test]
+fn wait_for_load_reads_ready_state() {
+    let (mut srv, log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .ready_state("loading")
+            .observe_compact(&page())
+            .ready_state("interactive"),
+    );
+    let out = call(
+        &mut srv,
+        "browser_wait",
+        json!({"cdp": CDP, "load": "domcontentloaded", "seconds": 5}),
+    );
+    assert_eq!(out["seen"], true, "{out}");
+    assert_eq!(out["looks"], 2, "{out}");
+    assert!(log.borrow().iter().any(|m| m == "Runtime.evaluate"));
+
+    let (mut srv, _log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .ready_state("interactive")
+            .observe_compact(&page())
+            .ready_state("complete"),
+    );
+    let out = call(
+        &mut srv,
+        "browser_wait",
+        json!({"cdp": CDP, "load": "load", "seconds": 5}),
+    );
+    assert_eq!(out["seen"], true, "{out}");
+    assert_eq!(out["looks"], 2, "{out}");
+}
+
+/// A `load` other than domcontentloaded|load is refused before any CDP call.
+#[test]
+fn wait_rejects_an_unknown_load_state() {
+    let (mut server, log) = server(ScriptBuilder::new());
+    for load in ["networkidle", ""] {
+        let err = server
+            .call_tool("browser_wait", &json!({"cdp": CDP, "load": load}))
+            .expect_err("unknown load state");
+        assert!(matches!(err, ToolError::InvalidArguments(_)), "{err:?}");
+    }
+    let err = server
+        .call_tool("browser_wait", &json!({"cdp": CDP, "gone": " "}))
+        .expect_err("empty gone");
+    assert!(matches!(err, ToolError::InvalidArguments(_)), "{err:?}");
+    assert!(log.borrow().is_empty());
+}
+
+/// No condition keeps the plain sleep and never connects.
+#[test]
+fn wait_without_a_condition_only_sleeps() {
+    let (mut server, log) = server(ScriptBuilder::new());
+    let out = call(&mut server, "browser_wait", json!({"seconds": 0}));
+    assert_eq!(out, json!({"waited": 0.0}));
+    assert!(log.borrow().is_empty());
+}
+
+fn policy(allow: &str, confirm: &str) -> ultra_instinct_guard::Policy {
+    ultra_instinct_guard::Policy::from_lists(allow, confirm).unwrap()
+}
+
+/// `browser_navigate` checks the URL against the allowlist before any CDP
+/// call; an allowed host navigates as before.
+#[test]
+fn navigate_off_the_allowlist_is_refused_before_cdp() {
+    let (server_, log) =
+        server(ScriptBuilder::new().call("Page.navigate", json!({"frameId": "F1"})));
+    let mut server = server_.with_policy(policy("127.0.0.1, *.shop.example", ""));
+    for url in ["https://evil.test/", "https://shop.example/"] {
+        let err = server
+            .call_tool("browser_navigate", &json!({"cdp": CDP, "url": url}))
+            .expect_err("off the allowlist");
+        assert!(
+            matches!(&err, ToolError::TicketInvalid(m) if m.starts_with("domain-not-allowed")),
+            "{url}: {err:?}"
+        );
+    }
+    assert!(
+        page_driving(&log.borrow()).is_empty(),
+        "no CDP call but Page.enable: {:?}",
+        log.borrow()
+    );
+    let out = call(
+        &mut server,
+        "browser_navigate",
+        json!({"cdp": CDP, "url": "http://127.0.0.1/next"}),
+    );
+    assert_eq!(out["navigated"], "http://127.0.0.1/next", "{out}");
+}
+
+/// A click on a label that matches a confirm pattern refuses with the
+/// label (no press); `confirm` naming that label presses it.
+#[test]
+fn click_needs_confirm_until_confirm_names_the_label() {
+    let (server_, log) = server(ScriptBuilder::new().observe_compact(&page()));
+    let mut refusing = server_.with_policy(policy("", "sign*"));
+    let err = refusing
+        .call_tool("browser_click", &json!({"cdp": CDP, "index": "@e2"}))
+        .expect_err("needs confirm");
+    assert_eq!(
+        err,
+        ToolError::TicketInvalid("needs-confirm: \"Sign in\"".into())
+    );
+    assert!(log.borrow().iter().all(|m| m != "DOM.resolveNode"));
+
+    let (server_, log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&page())
+            .dom_click(11),
+    );
+    let mut server = server_.with_policy(policy("", "sign*"));
+    let out = call(
+        &mut server,
+        "browser_click",
+        json!({"cdp": CDP, "index": 2, "confirm": "sign in"}),
+    );
+    assert_eq!(out["acted"], "click", "{out}");
+    assert!(out["ticket"].as_u64().is_some(), "{out}");
+    assert!(log.borrow().iter().any(|m| m == "DOM.resolveNode"));
+}
+
+/// The consume_ticket_once press path (double click) checks the page URL
+/// too, and refuses before any mouse event.
+#[test]
+fn double_click_on_a_page_off_the_allowlist_is_refused() {
+    let (server_, log) = server(ScriptBuilder::new().observe_compact(&page()));
+    let mut server = server_.with_policy(policy("shop.example", ""));
+    let err = server
+        .call_tool("browser_double_click", &json!({"cdp": CDP, "index": 2}))
+        .expect_err("off the allowlist");
+    assert_eq!(
+        err,
+        ToolError::TicketInvalid("domain-not-allowed: 127.0.0.1".into())
+    );
+    assert!(log.borrow().iter().all(|m| m != "Input.dispatchMouseEvent"));
+}
+
+/// Typing is not a press: a confirm pattern on its label does not refuse.
+#[test]
+fn confirm_patterns_do_not_refuse_typing() {
+    let (server_, _log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&page())
+            .dom_input(10),
+    );
+    let mut server = server_.with_policy(policy("127.0.0.1", "email"));
+    let out = call(
+        &mut server,
+        "browser_type",
+        json!({"cdp": CDP, "index": 1, "text": "kid@example.com"}),
+    );
+    assert_eq!(out["acted"], "type", "{out}");
+}
+
+/// `verify: true` observes again after the press and names the effect.
+#[test]
+fn click_with_verify_reports_the_verification() {
+    let (mut server, _log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&page())
+            .dom_click(11)
+            .ready_state("complete")
+            .observe_compact(&page()),
+    );
+    let out = call(
+        &mut server,
+        "browser_click",
+        json!({"cdp": CDP, "index": "@e2", "verify": true}),
+    );
+    assert_eq!(out["verification"], "dispatched-no-visible-change", "{out}");
+    assert!(out["ticket"].as_u64().is_some(), "{out}");
+}
+
+/// `browser_send_key` with an index is a ticketed KEY: a target that takes
+/// no keys refuses before any key event.
+#[test]
+fn send_key_with_an_index_is_gated() {
+    let (mut server, log) = server(ScriptBuilder::new().observe_compact(&page()));
+    let err = server
+        .call_tool(
+            "browser_send_key",
+            &json!({"cdp": CDP, "index": 2, "key": "Enter"}),
+        )
+        .expect_err("a button takes no keys");
+    assert_eq!(err, ToolError::TicketInvalid("unsupported-action".into()));
+    assert!(log.borrow().iter().all(|m| m != "Input.dispatchKeyEvent"));
 }

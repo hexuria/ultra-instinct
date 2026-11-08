@@ -1,58 +1,39 @@
-//! Argument parsing and fixture locate for the `ultra-instinct` binary.
+//! Argument parsing for the `ultra-instinct` binary.
 //!
 //! The library is the tested surface. The binary prints this module's stdout
 //! and exits non-zero on [`CliError`].
 
 #![forbid(unsafe_code)]
 
-use ultra_instinct_core::{Action, LocateQuery, Role, Zone};
-use ultra_instinct_resonance::{RegionMatcher, WeightedMatcher};
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CliError {
     UnknownCommand(String),
-    MissingFixture,
     MissingValue(&'static str),
     UnknownFlag(String),
     DuplicateFlag(&'static str),
     UnknownRole(String),
-    UnknownPosition(String),
     UnknownAction(String),
-    BadDims(String),
     EmptyText,
     Io {
         path: String,
         message: String,
     },
     Fixture(String),
-    Locate(String),
+    /// `guard` rejected the request (for example a removed `near` field).
+    Guard(String),
     ExpectedTextMissing {
         expected: String,
     },
     RegionStillPresent {
         id: String,
     },
-    ConfidenceBelowThreshold {
-        confidence_millis: i32,
-        minimum_millis: i32,
-    },
-    AmbiguousTarget {
-        top_millis: i32,
-        runner_up_millis: i32,
-        margin_millis: i32,
-        minimum_margin_millis: i32,
-    },
     RunnerUpNeedsConfidence,
     NonFiniteConfidence,
-    DimsRequireHgra,
     MissingSource,
     Browser(String),
     /// Missing or invalid environment configuration (e.g. `TYPESAFE_API_KEY`).
     Config(String),
-    UnknownMatcher(String),
-    MissingRegion,
-    MissingVerb,
     BadConfidence(String),
     MissingExpect,
     UnknownRegion(String),
@@ -83,55 +64,36 @@ pub enum CliError {
         flag: &'static str,
         value: String,
     },
+    /// The guard or the user's policy refused (shell verbs, `run --url`).
+    /// The message is the whole line to show.
+    Refused(String),
+    /// `aui batch` with a failed command. The body is the whole stdout
+    /// (every command's output); the exit is non-zero.
+    BatchFailed(String),
 }
 
 impl std::fmt::Display for CliError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownCommand(name) => write!(f, "unknown command `{name}`"),
-            Self::MissingFixture => f.write_str("locate requires --fixture <path>"),
             Self::MissingValue(flag) => write!(f, "missing value for {flag}"),
             Self::UnknownFlag(flag) => write!(f, "unknown flag `{flag}`"),
             Self::DuplicateFlag(flag) => write!(f, "duplicate flag {flag}"),
             Self::UnknownRole(role) => write!(f, "unknown role `{role}`"),
-            Self::UnknownPosition(position) => write!(f, "unknown position `{position}`"),
             Self::UnknownAction(action) => write!(f, "unknown action `{action}`"),
-            Self::BadDims(dims) => write!(f, "unsupported dims `{dims}`"),
-            Self::EmptyText => {
-                f.write_str("locate text must contain at least one alphanumeric token")
-            }
+            Self::EmptyText => f.write_str("text must contain at least one alphanumeric token"),
             Self::Io { path, message } => write!(f, "cannot read {path}: {message}"),
             Self::Fixture(message) => write!(f, "fixture: {message}"),
-            Self::Locate(message) => write!(f, "locate: {message}"),
+            Self::Guard(message) => write!(f, "guard: {message}"),
             Self::ExpectedTextMissing { expected } => {
                 write!(f, "expected text `{expected}` did not appear")
             }
             Self::RegionStillPresent { id } => write!(f, "region `{id}` is still present"),
-            Self::ConfidenceBelowThreshold {
-                confidence_millis,
-                minimum_millis,
-            } => write!(
-                f,
-                "confidence {confidence_millis} is below the act minimum {minimum_millis}"
-            ),
-            Self::AmbiguousTarget {
-                top_millis,
-                runner_up_millis,
-                margin_millis,
-                minimum_margin_millis,
-            } => write!(
-                f,
-                "top {top_millis} and runner-up {runner_up_millis} differ by {margin_millis} millis, below the act margin {minimum_margin_millis}"
-            ),
             Self::RunnerUpNeedsConfidence => f.write_str("--runner-up requires --confidence"),
             Self::NonFiniteConfidence => f.write_str("confidence must be finite"),
-            Self::DimsRequireHgra => f.write_str("--dims is only valid with --matcher hgra"),
             Self::MissingSource => f.write_str("command requires --fixture <path> or --cdp [url]"),
             Self::Browser(message) => write!(f, "browser: {message}"),
             Self::Config(message) => write!(f, "config: {message}"),
-            Self::UnknownMatcher(name) => write!(f, "unknown matcher `{name}`"),
-            Self::MissingRegion => f.write_str("act requires a region id"),
-            Self::MissingVerb => f.write_str("act requires a verb (`press`)"),
             Self::BadConfidence(value) => write!(f, "bad confidence `{value}`"),
             Self::MissingExpect => f.write_str("verify requires --expect-text or --expect-absent"),
             Self::UnknownRegion(id) => write!(f, "unknown region `{id}`"),
@@ -165,6 +127,8 @@ impl std::fmt::Display for CliError {
             }
             Self::Agent(transcript) => write!(f, "agent run failed\n{transcript}"),
             Self::BadNumber { flag, value } => write!(f, "{flag} expects a number, got `{value}`"),
+            Self::Refused(message) => f.write_str(message),
+            Self::BatchFailed(body) => f.write_str(body),
         }
     }
 }
@@ -172,8 +136,8 @@ impl std::fmt::Display for CliError {
 impl std::error::Error for CliError {}
 
 pub fn usage() -> &'static str {
-    "ultra-instinct run|replay|lessons|exams|observe|locate|inspect|guard|verify|diff|mcp\nrun --goal <text> (--cdp [url] [--url <page>] | --fixture <replay.cdp.json|page.manifold>) [--max-steps N] [--wait-secs N] [--text-model-cmd <program>] [--policy instinct|jev|clef|clef-flash|dojo] [--diary <dir>] [--lessons <store>] [--no-screenshot] [--no-page-text] [--no-derived-text] [--second-opinion]\n  goal clauses: `click X if present` acts when X shows up (else skipped); `wait for X` waits for X; both wait up to --wait-secs (default 30)\n  owned agent loop: observe -> Instinct -> gate -> ticket -> execute -> verify (no LLM, no MCP)\n  --cdp with --url opens a background tab and closes it at exit; without --url drives the first existing tab\n  --diary <dir> writes the battle diary (schema v1 JSONL): every decision, step, and outcome\nreplay --diary <dir> [--lessons <store>] re-scores every recorded decision with Instinct: agree / would-abstain / regress\nlessons --diary <dir> --store <path> distills diaries into the versioned lesson store (words / places / moves / trust)
-exams --diary <dir> [--lessons <store>] reports remote calls per 100 decisions and the belt each pairing holds\nmcp serves newline-delimited JSON-RPC on stdin.\nguard [--fixture <path> | --cdp [url]] --target <label> [--role button] [--proposed <id>] [--json]\nact is a deprecated alias of guard and never clicks.\nlocate [--fixture <path>] [text] [--role ...] [--matcher weighted] [--json]\nverify (--expect-text <text> | --expect-absent <id>) [--fixture <path>]\nDefault matcher: weighted. HGRA is experimental.\n"
+    "ultra-instinct run|replay|lessons|exams|doctor|install|observe|guard|verify|mcp|skills|batch|session|open|snap|click|type|select|key|scroll|wait|shot|tabs|close|dialog|forward|reload|check|uncheck|focus|keyboard|get|is|count|state|cookies|storage|set|download|network\nrun --goal <text> (--cdp [url] [--url <page>] | --fixture <replay.cdp.json|page.manifold>) [--max-steps N] [--wait-secs N] [--text-model-cmd <program>] [--policy instinct|jev|clef|clef-flash|dojo] [--diary <dir>] [--lessons <store>] [--no-screenshot] [--no-page-text] [--no-derived-text] [--second-opinion] [--live-steps] [--launch [--headed]] [--load-state <path>] [--save-state <path>] [--allow-domain <host>]... [--confirm-press <glob>]... [--confirm <label>]...\n  --launch starts a headless Chrome for the run (headed with --headed) unless --cdp is given, and closes it at exit\n  --load-state sets saved cookies + storage before the first observe; --save-state saves them when the run ends (counts only, never values)\n  --allow-domain shop.example|*.shop.example: input only on those hosts (--url must match); --confirm-press \"Pay*\": a matching click ends BLOCKED until --confirm \"<label>\"\n  goal clauses: `click X if present` acts when X shows up (else skipped); `wait for X` waits for X; both wait up to --wait-secs (default 30)\n  owned agent loop: observe -> Instinct -> gate -> ticket -> execute -> verify (no LLM, no MCP)\n  --cdp with --url opens a background tab and closes it at exit; without --url drives the first existing tab\n  --diary <dir> writes the battle diary (schema v1 JSONL): every decision, step, and outcome\ndoctor [--json] [--quick] [--cdp <url>] checks Chrome, the --cdp endpoint, a test launch, and $TMPDIR/aui; non-zero when a required check fails\ninstall [--run] prints the command that installs Chrome for Testing into ~/.cache/ultra-instinct/chrome (--run runs it with npx, then doctor)\nreplay --diary <dir> [--lessons <store>] re-scores every recorded decision with Instinct: agree / would-abstain / regress\nlessons --diary <dir> --store <path> distills diaries into the versioned lesson store (words / places / moves / trust)
+exams --diary <dir> [--lessons <store>] reports remote calls per 100 decisions and the belt each pairing holds\nmcp serves newline-delimited JSON-RPC on stdin.\nshell verbs (one browser per --session <name>, default `default`; a daemon on $TMPDIR/aui/<session>.sock attaches to --cdp <url>, default http://127.0.0.1:9222, or with open --launch starts its own Chrome, which lives as long as the daemon):\n  open <url> [--launch [--headed]] [--idle <secs>] [--allow-domain <host>]... [--confirm-press <glob>]... | snap [--json] | click <ref> [--confirm <label>] [--mouse] | type <ref> <text> | select <ref> <option> | key <ref> <key>\n  scroll [up|down] | wait --text|--url|--control|--gone <v> | --load domcontentloaded|load [--timeout s] | shot [--annotate] [path] | tabs | close (stops the daemon and its Chrome)\n  open --idle <secs> (1 to 86400, default 3600) ends the daemon and its Chrome after that long without a verb; open flags are set when the session starts\n  dialog [status] | dialog accept [text] | dialog dismiss | forward | reload [--ignore-cache] | check|uncheck <ref> [--mouse] | focus <ref> | keyboard type|insert <text>\n  get value|label|role|box <ref> | get attr <ref> <name> | is visible|enabled|checked|editable <ref> | count [--label L] [--role R]\n  state save|load <path> | cookies [list] [--name N] [--domain D] [--reveal] | cookies set <name> <value> [--domain D] [--path P] [--expires SECS] [--http-only] [--secure] [--same-site Strict|Lax|None] | cookies clear [--name N] [--domain D]\n  storage local|session [list] [--reveal] | get <key> | set <key> <value> | clear [<key>]\n  set viewport W H [scale] | set device <name> | set media dark|light|no-preference | set offline on|off | set headers K=V... | set reset\n  download <ref> <path> [--overwrite] [--timeout-ms N] | network block <pattern>... | network unblock [<pattern>...] | network har start | network har stop <path>\n  <ref> is @eN from snap (or N); --max-output N cuts snap text; relative paths are this shell's; a refusal or error exits non-zero\nbatch [--bail] [--json] [--session <name>] \"<verb args>\"... runs verbs in order on one session (no args: a JSON array of strings on stdin); non-zero if any failed\nsession prints the current session name; session list lists live sessions and removes stale sockets\nskills list | skills get <name> prints a guide that ships in the binary (agents: aui skills get core)\nobserve (--fixture <path> | --cdp [url]) prints every region: id, role, label, rect\nguard (--fixture <path> | --cdp [url]) --target <label> [--role button] [--within <id>] [--proposed <id>] [--json]\n  the region whose label equals --target (case and spacing ignored) is the target: unique or refuse, then the hard gate; never clicks\nverify (--expect-text <text> | --expect-absent <id>) (--fixture <path> | --cdp [url])\n"
 }
 
 /// Run one invocation. `args` does not include the program name.
@@ -183,122 +147,24 @@ pub fn execute(args: &[String]) -> Result<String, CliError> {
         return Ok(usage().to_owned());
     }
     match args[0].as_str() {
-        "locate" => locate_command(&args[1..]),
         "observe" => crate::session_cmd::observe_command(&args[1..]),
-        "act" => crate::session_cmd::act_command(&args[1..]),
         "guard" => crate::session_cmd::guard_command(&args[1..]),
         "verify" => crate::session_cmd::verify_command(&args[1..]),
-        "diff" => crate::session_cmd::diff_command(&args[1..]),
-        "inspect" => crate::session_cmd::inspect_command(&args[1..]),
         "run" => crate::run_cmd::run_command(&args[1..]),
         "replay" => crate::replay_cmd::replay_command(&args[1..]),
         "lessons" => crate::lessons_cmd::lessons_command(&args[1..]),
         "exams" => crate::exams_cmd::exams_command(&args[1..]),
+        "doctor" => crate::doctor_cmd::doctor_command(&args[1..]),
+        "install" => crate::install_cmd::install_command(&args[1..]),
         "mcp" => Err(CliError::McpIsStdio),
+        "daemon" => crate::daemon::daemon_command(&args[1..]),
+        "skills" => crate::skills_cmd::skills_command(&args[1..]),
+        "batch" => crate::batch::batch_command(&args[1..]),
+        "session" => crate::daemon::session_command(&args[1..]),
+        verb if crate::verbs::VERBS.contains(&verb) => {
+            crate::daemon::verb_command(verb, &args[1..])
+        }
         other => Err(CliError::UnknownCommand(other.to_owned())),
-    }
-}
-
-fn locate_command(args: &[String]) -> Result<String, CliError> {
-    let mut fixture: Option<String> = None;
-    let mut text: Option<String> = None;
-    let mut role: Option<String> = None;
-    let mut position: Option<String> = None;
-    let mut action: Option<String> = None;
-    let mut dims: Option<String> = None;
-    let mut matcher: Option<String> = None;
-    let mut cdp: Option<String> = None;
-    let mut json = false;
-    let mut index = 0;
-    while index < args.len() {
-        let arg = &args[index];
-        if let Some(value) = arg.strip_prefix("--fixture=") {
-            set_once("fixture", &mut fixture, value.to_owned())?;
-        } else if let Some(value) = arg.strip_prefix("--text=") {
-            set_once("text", &mut text, value.to_owned())?;
-        } else if let Some(value) = arg.strip_prefix("--role=") {
-            set_once("role", &mut role, value.to_owned())?;
-        } else if let Some(value) = arg.strip_prefix("--position=") {
-            set_once("position", &mut position, value.to_owned())?;
-        } else if let Some(value) = arg.strip_prefix("--action=") {
-            set_once("action", &mut action, value.to_owned())?;
-        } else if let Some(value) = arg.strip_prefix("--dims=") {
-            set_once("dims", &mut dims, value.to_owned())?;
-        } else if let Some(value) = arg.strip_prefix("--matcher=") {
-            set_once("matcher", &mut matcher, value.to_owned())?;
-        } else if let Some(value) = arg.strip_prefix("--cdp=") {
-            set_once("cdp", &mut cdp, value.to_owned())?;
-        } else if arg == "--cdp" {
-            if cdp.is_some() {
-                return Err(CliError::DuplicateFlag("--cdp"));
-            }
-            let next = args.get(index + 1);
-            if next.is_some_and(|value| !value.starts_with("--")) {
-                cdp = Some(next.unwrap().clone());
-                index += 1;
-            } else {
-                cdp = Some(ultra_instinct_browser::DEFAULT_CDP_HTTP.to_owned());
-            }
-        } else if arg == "--json" {
-            if json {
-                return Err(CliError::DuplicateFlag("--json"));
-            }
-            json = true;
-        } else if let Some(flag) = arg.strip_prefix("--") {
-            let name = flag.split('=').next().unwrap_or(flag);
-            let slot = match name {
-                "fixture" => Some(&mut fixture),
-                "text" => Some(&mut text),
-                "role" => Some(&mut role),
-                "position" => Some(&mut position),
-                "action" => Some(&mut action),
-                "dims" => Some(&mut dims),
-                "matcher" => Some(&mut matcher),
-                _ => None,
-            };
-            let Some(slot) = slot else {
-                return Err(CliError::UnknownFlag(arg.clone()));
-            };
-            index += 1;
-            let Some(value) = args.get(index) else {
-                return Err(CliError::MissingValue(flag_name(name)));
-            };
-            if value.starts_with("--") {
-                return Err(CliError::MissingValue(flag_name(name)));
-            }
-            set_once(name, slot, value.clone())?;
-        } else {
-            set_once("text", &mut text, arg.clone())?;
-        }
-        index += 1;
-    }
-    if fixture.is_none() && cdp.is_none() {
-        return Err(CliError::MissingFixture);
-    }
-    if fixture.is_some() && cdp.is_some() {
-        return Err(CliError::DuplicateFlag("--cdp"));
-    }
-    let query = build_query(text, role, position, action)?;
-    let matcher_name = matcher.unwrap_or_else(|| "weighted".to_owned());
-    let manifold = session_cmd::load_source(fixture.as_deref(), cdp.as_deref())?;
-    if dims.is_some() {
-        return Err(CliError::DimsRequireHgra);
-    }
-    let ranked = match matcher_name.as_str() {
-        "weighted" => WeightedMatcher::default()
-            .rank(&query, &manifold)
-            .map_err(|err| CliError::Locate(err.to_string()))?,
-        "hgra" => {
-            return Err(CliError::UnknownMatcher(
-                "hgra is an experiment; enable ultra-instinct-resonance feature `hgra`".into(),
-            ))
-        }
-        other => return Err(CliError::UnknownMatcher(other.to_owned())),
-    };
-    if json {
-        Ok(render_json(&manifold, &matcher_name, &ranked))
-    } else {
-        Ok(render_text(&manifold, &ranked))
     }
 }
 
@@ -319,131 +185,31 @@ pub(crate) fn flag_name(name: &str) -> &'static str {
         "fixture" => "--fixture",
         "text" => "--text",
         "role" => "--role",
-        "position" => "--position",
         "action" => "--action",
-        "dims" => "--dims",
         "json" => "--json",
-        "matcher" => "--matcher",
         "cdp" => "--cdp",
-        "confidence" => "--confidence",
-        "runner-up" => "--runner-up",
+        "within" => "--within",
+        "proposed" => "--proposed",
         "expect-text" => "--expect-text",
         "expect-absent" => "--expect-absent",
-        "before" => "--before",
-        "after" => "--after",
         _ => "--flag",
     }
 }
 
-fn build_query(
-    text: Option<String>,
-    role: Option<String>,
-    position: Option<String>,
-    action: Option<String>,
-) -> Result<LocateQuery, CliError> {
-    let mut query = LocateQuery::new();
-    if let Some(text) = text {
-        query = query.text(text).map_err(|_| CliError::EmptyText)?;
-    }
-    if let Some(role) = role {
-        let parsed = Role::parse(&role.to_ascii_lowercase()).ok_or(CliError::UnknownRole(role))?;
-        query = query.role(parsed);
-    }
-    if let Some(position) = position {
-        let parsed = Zone::parse(&position.to_ascii_lowercase())
-            .ok_or(CliError::UnknownPosition(position))?;
-        query = query.position(parsed);
-    }
-    if let Some(action) = action {
-        let parsed =
-            Action::parse(&action.to_ascii_lowercase()).ok_or(CliError::UnknownAction(action))?;
-        query = query.action(parsed);
-    }
-    Ok(query)
-}
-
-fn render_text(
-    manifold: &ultra_instinct_core::InteractionManifold,
-    ranked: &[ultra_instinct_resonance::Match],
-) -> String {
-    let mut out = String::new();
-    for candidate in ranked {
-        let region = manifold.get(candidate.id());
-        let label = region.map(|region| region.label()).unwrap_or("");
-        let role = region
-            .map(|region| region.role().as_str())
-            .unwrap_or("unknown");
-        out.push_str(&format!(
-            "{}\t{}\t{:.6}\t{}\t{}\n",
-            candidate.rank(),
-            candidate.id(),
-            candidate.confidence(),
-            role,
-            label
-        ));
-    }
-    out
-}
-
-fn render_json(
-    manifold: &ultra_instinct_core::InteractionManifold,
-    matcher: &str,
-    ranked: &[ultra_instinct_resonance::Match],
-) -> String {
-    let mut out = String::new();
-    out.push_str("{\n");
-    out.push_str("  \"product\": \"ultra-instinct\",\n");
-    out.push_str(&format!("  \"matcher\": \"{matcher}\",\n"));
-    out.push_str("  \"candidates\": [\n");
-    for (index, candidate) in ranked.iter().enumerate() {
-        let region = manifold.get(candidate.id());
-        let label = region.map(|region| region.label()).unwrap_or("");
-        let role = region
-            .map(|region| region.role().as_str())
-            .unwrap_or("unknown");
-        let comma = if index + 1 == ranked.len() { "" } else { "," };
-        out.push_str("    {\n");
-        out.push_str(&format!("      \"rank\": {},\n", candidate.rank()));
-        out.push_str(&format!(
-            "      \"id\": \"{}\",\n",
-            json_escape(candidate.id().as_str())
-        ));
-        out.push_str(&format!("      \"role\": \"{role}\",\n"));
-        out.push_str(&format!("      \"label\": \"{}\",\n", json_escape(label)));
-        out.push_str(&format!(
-            "      \"confidence\": {:.6}\n",
-            candidate.confidence()
-        ));
-        out.push_str(&format!("    }}{comma}\n"));
-    }
-    out.push_str("  ]\n}\n");
-    out
-}
-
-fn json_escape(text: &str) -> String {
-    let mut out = String::new();
-    for ch in text.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            ch if ch.is_control() => out.push_str(&format!("\\u{:04x}", u32::from(ch))),
-            ch => out.push(ch),
-        }
-    }
-    out
-}
-
-mod compare;
+pub(crate) mod batch;
+pub(crate) mod daemon;
 pub mod diary;
+pub(crate) mod doctor_cmd;
 pub mod dojo_policy;
 pub mod exams_cmd;
+pub(crate) mod install_cmd;
 pub(crate) mod lessons_cmd;
 pub(crate) mod replay_cmd;
 pub(crate) mod run_cmd;
 pub(crate) mod session_cmd;
+pub(crate) mod skills_cmd;
+pub(crate) mod state_cmd;
+pub(crate) mod verbs;
 
 // Remote transports live in `ultra-instinct-remote`; re-exported under their old paths.
 #[cfg(feature = "clef")]
@@ -454,7 +220,3 @@ pub use ultra_instinct_remote::http_text;
 pub use ultra_instinct_remote::second;
 #[cfg(feature = "jev")]
 pub use ultra_instinct_remote::typesafe;
-
-#[cfg(feature = "jev")]
-pub use compare::fixture_compare_live;
-pub use compare::{eval_corpus, fixture_compare, CompareError, CorpusReport, FixtureReport};

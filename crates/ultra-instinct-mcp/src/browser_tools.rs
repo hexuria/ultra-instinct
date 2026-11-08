@@ -14,7 +14,9 @@
 
 use serde_json::{json, Value};
 
-use ultra_instinct_agent::{execute_ticketed, ExecError, Input};
+use ultra_instinct_agent::{
+    classify_delta, classify_value, execute_ticketed_with, BrowserRuntime, ExecError, Input,
+};
 use ultra_instinct_browser::BrowserError;
 use ultra_instinct_cdp::{
     activate_target, close_target, create_target, page_targets, DEFAULT_CDP_HTTP,
@@ -22,7 +24,9 @@ use ultra_instinct_cdp::{
 use ultra_instinct_core::{
     Action, ActionSpace, InteractionManifold, InteractionRegion, RegionId, Role,
 };
-use ultra_instinct_guard::{check_drop_target, consume_ticket_once, gate, gate_drag, ConsumeError};
+use ultra_instinct_guard::{
+    check_drop_target, consume_ticket_once_checked, gate, gate_drag, host_of, ConsumeError, Policy,
+};
 use ultra_instinct_protocol::GuardReason;
 
 use crate::error::ToolError;
@@ -82,7 +86,7 @@ pub(crate) fn call(server: &mut Server, name: &str, arguments: &Value) -> Result
         "browser_navigate" => navigate(server, arguments),
         "browser_new_tab" => new_tab(server, arguments),
         "browser_go_back" => go_back(server, arguments),
-        "browser_wait" => wait(arguments),
+        "browser_wait" => wait(server, arguments),
         "browser_get_state" => get_state(server, arguments),
         "browser_get_html" => get_html(server, arguments),
         "browser_get_text" | "browser_get_page_text" => get_text(server, arguments),
@@ -155,6 +159,22 @@ fn opt_usize(arguments: &Value, key: &str) -> Result<Option<usize>, ToolError> {
     }
 }
 
+/// A 1-based element index: `5`, `"5"`, or the `@e5` ref the text state prints.
+fn opt_index(arguments: &Value, key: &str) -> Result<Option<usize>, ToolError> {
+    match arguments.get(key) {
+        Some(Value::String(raw)) => {
+            let trimmed = raw.trim();
+            let digits = trimmed.strip_prefix("@e").unwrap_or(trimmed);
+            digits.parse::<usize>().map(Some).map_err(|_| {
+                ToolError::InvalidArguments(format!(
+                    "`{key}` must be an index like 5, \"5\" or \"@e5\", got {raw:?}"
+                ))
+            })
+        }
+        _ => opt_usize(arguments, key),
+    }
+}
+
 fn opt_f64(arguments: &Value, key: &str) -> Result<Option<f64>, ToolError> {
     match arguments.get(key) {
         None | Some(Value::Null) => Ok(None),
@@ -197,9 +217,45 @@ fn exec_error(err: ExecError) -> ToolError {
 fn consume_error(err: ConsumeError<BrowserError>) -> ToolError {
     match err {
         ConsumeError::Invalid(_) => ToolError::TicketInvalid(err.to_string()),
+        ConsumeError::Refused(reason) => refused(reason, ""),
         ConsumeError::Press(e) => browser_err(e),
         other => browser_err(other),
     }
+}
+
+/// A policy refusal as the tool error a host matches on (not stale; a
+/// retry gets the same answer): `needs-confirm: "Pay $18"` (the label is a
+/// JSON string; pass it back as `confirm`) or `domain-not-allowed: <host>`.
+fn refused(reason: GuardReason, label_or_url: &str) -> ToolError {
+    let detail = match reason {
+        GuardReason::NeedsConfirm => Value::String(label_or_url.to_owned()).to_string(),
+        GuardReason::DomainNotAllowed => {
+            host_of(label_or_url).unwrap_or_else(|| label_or_url.to_owned())
+        }
+        _ => label_or_url.to_owned(),
+    };
+    if detail.is_empty() {
+        ToolError::TicketInvalid(reason.to_string())
+    } else {
+        ToolError::TicketInvalid(format!("{reason}: {detail}"))
+    }
+}
+
+/// The server's policy plus this call's `confirm` label, if any.
+fn press_policy(server: &Server, arguments: &Value) -> Result<Policy, ToolError> {
+    let policy = server.policy()?.clone();
+    Ok(match opt_str(arguments, "confirm")? {
+        Some(label) => policy.with_confirmed(label),
+        None => policy,
+    })
+}
+
+/// Refuse a navigation the policy does not allow, before any CDP call.
+fn check_navigation(server: &Server, url: &str) -> Result<(), ToolError> {
+    server
+        .policy()?
+        .check_url(url)
+        .map_err(|reason| refused(reason, url))
 }
 
 /// The page-websocket key a `cdp` endpoint currently drives.
@@ -228,6 +284,7 @@ fn keep(server: &mut Server, key: &str, mut session: crate::server::LiveSession)
 fn navigate(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let url = req_str(arguments, "url")?;
+    check_navigation(server, url)?;
     if opt_bool(arguments, "new_tab")? == Some(true) {
         return new_tab_at(server, &endpoint, url);
     }
@@ -245,6 +302,7 @@ fn navigate(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> 
 fn new_tab(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let url = opt_str(arguments, "url")?.unwrap_or("about:blank");
+    check_navigation(server, url)?;
     new_tab_at(server, &endpoint, url)
 }
 
@@ -274,17 +332,188 @@ fn go_back(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     outcome.map_err(browser_err)
 }
 
-fn wait(arguments: &Value) -> Result<Value, ToolError> {
-    let seconds = opt_f64(arguments, "seconds")?.unwrap_or(3.0);
+/// Pause between looks while `browser_wait` has a condition.
+const WAIT_LOOK_MS: u64 = 200;
+
+/// What a conditional `browser_wait` waits for. Every given part must hold.
+struct WaitFor {
+    /// Case-insensitive substring of the page's visible text.
+    text: Option<String>,
+    /// Substring of the current URL.
+    url: Option<String>,
+    /// Case-insensitive substring of a control label in the interactive index.
+    control: Option<String>,
+    /// No control in the interactive index has exactly this label (trimmed,
+    /// case-insensitive).
+    gone: Option<String>,
+    /// `document.readyState` has reached this (`domcontentloaded`:
+    /// interactive or complete; `load`: complete).
+    load: Option<LoadState>,
+}
+
+/// A `browser_wait` `load` condition.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LoadState {
+    DomContentLoaded,
+    Load,
+}
+
+impl LoadState {
+    fn parse(raw: &str) -> Result<Self, ToolError> {
+        match raw {
+            "domcontentloaded" => Ok(Self::DomContentLoaded),
+            "load" => Ok(Self::Load),
+            other => Err(ToolError::InvalidArguments(format!(
+                "`load` must be domcontentloaded|load, got `{other}`"
+            ))),
+        }
+    }
+
+    /// Whether `document.readyState` (None: unreadable, e.g. mid-navigation)
+    /// has reached this state.
+    fn reached(self, ready: Option<&str>) -> bool {
+        matches!(
+            (self, ready),
+            (_, Some("complete")) | (Self::DomContentLoaded, Some("interactive"))
+        )
+    }
+}
+
+impl WaitFor {
+    fn parse(arguments: &Value) -> Result<Option<Self>, ToolError> {
+        let part = |key: &str| -> Result<Option<String>, ToolError> {
+            match opt_str(arguments, key)? {
+                Some(v) if v.trim().is_empty() => Err(ToolError::InvalidArguments(format!(
+                    "`{key}` must not be empty"
+                ))),
+                other => Ok(other.map(str::to_owned)),
+            }
+        };
+        let until = Self {
+            text: part("text")?.map(|t| t.to_lowercase()),
+            url: part("url")?,
+            control: part("control")?.map(|c| c.trim().to_lowercase()),
+            gone: part("gone")?.map(|g| collapse_label(&g)),
+            load: opt_str(arguments, "load")?
+                .map(LoadState::parse)
+                .transpose()?,
+        };
+        Ok((until.text.is_some()
+            || until.url.is_some()
+            || until.control.is_some()
+            || until.gone.is_some()
+            || until.load.is_some())
+        .then_some(until))
+    }
+
+    /// One look: observe, then check each part. Page text is read only when
+    /// a `text` part was given. Returns (holds, current url).
+    fn look(
+        &self,
+        session: &mut crate::server::LiveSession,
+    ) -> Result<(bool, Option<String>), ToolError> {
+        session.observe().map_err(browser_err)?;
+        let url = session.page().and_then(|p| p.url().map(str::to_owned));
+        if let Some(want) = &self.url {
+            if !url.as_deref().is_some_and(|u| u.contains(want.as_str())) {
+                return Ok((false, url));
+            }
+        }
+        if let Some(want) = &self.control {
+            let manifold = session
+                .manifold()
+                .ok_or_else(|| browser_err(BrowserError::NotObserved))?;
+            let present = interactive_index(manifold).iter().any(|id| {
+                manifold
+                    .get(id)
+                    .is_some_and(|r| r.label().to_lowercase().contains(want.as_str()))
+            });
+            if !present {
+                return Ok((false, url));
+            }
+        }
+        if let Some(gone) = &self.gone {
+            let manifold = session
+                .manifold()
+                .ok_or_else(|| browser_err(BrowserError::NotObserved))?;
+            let present = interactive_index(manifold).iter().any(|id| {
+                manifold
+                    .get(id)
+                    .is_some_and(|r| collapse_label(r.label()) == *gone)
+            });
+            if present {
+                return Ok((false, url));
+            }
+        }
+        if let Some(load) = self.load {
+            let ready = session.ready_state().map_err(browser_err)?;
+            if !load.reached(ready.as_deref()) {
+                return Ok((false, url));
+            }
+        }
+        if let Some(want) = &self.text {
+            let text = session.page_text().map_err(browser_err)?;
+            if !text.to_lowercase().contains(want.as_str()) {
+                return Ok((false, url));
+            }
+        }
+        Ok((true, url))
+    }
+}
+
+/// Trimmed, whitespace collapsed, lowercased: the `gone` label match.
+fn collapse_label(label: &str) -> String {
+    label
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// With no condition: sleep `seconds` (default 3). With `text`, `url`,
+/// `control`, `gone`, or `load`: observe about every 200 ms until the condition holds or
+/// `seconds` (default 10) runs out. Both are capped at 60 s. Never acts.
+fn wait(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+    let until = WaitFor::parse(arguments)?;
+    let default = if until.is_some() { 10.0 } else { 3.0 };
+    let seconds = opt_f64(arguments, "seconds")?.unwrap_or(default);
     let seconds = seconds.clamp(0.0, MAX_WAIT_SECS as f64);
-    std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
-    Ok(json!({"waited": seconds}))
+    let Some(until) = until else {
+        std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
+        return Ok(json!({"waited": seconds}));
+    };
+    let endpoint = endpoint_of(arguments)?;
+    let key = session_key(server, &endpoint);
+    let mut session = take(server, &key)?;
+    let started = std::time::Instant::now();
+    let limit = std::time::Duration::from_secs_f64(seconds);
+    let outcome = (|| {
+        let mut looks = 0u32;
+        loop {
+            let (seen, url) = until.look(&mut session)?;
+            looks += 1;
+            let elapsed = started.elapsed();
+            let after_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+            if seen {
+                return Ok(json!({"seen": true, "after_ms": after_ms, "looks": looks, "url": url}));
+            }
+            if elapsed >= limit {
+                return Ok(
+                    json!({"seen": false, "after_ms": after_ms, "looks": looks, "url": url}),
+                );
+            }
+            let pause = std::time::Duration::from_millis(WAIT_LOOK_MS).min(limit - elapsed);
+            std::thread::sleep(pause);
+        }
+    })();
+    keep(server, &key, session);
+    outcome
 }
 
 /// Interactive regions in browser-use reading order: top-to-bottom rows,
 /// left-to-right within a row (ties by id). Viability is the action-space
 /// rule, so the same index always maps the same way for every tool.
-fn interactive_index(manifold: &InteractionManifold) -> Vec<RegionId> {
+pub(crate) fn interactive_index(manifold: &InteractionManifold) -> Vec<RegionId> {
     let space = ActionSpace::from_manifold(manifold);
     let mut seen = Vec::<RegionId>::new();
     for action in space.actions() {
@@ -321,30 +550,51 @@ fn element_json(index: usize, region: &InteractionRegion) -> Value {
 
 fn get_state(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
+    let text = match opt_str(arguments, "format")?.unwrap_or("text") {
+        "text" => true,
+        "json" => false,
+        other => {
+            return Err(ToolError::InvalidArguments(format!(
+                "`format` must be text|json, got `{other}`"
+            )))
+        }
+    };
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
-    let outcome = (|| {
+    let observed = (|| {
         session.observe().map_err(browser_err)?;
         // `page()` is written inside `observe` — read it after, not before.
         let page = session.page().cloned();
         let manifold = session
             .manifold()
+            .cloned()
             .ok_or_else(|| browser_err(BrowserError::NotObserved))?;
-        let order = interactive_index(manifold);
-        let elements: Vec<Value> = order
-            .iter()
-            .enumerate()
-            .filter_map(|(i, id)| manifold.get(id).map(|r| element_json(i + 1, r)))
-            .collect();
-        Ok::<_, ToolError>(json!({
-            "url": page.as_ref().and_then(|p| p.url().map(str::to_owned)),
-            "title": page.as_ref().and_then(|p| p.title().map(str::to_owned)),
-            "interactive_elements": elements.len(),
-            "elements": elements,
-        }))
+        Ok::<_, ToolError>((page, manifold))
     })();
     keep(server, &key, session);
-    outcome
+    let (page, manifold) = observed?;
+    let order = interactive_index(&manifold);
+    if text {
+        let snapshot = server.record(
+            &format!("cdp:{endpoint}"),
+            manifold.clone(),
+            page.clone()
+                .unwrap_or_else(ultra_instinct_browser::PageState::blank),
+        );
+        let body = crate::page_text::page_text(page.as_ref(), &manifold, &order, snapshot.get());
+        return Ok(json!({"format": "text", "text": body}));
+    }
+    let elements: Vec<Value> = order
+        .iter()
+        .enumerate()
+        .filter_map(|(i, id)| manifold.get(id).map(|r| element_json(i + 1, r)))
+        .collect();
+    Ok(json!({
+        "url": page.as_ref().and_then(|p| p.url().map(str::to_owned)),
+        "title": page.as_ref().and_then(|p| p.title().map(str::to_owned)),
+        "interactive_elements": elements.len(),
+        "elements": elements,
+    }))
 }
 
 fn get_html(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
@@ -430,7 +680,7 @@ fn gated_input(
     input_kind: &str,
 ) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
-    let index = opt_usize(arguments, "index")?
+    let index = opt_index(arguments, "index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".into()))?;
     let input = match input_kind {
         // DOM-side click by default, so existing hosts see no change;
@@ -440,14 +690,18 @@ fn gated_input(
         "click" => Input::ScriptClick,
         "type" => Input::Type(req_str(arguments, "text")?.to_owned()),
         "select" => Input::Select(req_str(arguments, "text")?.to_owned()),
+        "key" => Input::Key(req_str(arguments, "key")?.to_owned()),
         other => return Err(ToolError::UnknownTool(other.to_owned())),
     };
     let action = input.action();
+    let policy = press_policy(server, arguments)?;
+    let verify = opt_bool(arguments, "verify")? == Some(true);
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
     let outcome = (|| {
         session.observe().map_err(browser_err)?;
         let focused = session.page().and_then(|p| p.focused().cloned());
+        let url = session.page().and_then(|p| p.url().map(str::to_owned));
         let manifold = session
             .manifold()
             .ok_or_else(|| browser_err(BrowserError::NotObserved))?;
@@ -458,28 +712,92 @@ fn gated_input(
                 order.len()
             ))
         })?;
-        let ticket = gate(
-            manifold,
-            &region_id,
-            action,
-            focused,
-            manifold.captured_at_ms(),
-        )
+        let ticket = match &input {
+            // A KEY ticket binds its one key (KEY_NAMES) on a region that claims Key.
+            Input::Key(name) => ultra_instinct_guard::gate_key(
+                manifold,
+                &region_id,
+                name,
+                focused,
+                manifold.captured_at_ms(),
+            ),
+            _ => gate(
+                manifold,
+                &region_id,
+                action,
+                focused,
+                manifold.captured_at_ms(),
+            ),
+        }
         .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
+        // The user's policy after the gate, before the ticket is used; the
+        // executor checks it again on its fresh observation.
+        let label = ticket.target_label.clone();
+        if let Some(region) = manifold.get(&region_id) {
+            policy
+                .check(url.as_deref(), region, action)
+                .map_err(|reason| refusal_for(reason, &label, url.as_deref()))?;
+        }
         let mut ledger = server.take_ledger(&key);
-        let executed =
-            execute_ticketed(&mut session, &mut ledger, &ticket, &input).map_err(exec_error);
+        let executed = execute_ticketed_with(&mut session, &mut ledger, &ticket, &input, &policy);
         server.keep_ledger(&key, ledger);
-        executed.map(|done| {
-            json!({
-                "acted": input_kind,
-                "index": index,
-                "region": done.target.as_str(),
-            })
-        })
+        let done = executed.map_err(|err| match err {
+            ExecError::Gate(
+                reason @ (GuardReason::DomainNotAllowed | GuardReason::NeedsConfirm),
+            ) => {
+                let fresh_url = session.page().and_then(|p| p.url().map(str::to_owned));
+                refusal_for(reason, &label, fresh_url.as_deref())
+            }
+            other => exec_error(other),
+        })?;
+        let mut body = json!({
+            "acted": input_kind,
+            "index": index,
+            "region": done.target.as_str(),
+            "ticket": done.ticket_id,
+        });
+        if verify {
+            body["verification"] = json!(verify_after(&mut session, &done, &input)?);
+        }
+        Ok(body)
     })();
     keep(server, &key, session);
     outcome
+}
+
+/// [`refused`] with the right detail: the label for a confirm, the URL for
+/// a domain.
+fn refusal_for(reason: GuardReason, label: &str, url: Option<&str>) -> ToolError {
+    match reason {
+        GuardReason::NeedsConfirm => refused(reason, label),
+        _ => refused(reason, url.unwrap_or("")),
+    }
+}
+
+/// `verify: true`: settle, observe again, and name what the input did
+/// (the agent's verification mapping: a typed value is read back).
+fn verify_after(
+    session: &mut crate::server::LiveSession,
+    done: &ultra_instinct_agent::Executed,
+    input: &Input,
+) -> Result<&'static str, ToolError> {
+    BrowserRuntime::settle_after_input(session, &done.target, input);
+    BrowserRuntime::observe(session).map_err(browser_err)?;
+    let page_delta = match (done.before_page.as_ref(), BrowserRuntime::page(session)) {
+        (Some(before), Some(after)) => Some(session.page_delta_between(before, after)),
+        _ => None,
+    };
+    let value = input
+        .payload()
+        .and_then(|_| BrowserRuntime::read_value(session, &done.target));
+    let after = session
+        .manifold()
+        .ok_or_else(|| browser_err(BrowserError::NotObserved))?;
+    let kind = input
+        .payload()
+        .and_then(|expected| classify_value(expected, value.as_ref()))
+        .unwrap_or_else(|| classify_delta(&done.before, after, page_delta.as_ref()));
+    Ok(kind.as_str())
 }
 
 fn click(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
@@ -504,16 +822,18 @@ fn gated_press_at(
     mut press: impl FnMut(&mut crate::server::LiveSession, &RegionId) -> Result<(), BrowserError>,
 ) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
-    let index = opt_usize(arguments, "index")?
+    let index = opt_index(arguments, "index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".into()))?;
     if index == 0 {
         return Err(ToolError::InvalidArguments("`index` is 1-based".into()));
     }
+    let policy = press_policy(server, arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
     let outcome = (|| {
         let manifold = session.observe().map_err(browser_err)?.clone();
         let focused = session.page().and_then(|p| p.focused().cloned());
+        let url = session.page().and_then(|p| p.url().map(str::to_owned));
         let order = interactive_index(&manifold);
         let region_id = order.get(index - 1).cloned().ok_or_else(|| {
             ToolError::InvalidArguments(format!(
@@ -530,17 +850,24 @@ fn gated_press_at(
         )
         .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
         let mut ledger = server.take_ledger(&key);
-        let result = consume_ticket_once(
+        let result = consume_ticket_once_checked(
             &mut ledger,
             &ticket,
             &manifold,
             focused,
+            &policy,
+            url.as_deref(),
             |target: &RegionId, _action: Action| press(&mut session, target),
         );
         server.keep_ledger(&key, ledger);
         result
-            .map(|_| json!({"acted": true, "index": index}))
-            .map_err(consume_error)
+            .map(|_| json!({"acted": true, "index": index, "ticket": ticket.ticket_id}))
+            .map_err(|err| match err {
+                ConsumeError::Refused(reason) => {
+                    refusal_for(reason, &ticket.target_label, url.as_deref())
+                }
+                other => consume_error(other),
+            })
     })();
     keep(server, &key, session);
     outcome
@@ -561,7 +888,7 @@ fn gated_press(
 /// no press, so no ticket (it reveals state but commits no mutation).
 fn hover(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
-    let index = opt_usize(arguments, "index")?
+    let index = opt_index(arguments, "index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".into()))?;
     if index == 0 {
         return Err(ToolError::InvalidArguments("`index` is 1-based".into()));
@@ -589,13 +916,14 @@ fn hover(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
 /// Element-to-element drag by index (`from_index` → `to_index`).
 fn drag(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
-    let from = opt_usize(arguments, "from_index")?
+    let from = opt_index(arguments, "from_index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `from_index`".into()))?;
-    let to = opt_usize(arguments, "to_index")?
+    let to = opt_index(arguments, "to_index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `to_index`".into()))?;
     if from == 0 || to == 0 {
         return Err(ToolError::InvalidArguments("indexes are 1-based".into()));
     }
+    let policy = press_policy(server, arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
     let outcome = (|| {
@@ -612,6 +940,7 @@ fn drag(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
         let from_id = resolve(from)?;
         let to_id = resolve(to)?;
         let focused = session.page().and_then(|p| p.focused().cloned());
+        let url = session.page().and_then(|p| p.url().map(str::to_owned));
         // Drag is a mutation: the source goes through the same
         // gate → ticket → consume-before-press path as clicks. A drag-marked
         // source binds both ends like the agent's DRAG; any other source
@@ -647,23 +976,34 @@ fn drag(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
         }
         .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
         let mut ledger = server.take_ledger(&key);
-        let result = consume_ticket_once(
+        let result = consume_ticket_once_checked(
             &mut ledger,
             &ticket,
             &manifold,
             focused,
+            &policy,
+            url.as_deref(),
             |target: &RegionId, _action: Action| session.drag(target, &to_id),
         );
         server.keep_ledger(&key, ledger);
         result
             .map(|_| json!({"dragged": {"from": from, "to": to}}))
-            .map_err(consume_error)
+            .map_err(|err| match err {
+                ConsumeError::Refused(reason) => {
+                    refusal_for(reason, &ticket.target_label, url.as_deref())
+                }
+                other => consume_error(other),
+            })
     })();
     keep(server, &key, session);
     outcome
 }
 
 fn send_key(server: &mut Server, arguments: &Value, hold_ms: u64) -> Result<Value, ToolError> {
+    // With an index the key goes to that element as a ticketed KEY.
+    if hold_ms == 0 && arguments.get("index").is_some_and(|v| !v.is_null()) {
+        return gated_input(server, arguments, "key");
+    }
     let endpoint = endpoint_of(arguments)?;
     let key_name = req_str(arguments, "key")?.to_owned();
     let key = session_key(server, &endpoint);
@@ -733,7 +1073,7 @@ fn save_as_pdf(server: &mut Server, arguments: &Value) -> Result<Value, ToolErro
 
 fn get_dropdown_options(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
-    let index = opt_usize(arguments, "index")?
+    let index = opt_index(arguments, "index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".into()))?;
     if index == 0 {
         return Err(ToolError::InvalidArguments("`index` is 1-based".into()));
@@ -933,7 +1273,7 @@ fn extract_content(server: &mut Server, arguments: &Value) -> Result<Value, Tool
 /// Scroll the element at `index` into view via its `data-hu-k` identity.
 fn scroll_to(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
-    let index = opt_usize(arguments, "index")?
+    let index = opt_index(arguments, "index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".to_owned()))?;
     if index == 0 {
         return Err(ToolError::InvalidArguments("`index` is 1-based".to_owned()));
@@ -1185,6 +1525,21 @@ fn read_network(server: &mut Server, arguments: &Value) -> Result<Value, ToolErr
     Ok(json!({"entries": entries, "dropped": dropped}))
 }
 
+/// Schema of an element index: an integer, `"5"`, or `"@e5"`.
+fn index_prop() -> Value {
+    json!({"type": ["integer", "string"], "description": "1-based index from browser_get_state: 5, \"5\" or \"@e5\""})
+}
+
+/// Schema of the `confirm` argument of a press.
+fn confirm_prop() -> Value {
+    json!({"type": "string", "description": "The label of a press the user confirmed; lifts a needs-confirm refusal (ULTRA_INSTINCT_CONFIRM_PRESS) for that label only."})
+}
+
+/// Schema of the `verify` argument of a ticketed input.
+fn verify_prop() -> Value {
+    json!({"type": "boolean", "description": "Observe again after the input and return `verification` (success, state-changed, navigation, dispatched-no-visible-change, wrong-effect, …)."})
+}
+
 /// Tool spec fragments shared by every `browser_*` tool.
 pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&'static str>) {
     let cdp = || {
@@ -1210,10 +1565,19 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
         "browser_go_back" => "Go back one history entry.",
         "browser_wait" => {
             props.insert("seconds".into(), json!({"type": "number"}));
-            "Wait seconds (default 3, capped at 60)."
+            props.insert("text".into(), json!({"type": "string", "description": "Stop once the page's visible text contains this (case-insensitive)."}));
+            props.insert("url".into(), json!({"type": "string", "description": "Stop once the current URL contains this."}));
+            props.insert("control".into(), json!({"type": "string", "description": "Stop once a control label in the browser_get_state index contains this (case-insensitive)."}));
+            props.insert("gone".into(), json!({"type": "string", "description": "Stop once no control in the browser_get_state index has exactly this label (case-insensitive)."}));
+            props.insert("load".into(), json!({"type": "string", "enum": ["domcontentloaded", "load"], "description": "Stop once document.readyState is interactive or complete (domcontentloaded) or complete (load). Not network idle."}));
+            "Wait. With text, url, control, gone, or load: observe about every 200 ms until every given condition holds or seconds (default 10) runs out; returns seen, after_ms, looks, and the last url. With no condition: sleep seconds (default 3). Capped at 60 s."
         }
         "browser_get_state" => {
-            "Page url, title, and interactive elements as 1-based indexes in reading order — the numbers browser_click/browser_type take."
+            props.insert(
+                "format".into(),
+                json!({"type": "string", "enum": ["text", "json"], "description": "text (default): one line per control, `@eN role \"label\"  state`; json: the elements[] body"}),
+            );
+            "Page title, url, and interactive elements as 1-based indexes in reading order (@e1, @e2, …) — the refs browser_click/browser_type take. Default format text: one short line per control with its value / checked / expanded / selected state; format json returns elements[]."
         }
         "browser_get_html" => "document.documentElement.outerHTML of the current tab.",
         "browser_get_page_text" => "Visible text of the current tab (alias of browser_get_text).",
@@ -1228,14 +1592,17 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             "Scroll pages viewport heights (default 1.0) down or up."
         }
         "browser_click" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
             props.insert("mouse".into(), json!({"type": "boolean"}));
+            props.insert("confirm".into(), confirm_prop());
+            props.insert("verify".into(), verify_prop());
             required.push("index");
             "Left-click the interactive element at a browser_get_state index, through the ticketed executor (re-observes and refuses on drift). Default is a script click; mouse: true presses a real mouse at its center instead (moves focus, fires mousedown) — use it when a script click does nothing."
         }
         "browser_type" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
             props.insert("text".into(), json!({"type": "string"}));
+            props.insert("verify".into(), verify_prop());
             required.extend(["index", "text"]);
             "Set the text of the interactive element at a browser_get_state index, through the ticketed executor."
         }
@@ -1251,7 +1618,7 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             "Close a tab by id; falls back to another tab if it was current."
         }
         "browser_scroll_to" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
             required.push("index");
             "Scroll the element at a browser_get_state index into view."
         }
@@ -1277,31 +1644,35 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
         }
         "browser_right_click" | "browser_middle_click" | "browser_double_click"
         | "browser_triple_click" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
+            props.insert("confirm".into(), confirm_prop());
             required.push("index");
             "Click the element at a browser_get_state index with the named button/count, through gate + one-shot ticket + consume-before-press."
         }
         "browser_hover" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
             required.push("index");
             "Move the pointer to the element at a browser_get_state index (no press)."
         }
         "browser_drag" => {
-            props.insert("from_index".into(), json!({"type": "integer"}));
-            props.insert("to_index".into(), json!({"type": "integer"}));
+            props.insert("from_index".into(), index_prop());
+            props.insert("to_index".into(), index_prop());
+            props.insert("confirm".into(), confirm_prop());
             required.extend(["from_index", "to_index"]);
             "Press at one element's center, drag to another's, release — both by index."
         }
         "browser_form_input" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
             props.insert("text".into(), json!({"type": "string"}));
             required.extend(["index", "text"]);
             "Alias of browser_type (browser-use form_input name)."
         }
         "browser_send_key" => {
             props.insert("key".into(), json!({"type": "string"}));
+            props.insert("index".into(), index_prop());
+            props.insert("verify".into(), verify_prop());
             required.push("key");
-            "One key event (Enter, Tab, Escape, arrows, letters...) via Input.dispatchKeyEvent."
+            "One key event (Enter, Tab, Escape, arrows, letters...) via Input.dispatchKeyEvent. With index: a ticketed KEY on that element (it must take keys; key is one of ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Home, End, PageUp, PageDown, Enter, Escape)."
         }
         "browser_hold_key" => {
             props.insert("key".into(), json!({"type": "string"}));
@@ -1311,9 +1682,10 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             "Hold a key for a duration (seconds or hold_ms, capped 10s)."
         }
         "browser_file_upload" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
             props.insert("path".into(), json!({"type": "string"}));
             props.insert("paths".into(), json!({"type": "array", "items": {"type": "string"}}));
+            props.insert("confirm".into(), confirm_prop());
             required.push("index");
             "Set files on the file input at a browser_get_state index (DOM.setFileInputFiles; paths resolved by the Chrome process)."
         }
@@ -1325,13 +1697,14 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             "Page.printToPDF → base64 data of the current tab. `path` also writes the PDF there."
         }
         "browser_get_dropdown_options" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
             required.push("index");
             "Observed enabled options (+ selected labels) of the <select> at a browser_get_state index."
         }
         "browser_select_dropdown" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), index_prop());
             props.insert("text".into(), json!({"type": "string"}));
+            props.insert("verify".into(), verify_prop());
             required.extend(["index", "text"]);
             "Select exactly one option of the <select> at an index by label/value, through the ticketed executor."
         }

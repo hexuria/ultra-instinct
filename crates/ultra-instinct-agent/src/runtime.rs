@@ -470,6 +470,11 @@ impl MockBrowser {
     pub fn replace_manifold(&mut self, manifold: InteractionManifold) {
         self.manifold = manifold;
     }
+
+    /// The page (URL / title) from now on, without a dispatch.
+    pub fn replace_page(&mut self, page: PageState) {
+        self.page = page;
+    }
 }
 
 impl BrowserRuntime for MockBrowser {

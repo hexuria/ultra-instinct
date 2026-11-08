@@ -1,11 +1,12 @@
 //! Blocking CDP websocket. Plain `ws://` only. `wss://` is refused: this
 //! crate does not pull a TLS stack. Chrome's local debugging port is `ws`.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
+use serde_json::value::RawValue;
 use serde_json::{json, Value};
 use tungstenite::{Message, WebSocket};
 
@@ -17,6 +18,9 @@ const MAX_BUFFERED_EVENTS: usize = 1024;
 /// Documented default. Pass `--cdp` with no value to use it. A live Chrome
 /// must already be listening; ultra-instinct does not launch a browser.
 pub const DEFAULT_CDP_HTTP: &str = "http://127.0.0.1:9222";
+
+/// The event that ends a call's wait early: see [`CdpError::DialogOpened`].
+const DIALOG_OPENING: &str = "Page.javascriptDialogOpening";
 
 /// Maximum time to wait for a CDP response after sending a call.
 const CALL_DEADLINE: Duration = Duration::from_secs(30);
@@ -254,23 +258,42 @@ impl CdpTransport for WebSocketTransport {
             let Message::Text(text) = message else {
                 continue;
             };
-            let value: Value =
-                serde_json::from_str(text.as_ref()).map_err(|err| CdpError::BadJson {
-                    message: err.to_string(),
-                })?;
-            if value.get("id").and_then(Value::as_i64) != Some(id) {
-                if let Some(method) = value.get("method").and_then(Value::as_str) {
-                    if self.events.len() >= MAX_BUFFERED_EVENTS {
-                        self.events.pop_front();
+            let Some(frame) = frame_fields(text.as_ref())? else {
+                continue;
+            };
+            if frame
+                .get("id")
+                .and_then(|raw| raw.get().parse::<i64>().ok())
+                != Some(id)
+            {
+                if let Some(event) = frame.get("method").and_then(|raw| raw_string(raw)) {
+                    if let Some(params) = event_params(&frame) {
+                        let dialog = event == DIALOG_OPENING;
+                        if self.events.len() >= MAX_BUFFERED_EVENTS {
+                            self.events.pop_front();
+                        }
+                        self.events.push_back(CdpEvent {
+                            method: event,
+                            params,
+                        });
+                        // The page answers nothing while a dialog is open:
+                        // stop waiting. The event stays buffered. A late
+                        // response to this id is ignored like any stray one
+                        // (ids only grow).
+                        if dialog {
+                            return Err(CdpError::DialogOpened {
+                                method: method.to_owned(),
+                            });
+                        }
                     }
-                    self.events.push_back(CdpEvent {
-                        method: method.to_owned(),
-                        params: value.get("params").cloned().unwrap_or(Value::Null),
-                    });
                 }
                 continue;
             }
-            if let Some(error) = value.get("error") {
+            if let Some(raw) = frame.get("error") {
+                let error: Value =
+                    serde_json::from_str(raw.get()).map_err(|err| CdpError::BadJson {
+                        message: err.to_string(),
+                    })?;
                 let message = error
                     .get("message")
                     .and_then(Value::as_str)
@@ -278,13 +301,52 @@ impl CdpTransport for WebSocketTransport {
                     .to_owned();
                 return Err(CdpError::Protocol { message });
             }
-            let result = value.get("result").cloned().unwrap_or(Value::Null);
-            return Ok(result.to_string());
+            let result = frame
+                .get("result")
+                .map(|raw| raw.get().to_owned())
+                .unwrap_or_else(|| "null".to_owned());
+            return Ok(result);
         }
     }
 
     fn drain_events(&mut self) -> Vec<CdpEvent> {
         self.events.drain(..).collect()
+    }
+}
+
+/// One websocket text frame as a field map of raw values. Payload fields
+/// stay `RawValue` and are materialized only by the leaf parsers that know
+/// whether they need depth: a `DOM.getDocument` `result` nests ~2 JSON
+/// levels per DOM level, which dies at `serde_json`'s 128-level `Value` cap
+/// on real pages (~60-deep DOMs). Callers already choose bounded vs deep
+/// parsing (observe uses `parse_json_deep`), so the envelope decode only
+/// locates the fields.
+///
+/// `Ok(None)` is a valid JSON frame that is not an object — not a CDP
+/// message, ignored like any foreign frame. `Err(BadJson)` is malformed
+/// JSON, same mapping `Value` parsing had.
+fn frame_fields(text: &str) -> Result<Option<BTreeMap<String, Box<RawValue>>>, CdpError> {
+    match serde_json::from_str(text) {
+        Ok(fields) => Ok(Some(fields)),
+        Err(err) if err.is_data() => Ok(None),
+        Err(err) => Err(CdpError::BadJson {
+            message: err.to_string(),
+        }),
+    }
+}
+
+/// A frame field's text when it is a JSON string, `None` otherwise.
+fn raw_string(raw: &RawValue) -> Option<String> {
+    serde_json::from_str(raw.get()).ok()
+}
+
+/// An event frame's `params`, `Null` when the field is absent. A frame
+/// whose params overflow `Value`'s depth cap is undeliverable: the event is
+/// dropped rather than failing the in-flight call it rode in with.
+fn event_params(frame: &BTreeMap<String, Box<RawValue>>) -> Option<Value> {
+    match frame.get("params") {
+        Some(raw) => serde_json::from_str(raw.get()).ok(),
+        None => Some(Value::Null),
     }
 }
 
@@ -676,6 +738,68 @@ mod tests {
     }
 
     #[test]
+    fn deep_result_tree_passes_the_envelope_decode_unparsed() {
+        // DOM.getDocument on a real page nests past serde_json's 128-level
+        // Value cap (~2 JSON levels per DOM level): the transport must hand
+        // `result` to the caller's deep parser as raw text instead of dying
+        // in the envelope decode.
+        let mut tree = String::from("null");
+        for _ in 0..150 {
+            tree = format!("{{\"children\":[{tree}]}}");
+        }
+        let result_text = format!("{{\"root\":{tree}}}");
+        assert!(
+            serde_json::from_str::<Value>(&result_text).is_err(),
+            "fixture must exceed the Value depth cap"
+        );
+        let frame = frame_fields(&format!("{{\"id\":7,\"result\":{result_text}}}"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            frame
+                .get("id")
+                .and_then(|raw| raw.get().parse::<i64>().ok()),
+            Some(7)
+        );
+        assert_eq!(
+            frame.get("result").map(|raw| raw.get()),
+            Some(result_text.as_str())
+        );
+    }
+
+    #[test]
+    fn foreign_frames_and_deep_event_params_do_not_break_decode() {
+        // Valid JSON that is not an object is not a CDP message: skipped,
+        // like any frame that does not carry our response id.
+        assert!(frame_fields("[1,2]").unwrap().is_none());
+        assert!(frame_fields("\"text\"").unwrap().is_none());
+        assert!(frame_fields("null").unwrap().is_none());
+        assert!(matches!(
+            frame_fields("{nope"),
+            Err(CdpError::BadJson { .. })
+        ));
+        // An event whose params overflow the Value cap is undeliverable;
+        // the frame still decodes so the reader can drop just that event
+        // instead of failing the in-flight call.
+        let mut deep = String::from("null");
+        for _ in 0..140 {
+            deep = format!("{{\"a\":{deep}}}");
+        }
+        let frame = frame_fields(&format!("{{\"method\":\"X.y\",\"params\":{deep}}}"))
+            .unwrap()
+            .unwrap();
+        assert!(!frame.contains_key("id"));
+        assert_eq!(
+            frame
+                .get("method")
+                .and_then(|raw| raw_string(raw))
+                .as_deref(),
+            Some("X.y")
+        );
+        assert!(event_params(&frame).is_none());
+    }
+
+    #[test]
     fn connect_socket_fails_fast_when_the_peer_never_answers() {
         // A listener that accepts TCP but never completes the ws upgrade used
         // to stall the CLI forever: `tungstenite::connect` applies no deadline
@@ -694,5 +818,91 @@ mod tests {
             "handshake took {:?}",
             started.elapsed()
         );
+    }
+
+    /// A peer that answers the focus-emulation call `connect` makes, then
+    /// runs `script` on the next frames it reads (one request id each).
+    fn fake_page(script: fn(&mut WebSocket<TcpStream>, i64)) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let mut socket = tungstenite::accept(stream).expect("ws upgrade");
+            let mut answered_connect = false;
+            while let Ok(message) = socket.read() {
+                let Message::Text(text) = message else {
+                    continue;
+                };
+                let id = serde_json::from_str::<Value>(text.as_ref()).expect("json")["id"]
+                    .as_i64()
+                    .expect("id");
+                if !answered_connect {
+                    answered_connect = true;
+                    let reply = json!({"id": id, "result": {}}).to_string();
+                    socket.send(Message::Text(reply.into())).expect("send");
+                    continue;
+                }
+                script(&mut socket, id);
+            }
+        });
+        format!("ws://127.0.0.1:{port}/devtools/page/X")
+    }
+
+    #[test]
+    fn a_dialog_opening_ends_the_wait_and_stays_buffered() {
+        // Chrome does not answer the call that opened an alert until the
+        // alert closes; the opening event arrives while the call waits.
+        // The press call sends the event and no reply (the reply comes
+        // late, before the next call's own reply).
+        let url = fake_page(|socket, id| {
+            let send = |socket: &mut WebSocket<TcpStream>, value: Value| {
+                socket
+                    .send(Message::Text(value.to_string().into()))
+                    .expect("send");
+            };
+            if id == 2 {
+                send(
+                    socket,
+                    json!({"method": "Page.javascriptDialogOpening",
+                           "params": {"type": "alert", "message": "hi", "url": "http://x/"}}),
+                );
+            } else {
+                // The abandoned call's late reply, then this call's own.
+                send(socket, json!({"id": 2, "result": {"late": true}}));
+                send(
+                    socket,
+                    json!({"method": "Page.javascriptDialogClosed", "params": {"result": true}}),
+                );
+                send(socket, json!({"id": id, "result": {"handled": id}}));
+            }
+        });
+        let mut transport = WebSocketTransport::connect(&url).expect("connect");
+        let started = Instant::now();
+        let err = transport
+            .call("Runtime.callFunctionOn", "{}")
+            .expect_err("the dialog interrupts the wait");
+        assert_eq!(
+            err,
+            CdpError::DialogOpened {
+                method: "Runtime.callFunctionOn".into()
+            }
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "returned after {:?}",
+            started.elapsed()
+        );
+        let events = transport.drain_events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].method, "Page.javascriptDialogOpening");
+        assert_eq!(events[0].params["type"], "alert");
+        // The late reply to id 2 is not mistaken for the next call's.
+        let body = transport
+            .call("Page.handleJavaScriptDialog", r#"{"accept":true}"#)
+            .expect("next call");
+        assert_eq!(body, r#"{"handled":3}"#);
+        let events = transport.drain_events();
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0].method, "Page.javascriptDialogClosed");
     }
 }

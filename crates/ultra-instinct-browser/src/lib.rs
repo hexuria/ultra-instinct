@@ -6,7 +6,8 @@
 //! no computer-use vision path.
 //!
 //! The default HTTP endpoint is [`DEFAULT_CDP_HTTP`] (`http://127.0.0.1:9222`).
-//! ultra-instinct does not launch Chrome. macOS and CUA stay outside this crate.
+//! [`launch`] can start a local Chrome on a free DevTools port; nothing else
+//! starts a browser. macOS and CUA stay outside this crate.
 
 #![forbid(unsafe_code)]
 
@@ -16,9 +17,11 @@ mod error;
 mod extract;
 mod fusion;
 mod identity;
+pub mod launch;
 mod page;
 mod session;
 mod stacking;
+pub mod storage_state;
 mod verify;
 
 pub use error::{ActMechanism, BrowserError};
@@ -111,12 +114,11 @@ mod proptest_parse {
 #[cfg(test)]
 mod phase2 {
     use super::*;
-    use ultra_instinct_core::{Action, LocateQuery, RegionId, Role, SourceMask};
+    use ultra_instinct_core::{Action, RegionId, Role, SourceMask};
     use ultra_instinct_observe::diff;
-    use ultra_instinct_resonance::{default_matcher, RegionMatcher};
 
     #[test]
-    fn locate_sign_in_on_cdp_snapshot_ranks_the_button_first() {
+    fn observe_sign_in_on_cdp_snapshot_fuses_the_button() {
         let transport =
             ReplayTransport::parse(include_str!("../../../fixtures/sign-in.cdp.json")).unwrap();
         let mut session = BrowserSession::new(transport);
@@ -127,11 +129,6 @@ mod phase2 {
         assert!(sign_in.sources().contains(SourceMask::DOM));
         assert!(sign_in.sources().contains(SourceMask::ACCESSIBILITY));
         assert_eq!(sign_in.rect().x(), 400.0);
-        let query = LocateQuery::new().text("Sign in").unwrap();
-        let ranked = default_matcher().rank(&query, &manifold).unwrap();
-        assert_eq!(ranked[0].id().as_str(), "n100");
-        assert_eq!(ranked[0].rank(), 1);
-        assert!(ranked[0].confidence() > ranked[1].confidence());
     }
 
     #[test]
@@ -982,6 +979,49 @@ mod compact_observe {
             manifold.get_str("n300").unwrap().label(),
             "Save",
             "a control with text keeps its name"
+        );
+    }
+
+    #[test]
+    fn paint_never_names_a_form_field_or_a_drawing_surface() {
+        let white = serde_json::json!({"bg": "rgb(255, 255, 255)"});
+        let page = PageSpec::new(
+            vec![
+                DomSpec::button(10, 100, "", (10.0, 100.0, 100.0, 12.0))
+                    .with_tag("INPUT")
+                    .with_attr("type", "text")
+                    .with_attr("readonly", "")
+                    .with_compact_state(white.clone()),
+                DomSpec::button(20, 200, "", (200.0, 0.0, 160.0, 210.0))
+                    .with_tag("CANVAS")
+                    .with_compact_state(white.clone()),
+                DomSpec::button(30, 300, "", (10.0, 140.0, 40.0, 40.0))
+                    .with_tag("DIV")
+                    .with_compact_state(white),
+            ],
+            vec![],
+            "https://example.test/",
+            "Paint",
+        )
+        .listener(300);
+        let script = ScriptBuilder::new().observe_compact(&page).to_json();
+        let mut session = BrowserSession::new(ReplayTransport::parse(&script).unwrap());
+        let manifold = session.observe().unwrap();
+        let label = |id: &str| manifold.get_str(id).map(|r| r.label().to_owned());
+        assert_eq!(
+            label("n100").as_deref(),
+            Some(""),
+            "a text box is named by its label only"
+        );
+        assert_ne!(
+            label("n200").as_deref(),
+            Some("white"),
+            "a display-only canvas is not its paint"
+        );
+        assert_eq!(
+            label("n300").as_deref(),
+            Some("white"),
+            "a text-less box still is"
         );
     }
 

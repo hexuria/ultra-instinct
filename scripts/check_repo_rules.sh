@@ -18,7 +18,7 @@ if [[ -z "$rv" ]] || ! printf '%s\n%s\n' "$rv" "1.99" | sort -V -C; then
 fi
 
 default_ceiling=$(awk '$1=="default"{print $2}' scripts/crate-ceilings.txt)
-for manifest in crates/*/Cargo.toml experiments/*/*/Cargo.toml; do
+for manifest in crates/*/Cargo.toml; do
   dir=$(dirname "$manifest"); name=$(basename "$dir")
   root="$dir/src/lib.rs"
   if [[ -f "$root" ]] && ! grep -q '^#!\[forbid(unsafe_code)\]' "$root"; then

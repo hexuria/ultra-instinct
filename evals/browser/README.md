@@ -1,10 +1,10 @@
 # Browser evals
 
 No browser harness runs in Phase 1. These categories are reserved so later
-evals have a stable list. Each one should call `ultra-instinct locate` (or the
-library) and assert rank, not a pixel.
+evals have a stable list. Each one should call `ultra-instinct guard` (or the
+library) and assert the decision and target id, not a pixel.
 
-- role-and-label locate
+- role-and-label match
 - spatial constraints (left, right, top, bottom, center)
 - duplicate labels
 - penalty controls (disabled, hidden, occluded, offscreen, stale, ambiguous, detached, zero-size)

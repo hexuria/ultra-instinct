@@ -39,8 +39,7 @@ No LLM and no MCP are required to run the loop. See `docs/PRD.md`,
 `docs/adr/0001…0003`, and `docs/EVAL.md` for status and honest gaps.
 
 Toolchain: Rust 1.99.0. Versions are 0.1.0 and `publish = false`. Public API
-is unstable until 1.0. HGRA is an experiment under `experiments/hgra/` and is
-not on any default path.
+is unstable until 1.0.
 
 Crates are `ultra-instinct-*` (Autonomous Ultra Instinct, e.g. `ultra-instinct-agent`,
 `ultra-instinct-browser`). The binary is `ultra-instinct`, with `aui` as a short
@@ -122,11 +121,79 @@ let mut agent = AgentBuilder::new(BrowserSession::new(transport), InstinctPolicy
 let outcome = agent.run(); // Done | Blocked | Abstained | Failed, with verified steps
 ```
 
+### Chrome
+
+`aui doctor` checks what `aui` needs: the Chrome it would launch, whether
+`--cdp` answers, a test launch (skipped by `--quick`), and the `$TMPDIR/aui`
+socket dir. `aui install` prints
+`npx @puppeteer/browsers install chrome@stable --path ~/.cache/ultra-instinct/chrome`
+(Chrome for Testing); `aui install --run` runs it, then `doctor`. Set
+`ULTRA_INSTINCT_CHROME=<path>` to pick a binary. `run --launch [--headed]`
+starts a headless (or headed) Chrome for the run when `--cdp` is not given,
+and kills it at exit:
+
+```bash
+aui run --launch --url https://example.com --goal 'Type "rust" into Search'
+```
+
+### Reuse a login
+
+`--save-state <path>` writes the run's cookies and local / session storage
+when it ends (a 0600 file; the run prints counts, never values).
+`--load-state <path>` sets them before the first observe:
+
+```bash
+aui run --launch --url https://shop.example/login --goal "..." --save-state shop.json
+aui run --launch --url https://shop.example/orders --goal "..." --load-state shop.json
+```
+
+Storage is written for the origin the tab is on; other origins are reported
+as pending.
+
+### Policy flags
+
+`--allow-domain shop.example` (or `*.shop.example`, repeatable) allows input
+only on those hosts, and `--url` must match. `--confirm-press "Pay*"`
+(repeatable glob) makes a matching click end `blocked` with
+`rerun with --confirm "<label>"`; only the user's `--confirm "<label>"` lets
+it through. MCP reads the same lists from `ULTRA_INSTINCT_ALLOW_DOMAINS` /
+`ULTRA_INSTINCT_CONFIRM_PRESS`, and press tools take a `confirm` argument.
+
+## Drive from a shell
+
+The shell verbs drive one browser, one step at a time, through a small
+session daemon (`$TMPDIR/aui/<session>.sock`). Every press still goes
+through the ticketed guard.
+
+```bash
+aui open --launch https://shop.example/join   # daemon + its own Chrome (or --cdp <url>)
+aui snap                                      # @e1 textbox "Email"  value="" …
+aui type @e2 "kid@example.com"
+aui click @e5                                 # ✓ ticket 41 · navigation
+aui wait --gone "Loading" --timeout 10
+aui close                                     # stops the daemon and its Chrome
+```
+
+`@eN` refs come from the latest `aui snap` (`N` works too). Other verbs:
+`select`, `key`, `scroll`, `shot [--annotate]`, `tabs`, `dialog`, `forward`,
+`reload`, `check` / `uncheck`, `focus`, `keyboard`, `get`, `is`, `count`,
+`state save|load`, `cookies`, `storage`, `set viewport|device|media|offline|headers|reset`,
+`download`, `network block|unblock|har`. A refusal or error exits non-zero.
+`aui batch "snap" "click @e5" --bail` runs several verbs in order on one
+session (`--json` for `[{cmd, ok, output}]`; no args reads a JSON array on
+stdin). `--session <name>` picks the browser; `aui session` prints the
+current one and `aui session list` the live ones. The daemon (and a
+`--launch` Chrome) exits after 60 minutes without a verb; `aui open --idle
+<secs>` sets that for the session (1 s to 24 h). `aui skills get core` prints
+the full guide.
+
 ## MCP tools (optional adapter)
 
-`observe`, `guard`, `verify` for hosts that keep their own executor. `act` is a
-deprecated alias of `guard` and never clicks. Locate, inspect, and diff remain
-debug helpers.
+`observe`, `guard`, `verify` for hosts that keep their own executor. `guard`
+finds its target by exact label (and role / `within`), unique or refuse, runs
+the hard gate, and returns an `ActionTicket`; it never clicks. The locate,
+inspect, act and diff helpers and the matcher are removed
+([ADR 0012](docs/adr/0012-borrow-and-prune.md)).
 
 ## Benchmark: browser tools for an LLM agent
 

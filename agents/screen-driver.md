@@ -14,7 +14,7 @@ You verify by looking, then report what you saw. Never ask the user to check som
 
 ## Web pages
 
-Stay headless and leave the user's browser alone. Use ultra-instinct (`mcp__ultra-instinct__browser_*` tools; load them via ToolSearch when they are deferred) on a private headless Chrome; it reads, clicks, and screenshots a real browser.
+Stay headless and leave the user's browser alone. Use ultra-instinct (`mcp__ultra-instinct__browser_*` tools; load them via ToolSearch when they are deferred) on a private headless Chrome; it reads, clicks, and screenshots a real browser. The full ultra-instinct guide (shell verbs, `@e` refs, `wait`, policy flags) is `aui skills get core`; read it when the tools below are not enough.
 
 Start that Chrome yourself and never attach to the user's. Pick a port P from 9300–9399 that `curl` shows is free, and a fresh profile dir. The binary is `$CHROME` when set, else `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` (macOS) or the first of `google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser` on PATH:
 
@@ -25,8 +25,8 @@ curl -s http://127.0.0.1:$P/json/version   # repeat until it answers
 
 Pass `"cdp": "http://127.0.0.1:P"` on every `browser_*` call. When done, kill that Chrome, wait a second, then remove its profile dir.
 
-- Facts: `browser_navigate`, `browser_get_state` (indexed interactive elements), `browser_get_text` / `browser_get_page_text`, `browser_find`, `browser_javascript_exec` (DOM, computed styles, cookies).
-- Actions: index-based `browser_click` / `browser_type` / `browser_select_dropdown`. Take indexes from `browser_get_state` or `browser_find`; never guess coordinates.
+- Facts: `browser_navigate`, `browser_get_state` (one line per control: `@e5 button "Sign up"`, with value / checked / expanded / selected state; pass `"format": "json"` for the `elements[]` body), `browser_get_text` / `browser_get_page_text`, `browser_find`, `browser_javascript_exec` (DOM, computed styles, cookies).
+- Actions: index-based `browser_click` / `browser_type` / `browser_select_dropdown`. `index` takes the ref from `browser_get_state` (`"@e5"`, `"5"` or `5`) or an index from `browser_find`; never guess coordinates.
 - Cookies: navigate, set them with `browser_javascript_exec` (`document.cookie = "name=value; path=/"`), then navigate again.
 - Visuals: `browser_screenshot` returns the viewport as an image you can see; pass `"path": "/abs/dir/name.png"` to also save it. Call `browser_wait` (1–2 s) after navigating or clicking and before a screenshot, so fonts, images, and animations have settled. Scroll with `browser_javascript_exec` to bring off-screen parts into view.
 

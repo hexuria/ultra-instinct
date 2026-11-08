@@ -10,7 +10,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ultra_instinct_core::{Action, InteractionManifold, InteractionRegion, RegionId};
-use ultra_instinct_protocol::{ActionTicket, GuardCandidate, TicketInvalid};
+use ultra_instinct_protocol::{ActionTicket, GuardCandidate, GuardReason, TicketInvalid};
 
 use crate::world::WorldSnapshot;
 
@@ -138,6 +138,9 @@ pub fn consume_ticket<E>(
 #[non_exhaustive]
 pub enum ConsumeError<E> {
     Invalid(TicketInvalid),
+    /// The user's [`crate::Policy`] refused the press (not stale; the
+    /// ticket was not consumed).
+    Refused(GuardReason),
     Press(E),
 }
 
@@ -145,6 +148,7 @@ impl<E: std::fmt::Display> std::fmt::Display for ConsumeError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Invalid(err) => write!(f, "ticket invalid: {err}"),
+            Self::Refused(reason) => write!(f, "refused: {reason}"),
             Self::Press(err) => write!(f, "press failed: {err}"),
         }
     }
@@ -154,6 +158,7 @@ impl<E: std::error::Error + 'static> std::error::Error for ConsumeError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Invalid(err) => Some(err),
+            Self::Refused(_) => None,
             Self::Press(err) => Some(err),
         }
     }
