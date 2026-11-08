@@ -522,21 +522,34 @@ fn check_destination(path: &Path, overwrite: bool) -> Result<(), ToolError> {
     Ok(())
 }
 
-/// A fresh, empty temp directory Chrome writes the download into.
+/// A fresh, empty temp directory Chrome writes the download into. Made
+/// with `create_dir`, never reused: the clock can repeat (macOS gives
+/// microseconds), so a name taken by another download gets the next suffix.
 fn download_dir() -> Result<PathBuf, ToolError> {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or_default();
-    let dir = std::env::temp_dir().join(format!(
-        "ultra-instinct-download-{}-{nanos}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).map_err(|err| ToolError::Io {
-        path: dir.display().to_string(),
-        message: err.to_string(),
-    })?;
-    Ok(dir)
+    let base = std::env::temp_dir();
+    let mut suffix = 0u32;
+    loop {
+        let dir = base.join(format!(
+            "ultra-instinct-download-{}-{nanos}-{suffix}",
+            std::process::id()
+        ));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists && suffix < 1000 => {
+                suffix += 1;
+            }
+            Err(err) => {
+                return Err(ToolError::Io {
+                    path: dir.display().to_string(),
+                    message: err.to_string(),
+                })
+            }
+        }
+    }
 }
 
 /// What the buffered download events say so far.
