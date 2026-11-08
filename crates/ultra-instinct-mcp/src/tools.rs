@@ -159,7 +159,7 @@ pub(crate) fn dispatch(
         return result;
     }
     if name.starts_with("browser_") {
-        return crate::browser_tools::call(server, name, arguments);
+        return crate::browser_extra::call(server, name, arguments);
     }
     match name {
         "navigate" => Err(ToolError::GoalNotAccepted),

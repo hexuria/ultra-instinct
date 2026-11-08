@@ -36,7 +36,7 @@ pub const TOOL_DIFF: &str = "diff";
 pub const TOOL_VERIFY: &str = "verify";
 
 #[allow(deprecated)]
-pub const TOOLS: [&str; 51] = [
+pub const TOOLS: [&str; 60] = [
     TOOL_OBSERVE,
     TOOL_LOCATE,
     TOOL_INSPECT,
@@ -88,13 +88,24 @@ pub const TOOLS: [&str; 51] = [
     "browser_state_load",
     "browser_cookies",
     "browser_storage",
+    "browser_dialog",
+    "browser_go_forward",
+    "browser_reload",
+    "browser_check",
+    "browser_focus",
+    "browser_keyboard",
+    "browser_get",
+    "browser_is",
+    "browser_count",
 ];
 
 pub const PRODUCT_TOOLS: [&str; 3] = [TOOL_OBSERVE, TOOL_GUARD, TOOL_VERIFY];
 
+mod browser_extra;
 mod browser_state;
 mod browser_tools;
 pub use browser_env::ENV_TOOLS;
+pub use browser_extra::EXTRA_TOOLS;
 pub use browser_state::STATE_TOOLS;
 pub use browser_tools::BROWSER_TOOLS;
 
@@ -126,7 +137,10 @@ mod tests {
         assert!(!PRODUCT_TOOLS.contains(&"act"));
         // The `browser_*` host surface sits beside the firewall tools; it
         // never enters PRODUCT_TOOLS.
-        for name in crate::browser_tools::BROWSER_TOOLS {
+        for name in crate::browser_tools::BROWSER_TOOLS
+            .into_iter()
+            .chain(crate::browser_extra::EXTRA_TOOLS)
+        {
             assert!(TOOLS.contains(&name));
             assert!(!PRODUCT_TOOLS.contains(&name));
         }

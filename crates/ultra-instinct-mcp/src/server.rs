@@ -65,6 +65,8 @@ pub struct Server {
     domains: BTreeMap<String, u8>,
     /// Session key → HAR tap and blocked URLs (`browser_env`).
     pub(crate) env: crate::browser_env::EnvState,
+    /// Session key → the JavaScript dialog open on that tab (`browser_dialog`).
+    dialogs: BTreeMap<String, crate::browser_extra::Dialog>,
 }
 
 impl SignedSnapshot for Snapshot {
@@ -103,6 +105,7 @@ impl Server {
             dropped: BTreeMap::new(),
             domains: BTreeMap::new(),
             env: Default::default(),
+            dialogs: BTreeMap::new(),
         }
     }
 
@@ -216,6 +219,7 @@ impl Server {
         self.domains.remove(url);
         self.dropped.remove(url);
         self.env.remove(url);
+        self.dialogs.remove(url);
     }
 
     /// Page-websocket url `browser_*` tools drive for `endpoint`, when bound.
@@ -269,6 +273,19 @@ impl Server {
     /// Diagnostic domains already enabled for `key` (bit0 console, bit1 network).
     pub(crate) fn enabled_domains(&self, key: &str) -> u8 {
         self.domains.get(key).copied().unwrap_or(0)
+    }
+
+    /// The JavaScript dialog open on `key`'s tab, when one is.
+    pub(crate) fn dialog(&self, key: &str) -> Option<&crate::browser_extra::Dialog> {
+        self.dialogs.get(key)
+    }
+
+    /// Record (`Some`) or clear (`None`) the dialog open on `key`'s tab.
+    pub(crate) fn set_dialog(&mut self, key: &str, dialog: Option<crate::browser_extra::Dialog>) {
+        match dialog {
+            Some(dialog) => self.dialogs.insert(key.to_owned(), dialog),
+            None => self.dialogs.remove(key),
+        };
     }
 
     /// Mark a diagnostic domain bit as enabled for `key`.
