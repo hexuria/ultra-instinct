@@ -6,7 +6,8 @@
 //! no computer-use vision path.
 //!
 //! The default HTTP endpoint is [`DEFAULT_CDP_HTTP`] (`http://127.0.0.1:9222`).
-//! ultra-instinct does not launch Chrome. macOS and CUA stay outside this crate.
+//! [`launch`] can start a local Chrome on a free DevTools port; nothing else
+//! starts a browser. macOS and CUA stay outside this crate.
 
 #![forbid(unsafe_code)]
 
@@ -16,6 +17,7 @@ mod error;
 mod extract;
 mod fusion;
 mod identity;
+pub mod launch;
 mod page;
 mod session;
 mod stacking;

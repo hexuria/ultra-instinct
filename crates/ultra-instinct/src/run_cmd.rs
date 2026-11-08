@@ -101,6 +101,9 @@ struct RunArgs {
     /// recorded instead of in the end-of-run transcript, so a run stopped
     /// from outside still leaves every step it took.
     live_steps: bool,
+    /// `--launch [--headed]`: start this run's own Chrome when `--cdp` is absent.
+    launch: bool,
+    headed: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -131,6 +134,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     let mut no_derived_text = false;
     let mut second_opinion = false;
     let mut live_steps = false;
+    let (mut launch, mut headed) = (false, false);
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
@@ -185,6 +189,8 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
             "--no-derived-text" => switch(&mut no_derived_text, "--no-derived-text", arg, &inline)?,
             "--second-opinion" => switch(&mut second_opinion, "--second-opinion", arg, &inline)?,
             "--live-steps" => switch(&mut live_steps, "--live-steps", arg, &inline)?,
+            "--launch" => switch(&mut launch, "--launch", arg, &inline)?,
+            "--headed" => switch(&mut headed, "--headed", arg, &inline)?,
             "--max-steps" => {
                 let raw = value("--max-steps")?;
                 let n: u32 = raw.parse().map_err(|_| CliError::BadNumber {
@@ -226,11 +232,18 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     if cdp.is_some() && fixture.is_some() {
         return Err(CliError::DuplicateFlag("--cdp"));
     }
-    if cdp.is_none() && fixture.is_none() {
+    if launch && fixture.is_some() || headed && !launch {
+        return Err(CliError::UnknownFlag(
+            "--launch [--headed] drives a live Chrome; not with --fixture".into(),
+        ));
+    }
+    if cdp.is_none() && fixture.is_none() && !launch {
         return Err(CliError::MissingSource);
     }
-    if url.is_some() && cdp.is_none() {
-        return Err(CliError::UnknownFlag("--url requires --cdp".into()));
+    if url.is_some() && cdp.is_none() && !launch {
+        return Err(CliError::UnknownFlag(
+            "--url requires --cdp or --launch".into(),
+        ));
     }
     if allow_derived_text && no_derived_text {
         return Err(CliError::UnknownFlag(
@@ -257,6 +270,8 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
         no_derived_text,
         second_opinion,
         live_steps,
+        launch,
+        headed,
     })
 }
 
@@ -286,7 +301,15 @@ fn set<T>(slot: &mut Option<T>, flag: &'static str, value: T) -> Result<(), CliE
 }
 
 pub(crate) fn run_command(args: &[String]) -> Result<String, CliError> {
-    let args = parse(args)?;
+    let mut args = parse(args)?;
+    // Declared before the session, so the run's tab closes before Chrome is killed.
+    let _chrome = match args.launch && args.cdp.is_none() {
+        true => Some(crate::doctor_cmd::launch_chrome(args.headed)?),
+        false => None,
+    };
+    if let Some(chrome) = &_chrome {
+        args.cdp = Some(chrome.endpoint());
+    }
     if let Some(endpoint) = &args.cdp {
         let transport = if args.url.is_some() {
             open_tab(endpoint)
@@ -819,6 +842,18 @@ mod tests {
             run_command(&a(&["--goal", "Go", "--fixture", "x", "--url", "http://a"])).unwrap_err(),
             CliError::UnknownFlag(_)
         ));
+    }
+
+    #[test]
+    fn launch_is_a_live_source_and_headed_needs_it() {
+        let p = parse(&a(&[
+            "--goal", "Go", "--launch", "--headed", "--url", "http://a",
+        ]))
+        .unwrap();
+        assert!(p.launch && p.headed && p.cdp.is_none());
+        assert!(parse(&a(&["--goal", "Go", "--cdp", "--headed"])).is_err());
+        assert!(parse(&a(&["--goal", "Go", "--fixture", "x", "--launch"])).is_err());
+        assert!(parse(&a(&["--goal", "Go", "--launch=1"])).is_err());
     }
 
     #[test]
