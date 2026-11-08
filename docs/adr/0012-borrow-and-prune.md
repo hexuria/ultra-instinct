@@ -142,12 +142,28 @@ not a tty prompt; and `guard` matches the exact label (see Prune 1).
 - The `ultra-instinct-browser` and `ultra-instinct-mcp` line ceilings were
   raised for the ported tools, and `ultra-instinct` for the shell verbs
   (reasons in `scripts/crate-ceilings.txt`).
-- `Network.setBlockedURLs` takes `urls`; very new Chrome may want
-  `urlPatterns` instead.
-- `browser_download` and `browser_set` are tested over CDP replay only, not
-  against live Chrome in CI. One manual smoke of the shell verbs against a
-  launched Chrome 156 (2026-11-08) ran `download`, `set viewport / media /
-  reset`, `network block / har` and the rest; it is not a recorded test.
+- `Network.setBlockedURLs` takes `urls`. On Chrome 156.0.8078.81 that
+  blocks (the request never reaches the server), so there is no
+  `urlPatterns` fallback; a future Chrome that drops `urls` would show up in
+  `live_borrow.rs`.
+- CI tests `browser_download`, `browser_set`, `browser_network` and the
+  state tools over CDP replay only. The recorded live tests in
+  `crates/ultra-instinct/tests/live_borrow.rs` (`#[ignore]`, each on its own
+  `aui open --launch` Chrome and a 127.0.0.1 test server) check state save →
+  load, cookies, set device / viewport / media / offline / headers / reset,
+  download, network block and HAR, the alert dialog, close and `--idle`
+  lifecycle, `--headed` and stdin batch through what the page or the server
+  sees. All passed on Chrome 156.0.8078.81 (macOS, 2026-11-09).
+- The HAR reads `Network.requestWillBeSent` / `responseReceived` headers,
+  which in Chrome carry no `Cookie` / `Set-Cookie` (those are only in the
+  `*ExtraInfo` events, not read). Cookie values therefore never reach a HAR,
+  and the cookie headers are absent rather than listed as `•••`;
+  `Authorization` is listed, masked.
+- A press whose handler opens `alert()` / `confirm()` used to wait the
+  websocket's 30 s deadline; the transport now stops at
+  `Page.javascriptDialogOpening` (`CdpError::DialogOpened`) and the tool
+  answers at once with the dialog hint. The daemon's idle exit (60 min) is
+  set per session with `aui open --idle <secs>`.
 - Owners:
   - `ultra-instinct-guard` unit tests (clear button, different label, twins,
     hidden twin, `within`, case and whitespace, disabled, buried page button

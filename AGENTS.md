@@ -214,9 +214,11 @@ deliberate eval.
   `domain_off_the_allowlist_ends_blocked`).
 - Shell verbs and the session daemon: `verbs.rs` / `batch.rs` unit tests and
   the `daemon.rs` socket tests (round trip, spawn / stale socket, idle exit,
-  failed launch, session list). `browser_*` families over CDP replay:
-  `crates/ultra-instinct-mcp/tests/browser_tools.rs`, `browser_extra.rs`,
-  `browser_state.rs`, `browser_env.rs`.
+  `--idle`, failed launch, session list). `browser_*` families over CDP
+  replay: `crates/ultra-instinct-mcp/tests/browser_tools.rs`,
+  `browser_extra.rs`, `browser_state.rs`, `browser_env.rs`. A call that
+  opens a JS dialog returns `CdpError::DialogOpened` at once: ws.rs
+  `a_dialog_opening_ends_the_wait_and_stays_buffered`.
 - Instinct evidence: `ultra-instinct-policy` unit tests. Do not add a second model of
   Instinct scoring.
 - MCP / CLI `guard` (exact label, unique or refuse): `ultra-instinct-guard`
@@ -246,7 +248,12 @@ deliberate eval.
   `neighborhood_of` / `nearby`). How to run locally:
   [`docs/IMPECCABLE-AUDIT.md`](docs/IMPECCABLE-AUDIT.md#mutation-testing).
 
-Live Chrome tests stay `#[ignore]`; CI uses CDP replay fixtures.
+Live Chrome tests stay `#[ignore]`; CI uses CDP replay fixtures. The live
+tests are `crates/ultra-instinct-agent/tests/live_smoke.rs` (the owned loop)
+and `crates/ultra-instinct/tests/live_borrow.rs` (the shell verbs against
+their own `aui open --launch` Chrome and a 127.0.0.1 test server: state,
+cookies, set, download, network / HAR, dialog, close / idle lifecycle,
+`--headed`, stdin batch; run with `-- --ignored --test-threads=1`).
 
 ```
 Verification impact
@@ -323,7 +330,10 @@ ticketed KEY.
 tools read the index from the tab's last observation when no input ran
 since, and act on that region in a fresh observation. Page is enabled once
 per tab outside observe for dialog tracking; a failing call while a dialog
-is open says so.
+is open says so. A call that opens one (a press whose handler calls
+`alert()`) stops waiting at `Page.javascriptDialogOpening` and fails at once
+with that hint (`CdpError::DialogOpened`); the press was dispatched, its
+ticket stays consumed, and nothing retries it.
 
 Login state (`browser_state_save` / `_load`, `browser_cookies`,
 `browser_storage`): values are masked unless `reveal`; state files are 0600
