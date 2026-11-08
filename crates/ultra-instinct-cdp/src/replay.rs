@@ -97,12 +97,11 @@ impl ReplayTransport {
                 });
             }
             let outcome = if has_error {
-                let error: Value = serde_json::from_str(
-                    call.get("error").expect("error presence checked").get(),
-                )
-                .map_err(|err| CdpError::BadScript {
-                    message: err.to_string(),
-                })?;
+                let error: Value =
+                    serde_json::from_str(call.get("error").expect("error presence checked").get())
+                        .map_err(|err| CdpError::BadScript {
+                            message: err.to_string(),
+                        })?;
                 let message = match error {
                     Value::String(message) => message,
                     other => other.to_string(),
@@ -258,13 +257,15 @@ mod tests {
         let text =
             format!("{{\"calls\":[{{\"method\":\"DOM.getDocument\",\"result\":{result_text}}}]}}");
         let mut transport = ReplayTransport::parse(&text).unwrap();
-        assert_eq!(transport.call("DOM.getDocument", "{}").unwrap(), result_text);
+        assert_eq!(
+            transport.call("DOM.getDocument", "{}").unwrap(),
+            result_text
+        );
 
         // `result: null` is a present result and answers "null".
-        let mut transport = ReplayTransport::parse(
-            r#"{"calls":[{"method":"Runtime.evaluate","result":null}]}"#,
-        )
-        .unwrap();
+        let mut transport =
+            ReplayTransport::parse(r#"{"calls":[{"method":"Runtime.evaluate","result":null}]}"#)
+                .unwrap();
         assert_eq!(transport.call("Runtime.evaluate", "{}").unwrap(), "null");
     }
 
