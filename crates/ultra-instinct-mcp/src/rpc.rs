@@ -162,7 +162,7 @@ fn tool_spec(name: &str) -> Value {
         let (description, properties, required) = if crate::browser_env::ENV_TOOLS.contains(&name) {
             crate::browser_env::spec(name)
         } else {
-            crate::browser_tools::spec(name)
+            crate::browser_state::spec(name).unwrap_or_else(|| crate::browser_tools::spec(name))
         };
         return json!({
             "name": name,

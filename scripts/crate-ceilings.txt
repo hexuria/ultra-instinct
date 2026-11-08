@@ -2,4 +2,4 @@
 # says why; splitting the crate is usually the better answer.
 # Current usage: ultra-instinct-browser 4927, ultra-instinct-cdp 1853, every other crate < 3.1k (2026-10-06).
 default 6000
-ultra-instinct-browser 8200 # local Chrome launch (launch.rs); owned per-agent CDP tab lifecycle; click-listener, label, paint, and act evidence (ADR 0011), most of it inline tests
+ultra-instinct-browser 8800 # local Chrome launch (launch.rs); owned per-agent CDP tab lifecycle; click-listener, label, paint, and act evidence (ADR 0011), most of it inline tests; storage state (save and reuse a login, ~590)

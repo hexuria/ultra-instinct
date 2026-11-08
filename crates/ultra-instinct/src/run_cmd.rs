@@ -13,6 +13,8 @@
 //! ultra-instinct run ... --policy clef-flash          # feature `clef`: Cloudflare Clef-Flash (9B) decides
 //! ultra-instinct run ... --policy instinct            # offline; `pua` is a deprecated alias
 //! ultra-instinct run ... --live-steps                 # print each `step` line as it happens
+//! ultra-instinct run ... --load-state <path>          # reuse a saved login before the first observe
+//! ultra-instinct run ... --save-state <path>          # save cookies + storage when the run ends
 //! ```
 //!
 //! Live mode with `--url` opens an owned background tab; it closes when the run
@@ -57,6 +59,7 @@ use std::io::Write as _;
 use ultra_instinct_agent::{
     Agent, AgentBuilder, AgentOutcome, BrowserRuntime, MockBrowser, StepRecord,
 };
+use ultra_instinct_browser::storage_state::BorrowedTransport;
 use ultra_instinct_browser::{
     open_tab, BrowserSession, CdpTransport, ReplayTransport, WebSocketTransport,
 };
@@ -79,6 +82,10 @@ struct RunArgs {
     /// `--lessons <path>`: the dojo's lesson store (loaded at start,
     /// grown during the run, saved back at exit).
     lessons: Option<String>,
+    /// `--load-state <path>` / `--save-state <path>`: a saved login
+    /// (cookies + storage, `crate::state_cmd`); CDP runs only.
+    load_state: Option<String>,
+    save_state: Option<String>,
     /// `--no-screenshot`: a pixel-reading policy decides without the viewport.
     /// Only `jev` reads pixels today.
     #[cfg_attr(not(feature = "jev"), allow(dead_code))]
@@ -128,6 +135,8 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     let mut policy = None;
     let mut diary = None;
     let mut lessons = None;
+    let mut load_state = None;
+    let mut save_state = None;
     let mut no_screenshot = false;
     let mut no_page_text = false;
     let mut allow_derived_text = false;
@@ -178,6 +187,8 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
                 set(&mut policy, "--policy", kind)?;
             }
             "--lessons" => set(&mut lessons, "--lessons", value("--lessons")?)?,
+            "--load-state" => set(&mut load_state, "--load-state", value("--load-state")?)?,
+            "--save-state" => set(&mut save_state, "--save-state", value("--save-state")?)?,
             "--no-screenshot" => switch(&mut no_screenshot, "--no-screenshot", arg, &inline)?,
             "--no-page-text" => switch(&mut no_page_text, "--no-page-text", arg, &inline)?,
             "--allow-derived-text" => switch(
@@ -264,6 +275,8 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
         policy: policy.unwrap_or(PolicyKind::Instinct),
         diary,
         lessons,
+        load_state,
+        save_state,
         no_screenshot,
         no_page_text,
         allow_derived_text,
@@ -317,14 +330,9 @@ pub(crate) fn run_command(args: &[String]) -> Result<String, CliError> {
             WebSocketTransport::connect(endpoint)
         }
         .map_err(|err| CliError::Browser(err.to_string()))?;
-        let mut session = BrowserSession::new(transport);
-        if let Some(url) = &args.url {
-            session
-                .navigate(url)
-                .map_err(|err| CliError::Browser(err.to_string()))?;
-            BrowserRuntime::settle(&mut session);
-        }
-        return drive(session, &args);
+        let mut transport = transport;
+        let result = run_session(&mut transport, &args);
+        return finish(&mut transport, &args, result);
     }
     let path = args.fixture.as_deref().expect("checked in parse");
     let body = std::fs::read_to_string(path).map_err(|err| CliError::Io {
@@ -332,9 +340,15 @@ pub(crate) fn run_command(args: &[String]) -> Result<String, CliError> {
         message: err.to_string(),
     })?;
     if body.trim_start().starts_with('{') {
-        let transport =
+        let mut transport =
             ReplayTransport::parse(&body).map_err(|err| CliError::Browser(err.to_string()))?;
-        return drive(BrowserSession::new(transport), &args);
+        let result = run_session(&mut transport, &args);
+        return finish(&mut transport, &args, result);
+    }
+    if args.load_state.is_some() || args.save_state.is_some() {
+        return Err(CliError::UnknownFlag(
+            "--load-state / --save-state need --cdp or a CDP replay fixture".into(),
+        ));
     }
     // Static manifold: predict once. Executing against a page that cannot
     // change would only measure the mock.
@@ -347,6 +361,48 @@ pub(crate) fn run_command(args: &[String]) -> Result<String, CliError> {
         PolicyKind::Clef => predict_clef(manifold, &args, "clef"),
         PolicyKind::ClefFlash => predict_clef(manifold, &args, "clef-flash"),
         PolicyKind::Dojo => predict_dojo(manifold, &args),
+    }
+}
+
+/// Load state (if asked), navigate (with `--url`), then drive the loop on
+/// a session that borrows `transport`, so the run's end can still save.
+fn run_session<T: CdpTransport>(transport: &mut T, args: &RunArgs) -> Result<String, CliError> {
+    use crate::state_cmd;
+    let mut session = BrowserSession::new(BorrowedTransport(transport));
+    let mut prefix = String::new();
+    let loaded = match &args.load_state {
+        Some(path) => {
+            let (state, line) = state_cmd::load(session.transport_mut(), path)?;
+            prefix.push_str(&line);
+            Some((path, state))
+        }
+        None => None,
+    };
+    if let Some(url) = &args.url {
+        session
+            .navigate(url)
+            .map_err(|err| CliError::Browser(err.to_string()))?;
+        BrowserRuntime::settle(&mut session);
+        if let Some((path, state)) = &loaded {
+            prefix.push_str(&state_cmd::after_navigation(
+                session.transport_mut(),
+                path,
+                state,
+            )?);
+        }
+    }
+    state_cmd::with_prefix(&prefix, drive(session, args))
+}
+
+/// `--save-state`: save when the run ends, successful or not.
+fn finish<T: CdpTransport>(
+    transport: &mut T,
+    args: &RunArgs,
+    result: Result<String, CliError>,
+) -> Result<String, CliError> {
+    match &args.save_state {
+        Some(path) => crate::state_cmd::save_after(transport, path, result),
+        None => result,
     }
 }
 

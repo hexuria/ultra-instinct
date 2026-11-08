@@ -155,6 +155,9 @@ pub(crate) fn dispatch(
     if crate::browser_env::ENV_TOOLS.contains(&name) {
         return crate::browser_env::call(server, name, arguments);
     }
+    if let Some(result) = crate::browser_state::call(server, name, arguments) {
+        return result;
+    }
     if name.starts_with("browser_") {
         return crate::browser_tools::call(server, name, arguments);
     }
