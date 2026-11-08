@@ -1625,7 +1625,6 @@ dependencies = [
  "ultra-instinct-policy",
  "ultra-instinct-protocol",
  "ultra-instinct-remote",
- "ultra-instinct-resonance",
 ]
 
 [[package]]
@@ -1719,7 +1718,6 @@ dependencies = [
  "ultra-instinct-guard",
  "ultra-instinct-observe",
  "ultra-instinct-protocol",
- "ultra-instinct-resonance",
 ]
 
 [[package]]

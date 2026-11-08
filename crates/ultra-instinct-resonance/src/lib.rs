@@ -37,7 +37,7 @@ use ultra_instinct_hyper::{cosine, Encoder};
 pub use context::ContextScope;
 pub use error::ResonanceError;
 pub use model::{PenaltyBasisPoints, ResonanceModel, WeightBasisPoints};
-pub use ultra_instinct_geometry::{separating_zone, Availability, RegionState, Visibility};
+pub use ultra_instinct_geometry::{Availability, RegionState, Visibility};
 #[cfg(feature = "hgra")]
 pub use ultra_instinct_hyper::{BipolarVector, Dims};
 

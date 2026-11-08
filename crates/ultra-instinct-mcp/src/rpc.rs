@@ -168,28 +168,14 @@ fn tool_spec(name: &str) -> Value {
     }
     let (description, properties, required) = match name {
         "observe" => (
-            "Read a CDP fixture or an optional live CDP endpoint into regions. Returns id, role, label, parent, state (availability enabled or disabled; visibility visible, occluded, offscreen, or hidden; a region behind an open dialog reads occluded), focused (region id or null), front_layer (open dialogs), and a snapshot id for diff. Does not click and does not choose the next capability.",
+            "Read a CDP fixture or an optional live CDP endpoint into regions. Returns id, role, label, parent, state (availability enabled or disabled; visibility visible, occluded, offscreen, or hidden; a region behind an open dialog reads occluded), focused (region id or null), front_layer (open dialogs), and a snapshot id for guard seen_snapshot and verify before/after. Does not click and does not choose the next capability.",
             source_props(),
             Vec::<&str>::new(),
         ),
-        "locate" => (
-            "Rank regions for one query. Default matcher is weighted. matcher hgra selects the hyperdimensional ranker and is not a benchmark and not a measured win. Returns the top target id, role, label, and confidence, and candidates with state. signals carries repeated_query when the same query already ran on the same page state, with top and runner_up ids and a suggested_position that separates each; it is data and does not refuse or retry. Does not click.",
-            locate_props(),
-            Vec::new(),
-        ),
-        "inspect" => (
-            "Return one region by id, including its state and rectangle. The rectangle is descriptive. Do not click those coordinates. Act on the region id.",
-            {
-                let mut props = source_props();
-                props.insert("region".into(), json!({"type": "string"}));
-                props
-            },
-            vec!["region"],
-        ),
         "guard" => (
-            "Decide allow / refuse / escalate for a proposed click against the page as observed now. Allow includes an ActionTicket the host must revalidate before clicking. Never clicks. Pass target (or text), optional role/position, optional within (container id) or near (\"focus\" or region id), optional proposed region id, optional seen_snapshot (the observation the host decided on). Refuses front-layer when the target is behind an open dialog; escalates world-changed when focus, open dialogs, clickable ids, or occluded regions differ from seen_snapshot. Returns decision, evidence, candidates, focused, front_layer, scope.",
+            "Decide allow / refuse / escalate for a proposed click against the page as observed now. Allow includes an ActionTicket the host must revalidate before clicking. Never clicks. Pass target (or text): the region whose label equals it (trimmed, whitespace collapsed, case ignored) is the target, unique or refuse. Optional role, optional within (container id), optional proposed region id (picks one of several matches), optional seen_snapshot (the observation the host decided on). No match refuses missing-target; several visible matches escalate ambiguous. Refuses front-layer when the target is behind an open dialog; escalates world-changed when focus, open dialogs, clickable ids, or occluded regions differ from seen_snapshot. Returns decision, evidence, candidates, focused, front_layer.",
             {
-                let mut props = locate_props();
+                let mut props = guard_props();
                 props.insert(
                     "target".into(),
                     json!({
@@ -201,7 +187,7 @@ fn tool_spec(name: &str) -> Value {
                     "proposed".into(),
                     json!({
                         "type": "string",
-                        "description": "Optional region id that must be the top match."
+                        "description": "Optional region id that must be one of the label matches."
                     }),
                 );
                 props.insert(
@@ -218,47 +204,6 @@ fn tool_spec(name: &str) -> Value {
                         "description": "Snapshot id the host decided on. A different set of open dialogs now escalates world-changed."
                     }),
                 );
-                props
-            },
-            Vec::new(),
-        ),
-        "act" => (
-            "Deprecated alias of guard. Returns the same decision and never clicks.",
-            {
-                let mut props = locate_props();
-                props.insert(
-                    "target".into(),
-                    json!({
-                        "type": "string",
-                        "description": "Visible label to resolve (alias of text)."
-                    }),
-                );
-                props.insert(
-                    "proposed".into(),
-                    json!({
-                        "type": "string",
-                        "description": "Optional region id that must be the top match."
-                    }),
-                );
-                props.insert(
-                    "region".into(),
-                    json!({
-                        "type": "string",
-                        "description": "Deprecated alias of proposed."
-                    }),
-                );
-                props
-            },
-            Vec::new(),
-        ),
-        "diff" => (
-            "Id-level difference of two observations, given as before/after fixture paths or as before_snapshot/after_snapshot ids returned by earlier calls on this server. Returns state_delta added, removed, changed, moved, text_changed, focus_changed, and url_changed. Does not click.",
-            {
-                let mut props = serde_json::Map::new();
-                props.insert("before".into(), json!({"type": "string"}));
-                props.insert("after".into(), json!({"type": "string"}));
-                props.insert("before_snapshot".into(), json!({"type": "integer"}));
-                props.insert("after_snapshot".into(), json!({"type": "integer"}));
                 props
             },
             Vec::new(),
@@ -312,11 +257,10 @@ fn source_props() -> serde_json::Map<String, Value> {
     props
 }
 
-fn locate_props() -> serde_json::Map<String, Value> {
+fn guard_props() -> serde_json::Map<String, Value> {
     let mut props = source_props();
     props.insert("text".into(), json!({"type": "string"}));
     props.insert("role".into(), json!({"type": "string"}));
-    props.insert("position".into(), json!({"type": "string"}));
     props.insert("action".into(), json!({"type": "string"}));
     props.insert(
         "within".into(),
@@ -324,25 +268,6 @@ fn locate_props() -> serde_json::Map<String, Value> {
             "type": "string",
             "description": "Region id of a container. The target must be under it in the parent chain (observe returns each region's parent)."
         }),
-    );
-    props.insert(
-        "near".into(),
-        json!({
-            "type": "string",
-            "description": "\"focus\" for the focused region, or a region id. Scopes twin labels to the innermost ancestor of that anchor that contains a best match. No focus or no such ancestor: the default ranking."
-        }),
-    );
-    props.insert(
-        "matcher".into(),
-        json!({
-            "type": "string",
-            "enum": ["weighted", "hgra"],
-            "description": "Default weighted. hgra is not a benchmark."
-        }),
-    );
-    props.insert(
-        "dims".into(),
-        json!({"type": "integer", "enum": [512, 1024, 2048, 4096]}),
     );
     props
 }

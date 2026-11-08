@@ -4,23 +4,17 @@
 //! a throwaway Chrome and sets `ULTRA_INSTINCT_LIVE_CDP` + `ULTRA_INSTINCT_LIVE_SITE`.
 //! Tests must run with `--test-threads=1` so they share one tab without racing.
 //! No JEV, no Luna: observe → guard only.
-//! Rank traces: `RUST_LOG=ultra_instinct_resonance=debug`.
 
 use std::thread;
 use std::time::Duration;
 
 use serde_json::json;
 use ultra_instinct_browser::{BrowserSession, CdpTransport, WebSocketTransport};
-use ultra_instinct_core::{InteractionManifold, LocateQuery, Role};
+use ultra_instinct_core::{LocateQuery, Role};
 use ultra_instinct_geometry::RegionState;
-#[cfg(feature = "hgra")]
-use ultra_instinct_guard::guard_with;
 use ultra_instinct_guard::{
-    blocker, guard, with_front_layer, FrontLayer, GuardDecision, GuardError, GuardReason,
-    GuardRequest,
+    blocker, guard, with_front_layer, FrontLayer, GuardDecision, GuardReason, GuardRequest,
 };
-#[cfg(feature = "hgra")]
-use ultra_instinct_resonance::HgraMatcher;
 
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
@@ -87,31 +81,6 @@ fn find_ids_by_label(session: &BrowserSession<WebSocketTransport>, label: &str) 
         .collect()
 }
 
-/// Rank+decide with the matcher selected by `ULTRA_INSTINCT_MATCHER` (default weighted).
-/// Set `ULTRA_INSTINCT_MATCHER=hgra` and build with `--features hgra` for forced-HGRA remasure.
-fn decide(
-    manifold: &InteractionManifold,
-    request: &GuardRequest,
-) -> Result<GuardDecision, GuardError> {
-    let matcher = std::env::var("ULTRA_INSTINCT_MATCHER").unwrap_or_else(|_| "weighted".into());
-    match matcher.as_str() {
-        "weighted" | "" => guard(manifold, request),
-        "hgra" => {
-            #[cfg(feature = "hgra")]
-            {
-                eprintln!("matcher=hgra");
-                guard_with(manifold, request, &HgraMatcher::default())
-            }
-            #[cfg(not(feature = "hgra"))]
-            {
-                let _ = (manifold, request);
-                panic!("ULTRA_INSTINCT_MATCHER=hgra requires cargo --features hgra");
-            }
-        }
-        other => panic!("unknown ULTRA_INSTINCT_MATCHER={other} (want weighted|hgra)"),
-    }
-}
-
 fn dump_regions(session: &BrowserSession<WebSocketTransport>) -> String {
     let manifold = session.manifold().expect("observed");
     manifold
@@ -135,7 +104,7 @@ fn live_modal_confirm_refuses_buried_delete_and_allows_dialog_cancel() {
         dump_regions(&session)
     );
 
-    let buried = decide(
+    let buried = guard(
         &manifold,
         &GuardRequest::click(
             LocateQuery::new()
@@ -155,7 +124,7 @@ fn live_modal_confirm_refuses_buried_delete_and_allows_dialog_cancel() {
         }
     }
 
-    let twin = decide(
+    let twin = guard(
         &manifold,
         &GuardRequest::click(
             LocateQuery::new()
@@ -201,7 +170,7 @@ fn live_twin_suspend_near_focus_picks_beta_row() {
         focused_region.label()
     );
 
-    let bare = decide(
+    let bare = guard(
         &manifold,
         &GuardRequest::click(
             LocateQuery::new()
@@ -219,7 +188,7 @@ fn live_twin_suspend_near_focus_picks_beta_row() {
         other => panic!("expected escalate ambiguous without context, got {other:?}"),
     }
 
-    let focused_guard = decide(
+    let focused_guard = guard(
         &manifold,
         &GuardRequest::click(
             LocateQuery::new()
@@ -278,7 +247,7 @@ fn live_cookie_backdrop_hit_test_refuses_save() {
         dump_regions(&session)
     );
 
-    let decision = decide(
+    let decision = guard(
         &manifold,
         &GuardRequest::click(LocateQuery::new().text("Save").unwrap().role(Role::Button)),
     )
@@ -291,7 +260,7 @@ fn live_cookie_backdrop_hit_test_refuses_save() {
         other => panic!("expected refuse occluded/front-layer for Save, got {other:?}"),
     }
 
-    let accept = decide(
+    let accept = guard(
         &manifold,
         &GuardRequest::click(
             LocateQuery::new()

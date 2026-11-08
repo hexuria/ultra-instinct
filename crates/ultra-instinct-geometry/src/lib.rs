@@ -15,7 +15,7 @@
 
 mod state;
 
-pub use state::{separating_zone, Availability, RegionState, Visibility};
+pub use state::{Availability, RegionState, Visibility};
 
 use std::fmt;
 

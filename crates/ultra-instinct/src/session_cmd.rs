@@ -1,4 +1,4 @@
-//! observe, act, verify, diff, and inspect. Locate stays in the parent module.
+//! observe, guard, and verify.
 //!
 //! `--cdp` with no value uses [`ultra_instinct_browser::DEFAULT_CDP_HTTP`].
 //! A fixture whose first non-whitespace byte is `{` is a CDP replay script.
@@ -11,9 +11,8 @@ use std::path::Path;
 use ultra_instinct_browser::{
     BrowserSession, Expectation, ReplayTransport, WebSocketTransport, DEFAULT_CDP_HTTP,
 };
-use ultra_instinct_core::{parse_fixture, InteractionManifold, LocateQuery, RegionId, Role, Zone};
+use ultra_instinct_core::{parse_fixture, InteractionManifold, LocateQuery, RegionId, Role};
 use ultra_instinct_guard::{guard, GuardDecision, GuardRequest};
-use ultra_instinct_observe::diff;
 
 use crate::{set_once, CliError};
 
@@ -43,43 +42,10 @@ pub(crate) fn observe_command(args: &[String]) -> Result<String, CliError> {
     Ok(render_regions(&manifold))
 }
 
-pub(crate) fn inspect_command(args: &[String]) -> Result<String, CliError> {
-    let mut region: Option<String> = None;
-    let mut rest = Vec::new();
-    for arg in args {
-        if region.is_none() && !arg.starts_with("--") {
-            region = Some(arg.clone());
-        } else {
-            rest.push(arg.clone());
-        }
-    }
-    let region = region.ok_or(CliError::MissingRegion)?;
-    let source = parse_source(&rest)?;
-    let manifold = load_source(source.fixture.as_deref(), source.cdp.as_deref())?;
-    let found = manifold
-        .get_str(&region)
-        .ok_or_else(|| CliError::UnknownRegion(region.clone()))?;
-    Ok(format!(
-        "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-        found.id(),
-        found.role(),
-        found.label(),
-        found.rect().x(),
-        found.rect().y(),
-        found.rect().width(),
-        found.rect().height()
-    ))
-}
-
-pub(crate) fn act_command(args: &[String]) -> Result<String, CliError> {
-    // Deprecated alias of guard: never clicks.
-    guard_command(args)
-}
-
 pub(crate) fn guard_command(args: &[String]) -> Result<String, CliError> {
     let mut text: Option<String> = None;
     let mut role: Option<String> = None;
-    let mut position: Option<String> = None;
+    let mut within: Option<String> = None;
     let mut proposed: Option<String> = None;
     let mut fixture: Option<String> = None;
     let mut cdp: Option<String> = None;
@@ -97,8 +63,8 @@ pub(crate) fn guard_command(args: &[String]) -> Result<String, CliError> {
             set_once("text", &mut text, value.to_owned())?;
         } else if let Some(value) = arg.strip_prefix("--role=") {
             set_once("role", &mut role, value.to_owned())?;
-        } else if let Some(value) = arg.strip_prefix("--position=") {
-            set_once("position", &mut position, value.to_owned())?;
+        } else if let Some(value) = arg.strip_prefix("--within=") {
+            set_once("within", &mut within, value.to_owned())?;
         } else if let Some(value) = arg.strip_prefix("--proposed=") {
             set_once("proposed", &mut proposed, value.to_owned())?;
         } else if arg == "--json" {
@@ -121,7 +87,7 @@ pub(crate) fn guard_command(args: &[String]) -> Result<String, CliError> {
             || arg == "--text"
             || arg == "--target"
             || arg == "--role"
-            || arg == "--position"
+            || arg == "--within"
             || arg == "--proposed"
         {
             index += 1;
@@ -129,7 +95,7 @@ pub(crate) fn guard_command(args: &[String]) -> Result<String, CliError> {
                 "--fixture" => "--fixture",
                 "--text" | "--target" => "--text",
                 "--role" => "--role",
-                "--position" => "--position",
+                "--within" => "--within",
                 "--proposed" => "--proposed",
                 other => return Err(CliError::UnknownFlag(other.to_owned())),
             };
@@ -143,7 +109,7 @@ pub(crate) fn guard_command(args: &[String]) -> Result<String, CliError> {
                 "--fixture" => set_once("fixture", &mut fixture, value.clone())?,
                 "--text" | "--target" => set_once("text", &mut text, value.clone())?,
                 "--role" => set_once("role", &mut role, value.clone())?,
-                "--position" => set_once("position", &mut position, value.clone())?,
+                "--within" => set_once("within", &mut within, value.clone())?,
                 "--proposed" => set_once("proposed", &mut proposed, value.clone())?,
                 _ => unreachable!(),
             }
@@ -173,9 +139,9 @@ pub(crate) fn guard_command(args: &[String]) -> Result<String, CliError> {
         let parsed = Role::parse(&role).ok_or(CliError::UnknownRole(role))?;
         query = query.role(parsed);
     }
-    if let Some(position) = position {
-        let parsed = Zone::parse(&position).ok_or(CliError::UnknownPosition(position))?;
-        query = query.position(parsed);
+    if let Some(raw) = within {
+        let id = RegionId::try_new(&raw).map_err(|_| CliError::UnknownRegion(raw.clone()))?;
+        query = query.within(id);
     }
     let mut request = GuardRequest::click(query);
     if let Some(raw) = proposed {
@@ -183,7 +149,7 @@ pub(crate) fn guard_command(args: &[String]) -> Result<String, CliError> {
         request = request.proposed(id);
     }
     let manifold = load_source(fixture.as_deref(), cdp.as_deref())?;
-    let decision = guard(&manifold, &request).map_err(|err| CliError::Locate(err.to_string()))?;
+    let decision = guard(&manifold, &request).map_err(|err| CliError::Guard(err.to_string()))?;
     Ok(render_decision(&decision, json))
 }
 
@@ -327,65 +293,6 @@ pub(crate) fn verify_command(args: &[String]) -> Result<String, CliError> {
         };
     }
     Err(CliError::MissingExpect)
-}
-
-pub(crate) fn diff_command(args: &[String]) -> Result<String, CliError> {
-    let mut before: Option<String> = None;
-    let mut after: Option<String> = None;
-    let mut index = 0;
-    while index < args.len() {
-        let arg = &args[index];
-        if let Some(value) = arg.strip_prefix("--before=") {
-            set_once("before", &mut before, value.to_owned())?;
-        } else if let Some(value) = arg.strip_prefix("--after=") {
-            set_once("after", &mut after, value.to_owned())?;
-        } else if arg == "--before" || arg == "--after" {
-            let flag = if arg == "--before" {
-                "--before"
-            } else {
-                "--after"
-            };
-            let name = if arg == "--before" { "before" } else { "after" };
-            index += 1;
-            let Some(value) = args.get(index) else {
-                return Err(CliError::MissingValue(flag));
-            };
-            if value.starts_with("--") {
-                return Err(CliError::MissingValue(flag));
-            }
-            let slot = if arg == "--before" {
-                &mut before
-            } else {
-                &mut after
-            };
-            set_once(name, slot, value.clone())?;
-        } else {
-            return Err(CliError::UnknownFlag(arg.clone()));
-        }
-        index += 1;
-    }
-    let before = load_fixture(&before.ok_or(CliError::MissingValue("--before"))?)?;
-    let after = load_fixture(&after.ok_or(CliError::MissingValue("--after"))?)?;
-    let delta = diff(&before, &after);
-    let mut out = String::new();
-    for id in delta.added() {
-        out.push_str(&format!("added\t{id}\n"));
-    }
-    for id in delta.removed() {
-        out.push_str(&format!("removed\t{id}\n"));
-    }
-    for change in delta.changed() {
-        let fields: Vec<_> = change
-            .fields()
-            .iter()
-            .map(|field| format!("{field:?}"))
-            .collect();
-        out.push_str(&format!("changed\t{}\t{}\n", change.id(), fields.join(",")));
-    }
-    if out.is_empty() {
-        out.push_str("unchanged\n");
-    }
-    Ok(out)
 }
 
 struct Source {

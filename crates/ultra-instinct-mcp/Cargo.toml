@@ -11,7 +11,6 @@ description = "stdio JSON-RPC MCP server for the ultra-instinct action firewall"
 [dependencies]
 ultra-instinct-protocol = { path = "../ultra-instinct-protocol", version = "0.1.0"}
 ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.0"}
-ultra-instinct-resonance = { path = "../ultra-instinct-resonance", version = "0.1.0"}
 ultra-instinct-geometry = { path = "../ultra-instinct-geometry", version = "0.1.0"}
 ultra-instinct-browser = { path = "../ultra-instinct-browser", version = "0.1.0"}
 ultra-instinct-guard = { path = "../ultra-instinct-guard", version = "0.1.0"}
@@ -25,6 +24,3 @@ base64 = "0.22"
 proptest = "1.7"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std"] }
 
-[features]
-# Experimental HGRA matcher for live remasure (world_context_live).
-hgra = ["ultra-instinct-resonance/hgra"]

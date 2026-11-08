@@ -4,9 +4,9 @@
 //! [`is_fully_offscreen`], so `observe`, the world snapshot and `guard`
 //! cannot disagree about whether a control is disabled or off screen.
 
-use ultra_instinct_core::{InteractionRegion, Rect, Zone};
+use ultra_instinct_core::{InteractionRegion, Rect};
 
-use crate::{is_fully_offscreen, normalize, zones};
+use crate::is_fully_offscreen;
 
 /// Whether the control accepts input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -88,18 +88,6 @@ impl RegionState {
     }
 }
 
-/// The first position zone `target` is in and `other` is not, in the order
-/// left, right, top, bottom, center. Passing it as a locate `position` gives
-/// `target` the geometric credit and withholds it from `other`. `None` when
-/// every zone of `target` is shared, or the viewport cannot normalize.
-pub fn separating_zone(viewport: Rect, target: Rect, other: Rect) -> Option<Zone> {
-    let target_zones = zones(normalize(target, viewport).ok()?);
-    let other_zones = zones(normalize(other, viewport).ok()?);
-    target_zones
-        .into_iter()
-        .find(|zone| !other_zones.contains(zone))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,34 +137,5 @@ mod tests {
         assert!(Visibility::Visible < Visibility::Occluded);
         assert!(Visibility::Occluded < Visibility::Offscreen);
         assert!(Visibility::Offscreen < Visibility::Hidden);
-    }
-
-    #[test]
-    fn separating_zone_names_a_zone_only_the_target_is_in() {
-        let viewport = Rect::try_viewport(0.0, 0.0, 1280.0, 800.0).unwrap();
-        // Live drive t8: quick-reply Send (left) and docked Compose Send (bottom).
-        let reply = Rect::try_new(345.0, 380.0, 80.0, 36.0).unwrap();
-        let compose = Rect::try_new(740.0, 752.0, 80.0, 36.0).unwrap();
-        assert_eq!(separating_zone(viewport, reply, compose), Some(Zone::Left));
-        assert_eq!(
-            separating_zone(viewport, compose, reply),
-            Some(Zone::Bottom)
-        );
-        // Same zones: nothing separates them.
-        let twin = Rect::try_new(360.0, 380.0, 80.0, 36.0).unwrap();
-        assert_eq!(separating_zone(viewport, reply, twin), None);
-        // Order is left, right, top, bottom, center.
-        let top_left = Rect::try_new(10.0, 10.0, 20.0, 20.0).unwrap();
-        let middle = Rect::try_new(630.0, 390.0, 20.0, 20.0).unwrap();
-        assert_eq!(
-            separating_zone(viewport, top_left, middle),
-            Some(Zone::Left)
-        );
-        assert_eq!(
-            separating_zone(viewport, middle, top_left),
-            Some(Zone::Center)
-        );
-        let flat = Rect::try_new(0.0, 0.0, 0.0, 0.0).unwrap();
-        assert_eq!(separating_zone(flat, reply, compose), None);
     }
 }

@@ -1,6 +1,6 @@
-//! Acme Mail replica: the live drive's t7 and t8 against a scripted Chrome.
+//! Acme Mail replica: the old live drive's t7 and t8 against a scripted Chrome.
 //!
-//! The page is a [`ScriptBuilder`] replica of `examples/live-drive/site` at
+//! The page is a [`ScriptBuilder`] replica of the Acme Mail site at
 //! 1280x800 with the "Q3 launch checklist" thread open, as the live drive saw
 //! it: labeled controls that DOM and accessibility both report, plus the
 //! accessibility-only nodes Chrome adds for that page, unnamed SVG icons
@@ -8,9 +8,9 @@
 //! `region`, `dialog`) that extract as `generic`. Rectangles follow the live
 //! layout. It is not a capture and not a model of Chrome.
 //!
-//! In the live run, "Send" asked as a link tied 63 candidates at 0.50 and an
-//! unnamed AX node won on region id; the twin Send refused as ambiguous and
-//! the caller asked the same locate eight more times.
+//! In the live run, "Send" asked as a link tied 63 candidates at 0.50 under
+//! the removed matcher and an unnamed AX node won on region id; the twin Send
+//! refused as ambiguous. Guard now matches the exact label instead.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -201,146 +201,4 @@ fn guard_with_compose_open_blocks_nothing_outside_the_compose_box() {
     assert_eq!(decision["decision"], "escalate", "{decision}");
     assert_eq!(decision["reason"], "ambiguous", "{decision}");
     assert_eq!(presses(&log), 0);
-}
-
-/// t7: "Send" asked as a link. No link is named Send, so every candidate is a
-/// miss. A named Send button (right label, wrong role) must rank above every
-/// unnamed node, and the act must still refuse below the gate.
-#[ignore = "actuation removed; re-home under guard"]
-#[test]
-fn t7_send_as_a_link_ranks_the_named_send_above_unnamed_nodes_and_does_not_click() {
-    let page = thread_page(false);
-    let (mut server, log) = server(ScriptBuilder::new().observe(&page).observe(&page));
-
-    let observed = call(&mut server, "observe", json!({"cdp": TAB}));
-    let unnamed = observed["regions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|region| region["label"] == "")
-        .count();
-    assert!(
-        unnamed >= 10,
-        "replica must carry unnamed AX nodes: {observed}"
-    );
-
-    let located = call(
-        &mut server,
-        "locate",
-        json!({"cdp": TAB, "text": "Send", "role": "link"}),
-    );
-    let candidates = located["candidates"].as_array().unwrap();
-    assert_eq!(candidates[0]["id"], "n714", "{located}");
-    assert_eq!(candidates[0]["label"], "Send");
-    assert!((candidates[0]["confidence"].as_f64().unwrap() - 0.5).abs() < 1e-12);
-    for row in candidates.iter().filter(|row| row["label"] == "") {
-        assert_eq!(
-            row["confidence"],
-            ultra_instinct_resonance::TEXT_MISS_CAP,
-            "{row}"
-        );
-    }
-    assert!(candidates
-        .iter()
-        .all(|row| row["confidence"].as_f64().unwrap() < 0.55));
-
-    let top = &candidates[0];
-    let runner = &candidates[1];
-    let acted = call(
-        &mut server,
-        "act",
-        json!({
-            "cdp": TAB,
-            "region": top["id"],
-            "confidence": top["confidence"],
-            "runner_up": {"id": runner["id"], "confidence": runner["confidence"]},
-            "expect_text": "Reply sent",
-        }),
-    );
-    assert_eq!(acted["executed"], false, "{acted}");
-    assert_eq!(acted["fallback"], "low-confidence", "{acted}");
-    assert_eq!(presses(&log), 0);
-}
-
-/// t8: thread open and Compose open, so two visible "Send" buttons. The act
-/// refuses as ambiguous; the second identical locate carries repeated_query
-/// with a position that separates each Send; asking with the reply's
-/// position resolves it and the press goes to the reply Send.
-#[ignore = "actuation removed; re-home under guard"]
-#[test]
-fn t8_twin_send_refuses_then_repeated_query_names_a_separating_position() {
-    let page = thread_page(true);
-    let script = ScriptBuilder::new()
-        .observe(&page) // locate 1
-        .observe(&page) // locate 2 (identical)
-        .observe(&page) // locate 3 with the suggested position
-        .dom_click(REPLY_SEND.0) // act on the reply Send
-        .observe(&page); // act observe_after (cdp default)
-    let (mut server, log) = server(script);
-    let ask = json!({"cdp": TAB, "text": "Send", "role": "button"});
-
-    let first = call(&mut server, "locate", ask.clone());
-    assert_eq!(first["signals"], json!([]));
-    let candidates = first["candidates"].as_array().unwrap();
-    let pair: Vec<(&str, f64)> = candidates[..2]
-        .iter()
-        .map(|row| {
-            (
-                row["id"].as_str().unwrap(),
-                row["confidence"].as_f64().unwrap(),
-            )
-        })
-        .collect();
-    assert_eq!(pair, [("n714", 1.0), ("n750", 1.0)]);
-
-    let refused = call(
-        &mut server,
-        "act",
-        json!({
-            "cdp": TAB,
-            "region": "n714",
-            "confidence": 1.0,
-            "runner_up": {"id": "n750", "confidence": 1.0},
-        }),
-    );
-    assert_eq!(refused["executed"], false, "{refused}");
-    assert_eq!(refused["fallback"], "ambiguous", "{refused}");
-    assert_eq!(presses(&log), 0);
-
-    let second = call(&mut server, "locate", ask);
-    assert_eq!(second["candidates"], first["candidates"]);
-    assert_eq!(
-        second["signals"],
-        json!([{
-            "kind": "repeated_query",
-            "count": 2,
-            "top": {"id": "n714", "suggested_position": "left"},
-            "runner_up": {"id": "n750", "suggested_position": "bottom"},
-        }])
-    );
-
-    let hinted = call(
-        &mut server,
-        "locate",
-        json!({"cdp": TAB, "text": "Send", "role": "button", "position": "left"}),
-    );
-    assert_eq!(hinted["signals"], json!([]));
-    let top = &hinted["candidates"][0];
-    let runner = &hinted["candidates"][1];
-    assert_eq!(top["id"], "n714");
-    let margin = top["confidence"].as_f64().unwrap() - runner["confidence"].as_f64().unwrap();
-    assert!(margin >= 0.05, "{hinted}");
-
-    let acted = call(
-        &mut server,
-        "act",
-        json!({
-            "cdp": TAB,
-            "region": "n714",
-            "confidence": top["confidence"],
-            "runner_up": {"id": runner["id"], "confidence": runner["confidence"]},
-        }),
-    );
-    assert_eq!(acted["executed"], true, "{acted}");
-    assert_eq!(presses(&log), 1);
 }

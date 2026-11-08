@@ -2,8 +2,9 @@
 //!
 //! Proves the extraction wiring, not only the guard math: `role="dialog"` +
 //! `aria-modal="true"` (or the accessibility `modal` property) become a
-//! modal front layer; the DOM tree becomes parent links; the accessibility
-//! `focused` property becomes `near: "focus"`. No page is clicked.
+//! modal front layer; the DOM tree becomes parent links that `within`
+//! scopes by; the accessibility `focused` property becomes `focused`. No page
+//! is clicked.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -241,7 +242,7 @@ fn rows_page(focus_beta: bool) -> PageSpec {
 }
 
 #[test]
-fn near_focus_and_within_resolve_twin_suspend_buttons() {
+fn within_resolves_twin_suspend_buttons() {
     let page = rows_page(true);
     let script = ScriptBuilder::new()
         .observe(&page)
@@ -261,17 +262,16 @@ fn near_focus_and_within_resolve_twin_suspend_buttons() {
     assert_eq!(bare["decision"], "escalate", "{bare}");
     assert_eq!(bare["reason"], "ambiguous");
 
-    let focused = call(
+    // The focused field's row scopes the twin; `near: "focus"` went with the
+    // matcher, so the host names that row with `within`.
+    let focused_row = call(
         &mut server,
         "guard",
-        json!({"cdp": TAB, "target": "Suspend", "role": "button", "near": "focus"}),
+        json!({"cdp": TAB, "target": "Suspend", "role": "button", "within": "n400"}),
     );
-    assert_eq!(focused["decision"], "allow", "{focused}");
-    assert_eq!(focused["target"]["id"], "n420");
-    assert_eq!(
-        focused["scope"],
-        json!({"within": null, "near": "n410", "near_scope": "n400"})
-    );
+    assert_eq!(focused_row["decision"], "allow", "{focused_row}");
+    assert_eq!(focused_row["target"]["id"], "n420");
+    assert_eq!(focused_row["focused"], "n410");
 
     let within = call(
         &mut server,
@@ -284,17 +284,17 @@ fn near_focus_and_within_resolve_twin_suspend_buttons() {
 }
 
 #[test]
-fn near_focus_without_a_focused_region_is_the_default_ranking() {
-    let page = rows_page(false);
-    let (mut server, _log) = server(ScriptBuilder::new().observe(&page));
-    let decision = call(
-        &mut server,
-        "guard",
-        json!({"cdp": TAB, "target": "Suspend", "role": "button", "near": "focus"}),
-    );
-    assert_eq!(decision["focused"], Value::Null);
-    assert_eq!(decision["reason"], "ambiguous", "{decision}");
-    assert_eq!(decision["scope"]["near"], Value::Null);
+fn near_focus_is_refused_by_name() {
+    // Refused before any observe: the script is empty.
+    let (mut server, log) = server(ScriptBuilder::new());
+    let err = server
+        .call_tool(
+            "guard",
+            &json!({"cdp": TAB, "target": "Suspend", "role": "button", "near": "focus"}),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("`near` was removed"), "{err}");
+    assert_eq!(presses(&log), 0);
 }
 
 /// A custom backdrop `div` (not `role=dialog`) covers the page Save button.

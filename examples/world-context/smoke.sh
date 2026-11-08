@@ -60,20 +60,9 @@ fi
 
 export ULTRA_INSTINCT_LIVE_CDP="$CDP"
 export ULTRA_INSTINCT_LIVE_SITE="$SITE"
-MATCHER="${ULTRA_INSTINCT_MATCHER:-weighted}"
-export ULTRA_INSTINCT_MATCHER="$MATCHER"
-
-FEATURE_ARGS=()
-if [[ "$MATCHER" == "hgra" ]]; then
-  FEATURE_ARGS+=(--features hgra)
-elif [[ "$MATCHER" != "weighted" ]]; then
-  echo "unknown ULTRA_INSTINCT_MATCHER=$MATCHER (want weighted|hgra)" >&2
-  exit 1
-fi
-
-echo "CDP=$CDP SITE=$SITE MATCHER=$MATCHER"
+echo "CDP=$CDP SITE=$SITE"
 set +e
-cargo test -p ultra-instinct-mcp "${FEATURE_ARGS[@]}" --test world_context_live -- --ignored --nocapture --test-threads=1
+cargo test -p ultra-instinct-mcp --test world_context_live -- --ignored --nocapture --test-threads=1
 STATUS=$?
 set -e
 
