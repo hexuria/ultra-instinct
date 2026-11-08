@@ -681,3 +681,88 @@ fn unwritable_artifact_path_is_an_error() {
         .expect_err("cannot write there");
     assert!(matches!(err, ToolError::InvalidArguments(_)), "{err:?}");
 }
+
+/// A conditional wait stops at the first look where the URL holds.
+#[test]
+fn wait_for_url_stops_on_the_first_look_that_holds() {
+    let (mut server, _log) = server(ScriptBuilder::new().observe_compact(&page()));
+    let out = call(
+        &mut server,
+        "browser_wait",
+        json!({"cdp": CDP, "url": "/form"}),
+    );
+    assert_eq!(out["seen"], true, "{out}");
+    assert_eq!(out["looks"], 1, "{out}");
+    assert!(out["after_ms"].as_u64().is_some(), "{out}");
+}
+
+/// A control that shows up on the second observe ends the wait there.
+#[test]
+fn wait_for_control_observes_again_until_it_appears() {
+    let before = PageSpec::of(
+        &[Control::button(
+            11,
+            101,
+            "Sign in",
+            (20.0, 80.0, 120.0, 28.0),
+        )],
+        "http://127.0.0.1/form",
+        "Form",
+    );
+    let (mut server, _log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&before)
+            .observe_compact(&page()),
+    );
+    let out = call(
+        &mut server,
+        "browser_wait",
+        json!({"cdp": CDP, "control": "country", "seconds": 5}),
+    );
+    assert_eq!(out["seen"], true, "{out}");
+    assert_eq!(out["looks"], 2, "{out}");
+}
+
+/// `text` reads the page text after the observe; it is matched
+/// case-insensitively.
+#[test]
+fn wait_for_text_reads_page_text() {
+    let (mut server, log) = server(ScriptBuilder::new().observe_compact(&page()).call(
+        "Runtime.evaluate",
+        json!({"result": {"type": "string", "value": "Welcome back, Kid"}}),
+    ));
+    let out = call(
+        &mut server,
+        "browser_wait",
+        json!({"cdp": CDP, "text": "welcome BACK"}),
+    );
+    assert_eq!(out["seen"], true, "{out}");
+    assert!(log.borrow().iter().any(|m| m == "Runtime.evaluate"));
+}
+
+/// Out of time: `seen: false` with the last URL, and nothing was pressed.
+#[test]
+fn wait_timeout_reports_not_seen_and_the_last_url() {
+    let (mut server, log) = server(ScriptBuilder::new().observe_compact(&page()));
+    let out = call(
+        &mut server,
+        "browser_wait",
+        json!({"cdp": CDP, "url": "/dashboard", "seconds": 0}),
+    );
+    assert_eq!(out["seen"], false, "{out}");
+    assert_eq!(out["url"], "http://127.0.0.1/form", "{out}");
+    assert_eq!(out["looks"], 1, "{out}");
+    assert!(log
+        .borrow()
+        .iter()
+        .all(|m| m != "Input.dispatchMouseEvent" && m != "DOM.resolveNode"));
+}
+
+/// No condition keeps the plain sleep and never connects.
+#[test]
+fn wait_without_a_condition_only_sleeps() {
+    let (mut server, log) = server(ScriptBuilder::new());
+    let out = call(&mut server, "browser_wait", json!({"seconds": 0}));
+    assert_eq!(out, json!({"waited": 0.0}));
+    assert!(log.borrow().is_empty());
+}

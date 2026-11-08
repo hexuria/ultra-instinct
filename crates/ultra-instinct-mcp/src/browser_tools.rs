@@ -82,7 +82,7 @@ pub(crate) fn call(server: &mut Server, name: &str, arguments: &Value) -> Result
         "browser_navigate" => navigate(server, arguments),
         "browser_new_tab" => new_tab(server, arguments),
         "browser_go_back" => go_back(server, arguments),
-        "browser_wait" => wait(arguments),
+        "browser_wait" => wait(server, arguments),
         "browser_get_state" => get_state(server, arguments),
         "browser_get_html" => get_html(server, arguments),
         "browser_get_text" | "browser_get_page_text" => get_text(server, arguments),
@@ -290,11 +290,114 @@ fn go_back(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     outcome.map_err(browser_err)
 }
 
-fn wait(arguments: &Value) -> Result<Value, ToolError> {
-    let seconds = opt_f64(arguments, "seconds")?.unwrap_or(3.0);
+/// Pause between looks while `browser_wait` has a condition.
+const WAIT_LOOK_MS: u64 = 200;
+
+/// What a conditional `browser_wait` waits for. Every given part must hold.
+struct WaitFor {
+    /// Case-insensitive substring of the page's visible text.
+    text: Option<String>,
+    /// Substring of the current URL.
+    url: Option<String>,
+    /// Case-insensitive substring of a control label in the interactive index.
+    control: Option<String>,
+}
+
+impl WaitFor {
+    fn parse(arguments: &Value) -> Result<Option<Self>, ToolError> {
+        let part = |key: &str| -> Result<Option<String>, ToolError> {
+            match opt_str(arguments, key)? {
+                Some(v) if v.trim().is_empty() => Err(ToolError::InvalidArguments(format!(
+                    "`{key}` must not be empty"
+                ))),
+                other => Ok(other.map(str::to_owned)),
+            }
+        };
+        let until = Self {
+            text: part("text")?.map(|t| t.to_lowercase()),
+            url: part("url")?,
+            control: part("control")?.map(|c| c.trim().to_lowercase()),
+        };
+        Ok(
+            (until.text.is_some() || until.url.is_some() || until.control.is_some())
+                .then_some(until),
+        )
+    }
+
+    /// One look: observe, then check each part. Page text is read only when
+    /// a `text` part was given. Returns (holds, current url).
+    fn look(
+        &self,
+        session: &mut crate::server::LiveSession,
+    ) -> Result<(bool, Option<String>), ToolError> {
+        session.observe().map_err(browser_err)?;
+        let url = session.page().and_then(|p| p.url().map(str::to_owned));
+        if let Some(want) = &self.url {
+            if !url.as_deref().is_some_and(|u| u.contains(want.as_str())) {
+                return Ok((false, url));
+            }
+        }
+        if let Some(want) = &self.control {
+            let manifold = session
+                .manifold()
+                .ok_or_else(|| browser_err(BrowserError::NotObserved))?;
+            let present = interactive_index(manifold).iter().any(|id| {
+                manifold
+                    .get(id)
+                    .is_some_and(|r| r.label().to_lowercase().contains(want.as_str()))
+            });
+            if !present {
+                return Ok((false, url));
+            }
+        }
+        if let Some(want) = &self.text {
+            let text = session.page_text().map_err(browser_err)?;
+            if !text.to_lowercase().contains(want.as_str()) {
+                return Ok((false, url));
+            }
+        }
+        Ok((true, url))
+    }
+}
+
+/// With no condition: sleep `seconds` (default 3). With `text`, `url`, or
+/// `control`: observe about every 200 ms until the condition holds or
+/// `seconds` (default 10) runs out. Both are capped at 60 s. Never acts.
+fn wait(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+    let until = WaitFor::parse(arguments)?;
+    let default = if until.is_some() { 10.0 } else { 3.0 };
+    let seconds = opt_f64(arguments, "seconds")?.unwrap_or(default);
     let seconds = seconds.clamp(0.0, MAX_WAIT_SECS as f64);
-    std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
-    Ok(json!({"waited": seconds}))
+    let Some(until) = until else {
+        std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
+        return Ok(json!({"waited": seconds}));
+    };
+    let endpoint = endpoint_of(arguments)?;
+    let key = session_key(server, &endpoint);
+    let mut session = take(server, &key)?;
+    let started = std::time::Instant::now();
+    let limit = std::time::Duration::from_secs_f64(seconds);
+    let outcome = (|| {
+        let mut looks = 0u32;
+        loop {
+            let (seen, url) = until.look(&mut session)?;
+            looks += 1;
+            let elapsed = started.elapsed();
+            let after_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+            if seen {
+                return Ok(json!({"seen": true, "after_ms": after_ms, "looks": looks, "url": url}));
+            }
+            if elapsed >= limit {
+                return Ok(
+                    json!({"seen": false, "after_ms": after_ms, "looks": looks, "url": url}),
+                );
+            }
+            let pause = std::time::Duration::from_millis(WAIT_LOOK_MS).min(limit - elapsed);
+            std::thread::sleep(pause);
+        }
+    })();
+    keep(server, &key, session);
+    outcome
 }
 
 /// Interactive regions in browser-use reading order: top-to-bottom rows,
@@ -1252,7 +1355,10 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
         "browser_go_back" => "Go back one history entry.",
         "browser_wait" => {
             props.insert("seconds".into(), json!({"type": "number"}));
-            "Wait seconds (default 3, capped at 60)."
+            props.insert("text".into(), json!({"type": "string", "description": "Stop once the page's visible text contains this (case-insensitive)."}));
+            props.insert("url".into(), json!({"type": "string", "description": "Stop once the current URL contains this."}));
+            props.insert("control".into(), json!({"type": "string", "description": "Stop once a control label in the browser_get_state index contains this (case-insensitive)."}));
+            "Wait. With text, url, or control: observe about every 200 ms until every given condition holds or seconds (default 10) runs out; returns seen, after_ms, looks, and the last url. With no condition: sleep seconds (default 3). Capped at 60 s."
         }
         "browser_get_state" => {
             props.insert(
