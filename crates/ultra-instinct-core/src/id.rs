@@ -5,7 +5,7 @@ use crate::error::CoreError;
 /// Stable identity of one interaction region inside a manifold.
 ///
 /// Ordering is lexicographic on the raw identifier bytes. Ranking uses that
-/// order only as a tie-break after the resonance score.
+/// order only as a tie-break.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RegionId(String);
 

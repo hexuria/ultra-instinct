@@ -1,6 +1,0 @@
-fixture	text	role	position	expected_id
-../../fixtures/send-buttons.manifold	Send	button		z-send
-../../fixtures/sidebar.manifold	Settings	button	left	nav-settings
-twins.manifold	Export	button		z-export
-twins.manifold	Admin	button		z-admin
-twins.manifold	Undo	button		z-undo

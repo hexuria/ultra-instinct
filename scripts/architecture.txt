@@ -20,28 +20,23 @@ ultra-instinct-geometry: ultra-instinct-core
     | tokio axum sqlx reqwest hyper typesafe-sdk
 ultra-instinct-observe: ultra-instinct-core
     | tokio axum sqlx reqwest hyper typesafe-sdk
-ultra-instinct-resonance: ultra-instinct-core ultra-instinct-geometry ultra-instinct-hyper
-    | tokio axum sqlx reqwest hyper typesafe-sdk
 ultra-instinct-protocol: ultra-instinct-core
     | tokio axum sqlx reqwest hyper typesafe-sdk
 ultra-instinct-cdp:
     | tokio axum sqlx reqwest hyper typesafe-sdk
-ultra-instinct-browser: ultra-instinct-cdp ultra-instinct-core ultra-instinct-geometry ultra-instinct-observe ultra-instinct-resonance
+ultra-instinct-browser: ultra-instinct-cdp ultra-instinct-core ultra-instinct-geometry ultra-instinct-observe
     | tokio axum sqlx reqwest hyper typesafe-sdk
-ultra-instinct-guard: ultra-instinct-core ultra-instinct-geometry ultra-instinct-protocol ultra-instinct-resonance
+ultra-instinct-guard: ultra-instinct-core ultra-instinct-geometry ultra-instinct-protocol
     | tokio axum sqlx reqwest hyper typesafe-sdk
 ultra-instinct-policy: ultra-instinct-core
     | tokio axum sqlx reqwest hyper typesafe-sdk
 ultra-instinct-agent: ultra-instinct-core ultra-instinct-browser ultra-instinct-guard ultra-instinct-observe ultra-instinct-policy ultra-instinct-protocol
     | tokio axum sqlx reqwest hyper typesafe-sdk
-ultra-instinct-mcp: ultra-instinct-protocol ultra-instinct-core ultra-instinct-geometry ultra-instinct-resonance ultra-instinct-browser ultra-instinct-guard ultra-instinct-observe ultra-instinct-agent ultra-instinct-cdp
+ultra-instinct-mcp: ultra-instinct-protocol ultra-instinct-core ultra-instinct-geometry ultra-instinct-browser ultra-instinct-guard ultra-instinct-observe ultra-instinct-agent ultra-instinct-cdp
     | tokio axum sqlx reqwest hyper typesafe-sdk
 ultra-instinct-remote: ultra-instinct-policy
     | axum sqlx
-ultra-instinct: ultra-instinct-core ultra-instinct-resonance ultra-instinct-browser ultra-instinct-guard ultra-instinct-observe ultra-instinct-mcp ultra-instinct-protocol ultra-instinct-agent ultra-instinct-policy ultra-instinct-dojo ultra-instinct-remote
+ultra-instinct: ultra-instinct-core ultra-instinct-browser ultra-instinct-guard ultra-instinct-observe ultra-instinct-mcp ultra-instinct-protocol ultra-instinct-agent ultra-instinct-policy ultra-instinct-dojo ultra-instinct-remote
     | axum sqlx
 ultra-instinct-dojo: ultra-instinct-core
-    | tokio axum sqlx reqwest hyper typesafe-sdk
-# Frozen experiment (HGRA). Leaf crate: no ultra-instinct-* edges, no async/network deps.
-ultra-instinct-hyper:
     | tokio axum sqlx reqwest hyper typesafe-sdk

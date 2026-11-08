@@ -7,8 +7,8 @@
 //! [`match_regions`] is the identity hypothesis layer. Identical ids pair first.
 //! Leftover regions pair greedily when a caller-supplied similarity is at least
 //! [`STRUCTURAL_MATCH_THRESHOLD`]. The default [`structural_similarity`] uses
-//! role, label Jaccard, and center distance. It does not allocate a hypervector;
-//! pass a cosine callback from the resonance crate when you want that metric.
+//! role, label Jaccard, and center distance; a caller may pass another
+//! similarity callback.
 //!
 //! [`history::SnapshotRing`] keeps a bounded number of recent snapshots in
 //! memory so a host can diff by snapshot id.
