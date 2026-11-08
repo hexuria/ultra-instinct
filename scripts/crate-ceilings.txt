@@ -4,3 +4,4 @@
 default 6000
 ultra-instinct-browser 8800 # local Chrome launch (launch.rs); owned per-agent CDP tab lifecycle; click-listener, label, paint, and act evidence (ADR 0011), most of it inline tests; storage state (save and reuse a login, ~590)
 ultra-instinct-mcp 7400 # agent-browser ports (ADR 0012): page_text, browser_extra (dialog, check, focus, get/is), browser_state (login state), browser_env (set/download/network); split candidates: browser_* tool families into their own crate
+ultra-instinct 8000 # shell verbs over the session daemon (ADR 0012): verbs.rs (one verb per browser_* tool family), daemon.rs (socket, own Chrome, session list), batch.rs (shell-style splitter); about 45% inline tests; split candidate: the verb layer into its own crate

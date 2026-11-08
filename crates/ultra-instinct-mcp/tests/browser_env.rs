@@ -431,7 +431,7 @@ fn download_presses_through_the_ticket_and_waits_for_completed() {
     let out = call(
         &mut server,
         "browser_download",
-        json!({"cdp": CDP, "index": 2, "path": dest.to_str().unwrap()}),
+        json!({"cdp": CDP, "index": "@e2", "path": dest.to_str().unwrap()}),
     );
     assert_eq!(out["bytes"], 5, "{out}");
     assert_eq!(out["suggested_name"], "report.pdf");

@@ -181,7 +181,7 @@ fn socket_dir_writable() -> Result<String, (String, String)> {
 }
 
 /// GET `<endpoint>/json/version` and return its `Browser` field.
-fn probe_version(endpoint: &str) -> Result<String, String> {
+pub(crate) fn probe_version(endpoint: &str) -> Result<String, String> {
     let rest = endpoint
         .strip_prefix("http://")
         .ok_or_else(|| format!("`{endpoint}` is not an http:// endpoint"))?;

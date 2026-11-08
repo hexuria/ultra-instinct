@@ -2,12 +2,12 @@
 //! commands.
 //!
 //! ```text
-//! aui open https://shop.example/join      # spawns the session daemon if needed
-//! aui snap                                # the page, one line per control
+//! aui open --launch https://shop.example/join  # spawns the session daemon (and its Chrome)
+//! aui snap                                     # the page, one line per control
 //! aui type @e2 "kid@example.com"
-//! aui click @e5                           # ✓ ticket 41 · navigation
+//! aui click @e5                                # ✓ ticket 41 · navigation
 //! aui wait --text "Welcome" --timeout 10
-//! aui close                               # stops the daemon
+//! aui close                                    # stops the daemon (and its Chrome)
 //! ```
 //!
 //! One session is one daemon (`aui daemon --session <name>`, hidden) serving
@@ -19,12 +19,17 @@
 //! `aui close`, and removes its socket.
 //!
 //! A verb whose socket is missing or stale spawns the daemon (this binary,
-//! detached, null stdio) and waits up to 3 s for the socket. `aui open` does
-//! not launch Chrome: the daemon attaches to `--cdp` (default
-//! `http://127.0.0.1:9222`). `--allow-domain` / `--confirm-press` on `open`
-//! reach the spawned daemon as `ULTRA_INSTINCT_ALLOW_DOMAINS` /
-//! `ULTRA_INSTINCT_CONFIRM_PRESS`; `--confirm <label>` on a press verb is
-//! the tool's `confirm` argument.
+//! detached, null stdio) and waits up to 3 s for the socket. Without
+//! `--launch` the daemon attaches to `--cdp` (default
+//! `http://127.0.0.1:9222`); when nothing answers there the error says to run
+//! `aui open --launch` or `aui doctor`. `aui open --launch [--headed]` (and
+//! no `--cdp`) makes the daemon start its own Chrome once, right after it
+//! binds its socket; that Chrome lives exactly as long as the daemon
+//! (`close`, idle exit and daemon exit all end it). A failed launch answers
+//! the waiting verb with the launch error, unchanged, and the daemon exits.
+//! `--allow-domain` / `--confirm-press` on `open` reach the spawned daemon as
+//! `ULTRA_INSTINCT_ALLOW_DOMAINS` / `ULTRA_INSTINCT_CONFIRM_PRESS`;
+//! `--confirm <label>` on a press verb is the tool's `confirm` argument.
 //!
 //! Unix only (std `UnixListener` / `UnixStream`); elsewhere every verb is a
 //! clear error.
@@ -32,12 +37,8 @@
 
 use serde_json::{json, Value};
 
+use crate::verbs::{parse_verb, render};
 use crate::CliError;
-
-/// Shell verbs, in usage order.
-pub const VERBS: [&str; 11] = [
-    "open", "snap", "click", "type", "select", "key", "scroll", "wait", "shot", "tabs", "close",
-];
 
 /// The session a verb or daemon names when `--session` is not given.
 pub const DEFAULT_SESSION: &str = "default";
@@ -87,226 +88,30 @@ pub enum Request {
 pub struct Verb {
     pub verb: &'static str,
     pub session: SessionName,
-    pub cdp: String,
+    /// `--cdp`, when given.
+    pub cdp: Option<String>,
     pub request: Request,
     /// `--allow-domain` values (`open` only), for the spawned daemon.
     pub allow_domains: Vec<String>,
     /// `--confirm-press` values (`open` only), for the spawned daemon.
     pub confirm_press: Vec<String>,
+    /// `--launch` (`open` only): the spawned daemon starts its own Chrome
+    /// unless `--cdp` is given.
+    pub launch: bool,
+    /// `--headed` (with `--launch`).
+    pub headed: bool,
 }
 
-/// Parse `aui <verb> …` (`args` excludes the verb).
-pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
-    let verb: &'static str = VERBS
-        .iter()
-        .copied()
-        .find(|v| *v == verb)
-        .ok_or_else(|| CliError::UnknownCommand(verb.to_owned()))?;
-    let mut session = None;
-    let mut cdp = None;
-    let mut allow_domains = Vec::new();
-    let mut confirm_press = Vec::new();
-    let mut confirm = None;
-    let mut json_out = false;
-    let mut mouse = false;
-    let mut timeout = None;
-    let mut wait = serde_json::Map::new();
-    let mut positional = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        let arg = args[i].as_str();
-        let (name, inline) = match arg.split_once('=') {
-            Some((n, v)) if n.starts_with("--") => (n, Some(v.to_owned())),
-            _ => (arg, None),
-        };
-        let mut value = |flag: &'static str| -> Result<String, CliError> {
-            if let Some(v) = inline.clone() {
-                return Ok(v);
-            }
-            i += 1;
-            args.get(i).cloned().ok_or(CliError::MissingValue(flag))
-        };
-        match name {
-            "--session" => set(&mut session, "--session", value("--session")?)?,
-            "--cdp" => set(&mut cdp, "--cdp", value("--cdp")?)?,
-            "--allow-domain" if verb == "open" => allow_domains.push(value("--allow-domain")?),
-            "--confirm-press" if verb == "open" => confirm_press.push(value("--confirm-press")?),
-            "--confirm" if verb == "click" => set(&mut confirm, "--confirm", value("--confirm")?)?,
-            "--mouse" if verb == "click" && inline.is_none() => mouse = true,
-            "--json" if verb == "snap" && inline.is_none() => json_out = true,
-            "--text" | "--url" | "--control" | "--load" | "--gone" if verb == "wait" => {
-                let flag = match name {
-                    "--text" => "--text",
-                    "--url" => "--url",
-                    "--load" => "--load",
-                    "--gone" => "--gone",
-                    _ => "--control",
-                };
-                let v = value(flag)?;
-                if wait.insert(flag[2..].to_owned(), json!(v)).is_some() {
-                    return Err(CliError::DuplicateFlag(flag));
-                }
-            }
-            "--timeout" if verb == "wait" => {
-                let raw = value("--timeout")?;
-                let secs: f64 = raw
-                    .parse()
-                    .ok()
-                    .filter(|s: &f64| s.is_finite() && *s >= 0.0)
-                    .ok_or(CliError::BadNumber {
-                        flag: "--timeout",
-                        value: raw.clone(),
-                    })?;
-                set(&mut timeout, "--timeout", secs)?;
-            }
-            _ if arg.starts_with("--") => return Err(CliError::UnknownFlag(arg.to_owned())),
-            _ => positional.push(arg.to_owned()),
-        }
-        i += 1;
+impl Verb {
+    /// Whether the spawned daemon launches its own Chrome.
+    fn launches(&self) -> bool {
+        self.launch && self.cdp.is_none()
     }
-    let session = SessionName::parse(session.as_deref().unwrap_or(DEFAULT_SESSION))?;
-    for host in &allow_domains {
-        ultra_instinct_guard::HostPattern::parse(host)
-            .map_err(|err| CliError::Config(err.to_string()))?;
-    }
-    for glob in &confirm_press {
-        ultra_instinct_guard::LabelGlob::parse(glob)
-            .map_err(|err| CliError::Config(err.to_string()))?;
-    }
-    let arity = |want: std::ops::RangeInclusive<usize>, usage: &str| {
-        if want.contains(&positional.len()) {
-            Ok(())
-        } else {
-            Err(CliError::Config(format!("usage: aui {verb} {usage}")))
-        }
-    };
-    let tool = |name: &'static str, arguments: Value| Request::Tool { name, arguments };
-    let request = match verb {
-        "open" => {
-            arity(1..=1, "<url>")?;
-            tool("browser_navigate", json!({"url": positional[0]}))
-        }
-        "snap" => {
-            arity(0..=0, "[--json]")?;
-            let format = if json_out { "json" } else { "text" };
-            tool("browser_get_state", json!({"format": format}))
-        }
-        "click" => {
-            arity(1..=1, "<ref> [--confirm <label>] [--mouse]")?;
-            let mut arguments = json!({"index": positional[0], "verify": true});
-            if let Some(label) = confirm {
-                arguments["confirm"] = json!(label);
-            }
-            if mouse {
-                arguments["mouse"] = json!(true);
-            }
-            tool("browser_click", arguments)
-        }
-        "type" => {
-            if positional.len() < 2 {
-                return Err(CliError::Config("usage: aui type <ref> <text>".into()));
-            }
-            let text = positional[1..].join(" ");
-            tool(
-                "browser_type",
-                json!({"index": positional[0], "text": text, "verify": true}),
-            )
-        }
-        "select" => {
-            if positional.len() < 2 {
-                return Err(CliError::Config("usage: aui select <ref> <option>".into()));
-            }
-            let option = positional[1..].join(" ");
-            tool(
-                "browser_select_dropdown",
-                json!({"index": positional[0], "text": option, "verify": true}),
-            )
-        }
-        "key" => {
-            arity(2..=2, "<ref> <key>")?;
-            tool(
-                "browser_send_key",
-                json!({"index": positional[0], "key": positional[1], "verify": true}),
-            )
-        }
-        "scroll" => {
-            arity(0..=1, "[up|down]")?;
-            let down = match positional.first().map(String::as_str) {
-                None | Some("down") => true,
-                Some("up") => false,
-                Some(other) => {
-                    return Err(CliError::Config(format!(
-                        "usage: aui scroll [up|down], got `{other}`"
-                    )))
-                }
-            };
-            tool("browser_scroll", json!({"down": down}))
-        }
-        "wait" => {
-            const USAGE: &str =
-                "--text|--url|--control|--gone <v> | --load domcontentloaded|load [--timeout s]";
-            arity(0..=0, USAGE)?;
-            if wait.is_empty() {
-                return Err(CliError::Config(format!("usage: aui wait {USAGE}")));
-            }
-            if let Some(load) = wait.get("load").and_then(Value::as_str) {
-                if !matches!(load, "domcontentloaded" | "load") {
-                    return Err(CliError::Config(format!(
-                        "--load is domcontentloaded or load, got `{load}`"
-                    )));
-                }
-            }
-            if let Some(secs) = timeout {
-                wait.insert("seconds".into(), json!(secs));
-            }
-            tool("browser_wait", Value::Object(wait))
-        }
-        "shot" => {
-            arity(0..=1, "[path]")?;
-            let path = match positional.first() {
-                Some(path) => std::path::PathBuf::from(path),
-                None => std::path::PathBuf::from(format!(
-                    "aui-shot-{}.png",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0)
-                )),
-            };
-            // The daemon writes the file: resolve against this shell's cwd.
-            let path = std::env::current_dir()
-                .map(|cwd| cwd.join(&path))
-                .unwrap_or(path);
-            tool(
-                "browser_screenshot",
-                json!({"path": path.to_string_lossy()}),
-            )
-        }
-        "tabs" => {
-            arity(0..=0, "")?;
-            tool("browser_list_tabs", json!({}))
-        }
-        _ => {
-            arity(0..=0, "")?;
-            Request::Stop
-        }
-    };
-    Ok(Verb {
-        verb,
-        session,
-        cdp: cdp.unwrap_or_else(|| ultra_instinct_browser::DEFAULT_CDP_HTTP.to_owned()),
-        request,
-        allow_domains,
-        confirm_press,
-    })
-}
 
-fn set<T>(slot: &mut Option<T>, flag: &'static str, value: T) -> Result<(), CliError> {
-    if slot.is_some() {
-        return Err(CliError::DuplicateFlag(flag));
+    /// Settings that only take effect when this verb spawns the daemon.
+    fn spawn_settings(&self) -> bool {
+        !self.allow_domains.is_empty() || !self.confirm_press.is_empty() || self.launch
     }
-    *slot = Some(value);
-    Ok(())
 }
 
 /// The JSON-RPC line for `request`.
@@ -321,142 +126,29 @@ pub fn request_line(request: &Request) -> String {
     .to_string()
 }
 
-/// Short human text for one daemon reply. A refusal or an error is `Err`
-/// (non-zero exit).
-pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
-    let reply: Value = serde_json::from_str(reply)
-        .map_err(|err| CliError::Browser(format!("bad daemon reply: {err}")))?;
-    if let Some(error) = reply.get("error") {
-        let message = error.get("message").and_then(Value::as_str).unwrap_or("");
-        return Err(CliError::Refused(format!("✗ error: {message}")));
-    }
-    let result = &reply["result"];
-    if verb.request == Request::Stop {
-        return Ok("✓ daemon stopped\n".to_owned());
-    }
-    let text = result["content"][0]["text"].as_str().unwrap_or_default();
-    if result["isError"] == true {
-        return Err(CliError::Refused(render_error(text)));
-    }
-    if verb.verb == "snap" {
-        return Ok(format!("{text}\n"));
-    }
-    let body: Value = serde_json::from_str(text).unwrap_or(Value::Null);
-    let line = match verb.verb {
-        "open" => format!(
-            "✓ session {} · opened {}",
-            verb.session.as_str(),
-            body["navigated"].as_str().unwrap_or_default()
-        ),
-        "click" | "type" | "select" | "key" => {
-            let mut line = format!("✓ ticket {}", body["ticket"]);
-            if let Some(kind) = body["verification"].as_str() {
-                line.push_str(&format!(" · {kind}"));
-            }
-            line
-        }
-        "scroll" => format!(
-            "✓ scrolled {}",
-            body["scrolled"].as_str().unwrap_or_default()
-        ),
-        "wait" => {
-            let secs = body["after_ms"].as_u64().unwrap_or(0) as f64 / 1000.0;
-            let looks = body["looks"].as_u64().unwrap_or(0);
-            if body["seen"] == true {
-                format!("✓ seen after {secs:.1} s · {looks} looks")
-            } else {
-                return Err(CliError::Refused(format!(
-                    "✗ not seen in {secs:.1} s · last url {}",
-                    body["url"].as_str().unwrap_or("unknown")
-                )));
-            }
-        }
-        "shot" => format!(
-            "✓ saved {} ({} bytes)",
-            body["path"].as_str().unwrap_or_default(),
-            body["bytes"]
-        ),
-        "tabs" => {
-            let tabs = body["tabs"].as_array().cloned().unwrap_or_default();
-            let mut out = String::new();
-            for tab in &tabs {
-                let id = tab["tab_id"].as_str().unwrap_or_default();
-                out.push_str(&format!(
-                    "{}  {}  {}\n",
-                    id.get(..8).unwrap_or(id),
-                    tab["url"].as_str().unwrap_or_default(),
-                    tab["title"].as_str().unwrap_or_default()
-                ));
-            }
-            out.push_str(&format!("{} tabs", tabs.len()));
-            out
-        }
-        _ => text.to_owned(),
-    };
-    Ok(format!("{line}\n"))
-}
-
-/// `✗ refused: <Reason> · run aui snap` for a ticket / gate / policy
-/// refusal, `✗ error: …` otherwise.
-fn render_error(text: &str) -> String {
-    let error: Value = serde_json::from_str(text).unwrap_or(Value::Null);
-    let message = error["message"].as_str().unwrap_or(text);
-    if error["variant"] != "TicketInvalid" {
-        return format!("✗ error: {message}");
-    }
-    let reason = ["ticket invalid: ", "gate refused: ", "ticket "]
-        .iter()
-        .fold(message, |m, prefix| m.strip_prefix(prefix).unwrap_or(m));
-    let (token, detail) = match reason.split_once(": ") {
-        Some((token, detail)) => (token, Some(detail)),
-        None => (reason, None),
-    };
-    let name: String = token
-        .split('-')
-        .map(|word| {
-            let mut chars = word.chars();
-            chars
-                .next()
-                .map(|c| c.to_ascii_uppercase().to_string() + chars.as_str())
-                .unwrap_or_default()
-        })
-        .collect();
-    match (token, detail) {
-        ("needs-confirm", Some(label)) => {
-            let label: String = serde_json::from_str(label).unwrap_or_else(|_| label.to_owned());
-            format!(
-                "✗ refused: NeedsConfirm {label:?} · rerun with --confirm {}",
-                crate::run_cmd::shell_quote(&label)
-            )
-        }
-        ("domain-not-allowed", Some(host)) => {
-            format!("✗ refused: DomainNotAllowed {host} · not in --allow-domain")
-        }
-        _ => format!("✗ refused: {name} · run aui snap"),
-    }
-}
-
 /// `aui <verb> …`.
 pub(crate) fn verb_command(verb: &str, args: &[String]) -> Result<String, CliError> {
     let parsed = parse_verb(verb, args)?;
     imp::run_verb(&parsed)
 }
 
-/// `aui daemon --session <name> [--cdp <url>]` (hidden).
+/// `aui daemon --session <name> [--cdp <url>] [--launch [--headed]]` (hidden).
 pub(crate) fn daemon_command(args: &[String]) -> Result<String, CliError> {
-    let (mut session, mut cdp) = (None, None);
-    for pair in args.chunks(2) {
-        let (flag, slot): (&'static str, _) = match pair[0].as_str() {
-            "--session" => ("--session", &mut session),
-            "--cdp" => ("--cdp", &mut cdp),
-            other => return Err(CliError::UnknownFlag(other.to_owned())),
-        };
-        let value = pair.get(1).cloned().ok_or(CliError::MissingValue(flag))?;
-        set(slot, flag, value)?;
+    let mut flags = crate::verbs::Flags::scan(args)?;
+    let session = SessionName::parse(
+        flags
+            .one("--session")?
+            .as_deref()
+            .unwrap_or(DEFAULT_SESSION),
+    )?;
+    let cdp = flags.one("--cdp")?;
+    let launch = flags.switch("--launch");
+    let headed = flags.switch("--headed");
+    flags.finish()?;
+    if let Some(extra) = flags.positional().first() {
+        return Err(CliError::UnknownFlag(extra.clone()));
     }
-    let session = SessionName::parse(session.as_deref().unwrap_or(DEFAULT_SESSION))?;
-    let cdp = cdp.unwrap_or_else(|| ultra_instinct_browser::DEFAULT_CDP_HTTP.to_owned());
-    imp::serve_session(&session, &cdp)?;
+    imp::serve_session(&session, cdp.as_deref(), launch, headed)?;
     Ok(String::new())
 }
 
@@ -474,6 +166,22 @@ pub fn with_endpoint(line: &str, cdp: &str) -> Option<Value> {
     Some(value)
 }
 
+/// A connect failure on a daemon that did not launch its Chrome: when
+/// nothing answers on `cdp`, say how to get a browser.
+pub fn connect_hint(
+    err: ultra_instinct_browser::CdpError,
+    cdp: &str,
+) -> ultra_instinct_browser::CdpError {
+    if crate::doctor_cmd::probe_version(cdp).is_ok() {
+        return err;
+    }
+    ultra_instinct_browser::CdpError::Transport {
+        message: format!(
+            "{err} · nothing answers on {cdp}: run `aui open --launch <url>` (aui starts Chrome) or `aui doctor`"
+        ),
+    }
+}
+
 #[cfg(all(unix, test))]
 use imp::{serve_on, Daemon};
 
@@ -486,16 +194,22 @@ mod imp {
     use std::time::{Duration, Instant};
 
     use serde_json::{json, Value};
+    use ultra_instinct_browser::launch::{self, ChromeProcess, LaunchOptions};
+    use ultra_instinct_browser::{CdpTransport, WebSocketTransport};
 
-    use super::{render, request_line, with_endpoint, SessionName, Verb, STOP_METHOD};
+    use super::{
+        connect_hint, render, request_line, with_endpoint, SessionName, Verb, STOP_METHOD,
+    };
     use crate::CliError;
 
     /// The daemon exits after this long without a request.
     const IDLE: Duration = Duration::from_secs(60 * 60);
     /// How long a verb waits for a spawned daemon's socket.
     const SPAWN_WAIT: Duration = Duration::from_secs(3);
-    /// A verb's wait for one reply (`browser_wait` may take 60 s).
+    /// A verb's wait for one reply (`browser_wait` may take 60 s; a launch 20 s).
     const REPLY_WAIT: Duration = Duration::from_secs(120);
+    /// How long a daemon whose Chrome failed to start waits to tell a verb.
+    const FAILURE_WAIT: Duration = Duration::from_secs(10);
     /// Accept-loop tick while idle.
     const TICK: Duration = Duration::from_millis(25);
 
@@ -506,14 +220,18 @@ mod imp {
         }
     }
 
-    /// `$TMPDIR/aui/<session>.sock`.
-    pub fn socket_path(session: &SessionName) -> PathBuf {
-        std::env::temp_dir()
-            .join("aui")
-            .join(format!("{}.sock", session.as_str()))
+    /// `$TMPDIR/aui` (`aui doctor` may have made it first).
+    pub fn socket_dir() -> PathBuf {
+        std::env::temp_dir().join("aui")
     }
 
-    /// The socket directory, mode 0700 (refuses one it cannot make private).
+    /// `$TMPDIR/aui/<session>.sock`.
+    pub fn socket_path(session: &SessionName) -> PathBuf {
+        socket_dir().join(format!("{}.sock", session.as_str()))
+    }
+
+    /// The socket directory, mode 0700, whether this process made it or
+    /// found it (refuses one it cannot make private).
     fn private_dir(dir: &Path) -> Result<(), CliError> {
         std::fs::DirBuilder::new()
             .recursive(true)
@@ -625,11 +343,94 @@ mod imp {
         Ok(false)
     }
 
+    /// A daemon that could not start: answer the first request that arrives
+    /// within `wait` with `message` (a JSON-RPC error), then stop.
+    pub fn serve_failure(daemon: Daemon, message: &str, wait: Duration) {
+        let started = Instant::now();
+        while started.elapsed() < wait {
+            let stream = match daemon.listener.accept() {
+                Ok((stream, _)) => stream,
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(TICK);
+                    continue;
+                }
+                Err(_) => return,
+            };
+            let answered = (|| -> io::Result<()> {
+                stream.set_nonblocking(false)?;
+                stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+                let mut writer = stream.try_clone()?;
+                let mut line = String::new();
+                BufReader::new(stream).read_line(&mut line)?;
+                let id = serde_json::from_str::<Value>(&line)
+                    .ok()
+                    .and_then(|v| v.get("id").cloned())
+                    .unwrap_or(Value::Null);
+                let reply = json!({"jsonrpc": "2.0", "id": id,
+                                   "error": {"code": -32000, "message": message}});
+                writeln!(writer, "{reply}")
+            })();
+            if answered.is_ok() {
+                return;
+            }
+        }
+    }
+
+    /// What one daemon owns. Fields drop in order: the MCP server (and with
+    /// it every CDP socket) first, then Chrome is killed and its temp
+    /// profile removed.
+    struct Owned {
+        server: ultra_instinct_mcp::Server,
+        _chrome: Option<ChromeProcess>,
+    }
+
+    /// The daemon's server: live websockets under the env policy. When the
+    /// daemon did not launch Chrome, a connect failure carries the hint.
+    fn daemon_server(cdp: &str, hint: bool) -> ultra_instinct_mcp::Server {
+        let cdp = cdp.to_owned();
+        ultra_instinct_mcp::Server::with_connector(move |url| {
+            WebSocketTransport::connect(url)
+                .map(|transport| Box::new(transport) as Box<dyn CdpTransport>)
+                .map_err(|err| if hint { connect_hint(err, &cdp) } else { err })
+        })
+        .with_env_policy()
+    }
+
     /// The hidden `aui daemon` body.
-    pub(super) fn serve_session(session: &SessionName, cdp: &str) -> Result<(), CliError> {
+    pub(super) fn serve_session(
+        session: &SessionName,
+        cdp: Option<&str>,
+        launch: bool,
+        headed: bool,
+    ) -> Result<(), CliError> {
+        // Bind first: the spawning verb is already waiting on this socket,
+        // and a launch can take longer than its 3 s spawn wait.
         let daemon = Daemon::bind(&socket_path(session))?;
-        let mut server = ultra_instinct_mcp::Server::new();
-        serve_on(daemon, &mut server, cdp, IDLE)
+        let chrome = match (launch, cdp) {
+            (true, None) => match launch::launch(&LaunchOptions {
+                headed,
+                ..LaunchOptions::default()
+            }) {
+                Ok(chrome) => Some(chrome),
+                Err(err) => {
+                    let message = err.to_string();
+                    serve_failure(daemon, &message, FAILURE_WAIT);
+                    return Err(CliError::Browser(message));
+                }
+            },
+            _ => None,
+        };
+        let endpoint = match (&chrome, cdp) {
+            (Some(chrome), _) => chrome.endpoint(),
+            (None, Some(cdp)) => cdp.to_owned(),
+            (None, None) => ultra_instinct_browser::DEFAULT_CDP_HTTP.to_owned(),
+        };
+        let mut owned = Owned {
+            server: daemon_server(&endpoint, chrome.is_none()),
+            _chrome: chrome,
+        };
+        // `daemon` (the socket) is dropped inside; `owned` after, in order.
+        serve_on(daemon, &mut owned.server, &endpoint, IDLE)
     }
 
     /// Send one line on a fresh connection and read one reply line.
@@ -677,22 +478,26 @@ mod imp {
         )))
     }
 
-    /// Spawn `current_exe() daemon --session <name> --cdp <url>`, detached
-    /// (own process group, null stdio), with the policy env for `open`.
+    /// Spawn `current_exe() daemon --session <name> [--cdp <url>] [--launch
+    /// [--headed]]`, detached (own process group, null stdio), with the
+    /// policy env for `open`.
     fn spawn_daemon(verb: &Verb) -> Result<(), CliError> {
         let exe = std::env::current_exe().map_err(|err| CliError::Io {
             path: "current_exe".into(),
             message: err.to_string(),
         })?;
         let mut command = std::process::Command::new(&exe);
+        command.args(["daemon", "--session", verb.session.as_str()]);
+        if let Some(cdp) = &verb.cdp {
+            command.args(["--cdp", cdp]);
+        }
+        if verb.launches() {
+            command.arg("--launch");
+            if verb.headed {
+                command.arg("--headed");
+            }
+        }
         command
-            .args([
-                "daemon",
-                "--session",
-                verb.session.as_str(),
-                "--cdp",
-                &verb.cdp,
-            ])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
@@ -725,7 +530,6 @@ mod imp {
         path: &Path,
         spawn: impl FnOnce() -> Result<(), CliError>,
     ) -> Result<String, CliError> {
-        let policy_flags = !verb.allow_domains.is_empty() || !verb.confirm_press.is_empty();
         if verb.request == super::Request::Stop {
             if UnixStream::connect(path).is_err() {
                 return Ok(format!(
@@ -735,16 +539,21 @@ mod imp {
             }
         } else {
             let spawned = connect_or_spawn(path, spawn)?;
-            if policy_flags && !spawned {
+            if verb.spawn_settings() && !spawned {
                 return Err(CliError::Config(format!(
-                    "session {} is already running; its policy is set when it starts (aui close first)",
+                    "session {} is already running; --launch and its policy are set when it starts (aui close first)",
                     verb.session.as_str()
                 )));
             }
             let reply = send(path, &request_line(&verb.request))?;
             let out = render(verb, &reply)?;
             if spawned && verb.verb == "open" {
-                return Ok(out.replacen(" · opened", " · daemon started · opened", 1));
+                let started = if verb.launches() {
+                    " · daemon started with its own Chrome · opened"
+                } else {
+                    " · daemon started · opened"
+                };
+                return Ok(out.replacen(" · opened", started, 1));
             }
             return Ok(out);
         }
@@ -765,7 +574,12 @@ mod imp {
         Err(CliError::Config(UNSUPPORTED.into()))
     }
 
-    pub(super) fn serve_session(_session: &SessionName, _cdp: &str) -> Result<(), CliError> {
+    pub(super) fn serve_session(
+        _session: &SessionName,
+        _cdp: Option<&str>,
+        _launch: bool,
+        _headed: bool,
+    ) -> Result<(), CliError> {
         Err(CliError::Config(UNSUPPORTED.into()))
     }
 }
@@ -790,177 +604,6 @@ mod tests {
     }
 
     #[test]
-    fn verbs_map_to_browser_tools() {
-        let tool = |verb: &str, args: &[&str]| match parse_verb(verb, &a(args)).unwrap().request {
-            Request::Tool { name, arguments } => (name, arguments),
-            Request::Stop => ("stop", Value::Null),
-        };
-        assert_eq!(
-            tool("open", &["https://shop.example/"]),
-            ("browser_navigate", json!({"url": "https://shop.example/"}))
-        );
-        assert_eq!(
-            tool("snap", &[]),
-            ("browser_get_state", json!({"format": "text"}))
-        );
-        assert_eq!(
-            tool("snap", &["--json"]),
-            ("browser_get_state", json!({"format": "json"}))
-        );
-        assert_eq!(
-            tool("click", &["@e5", "--confirm", "Pay $18"]),
-            (
-                "browser_click",
-                json!({"index": "@e5", "verify": true, "confirm": "Pay $18"})
-            )
-        );
-        assert_eq!(
-            tool("type", &["@e2", "kid@example.com"]),
-            (
-                "browser_type",
-                json!({"index": "@e2", "text": "kid@example.com", "verify": true})
-            )
-        );
-        assert_eq!(
-            tool("select", &["3", "New", "Zealand"]),
-            (
-                "browser_select_dropdown",
-                json!({"index": "3", "text": "New Zealand", "verify": true})
-            )
-        );
-        assert_eq!(
-            tool("key", &["@e2", "Enter"]),
-            (
-                "browser_send_key",
-                json!({"index": "@e2", "key": "Enter", "verify": true})
-            )
-        );
-        assert_eq!(
-            tool("scroll", &["up"]),
-            ("browser_scroll", json!({"down": false}))
-        );
-        assert_eq!(
-            tool("scroll", &[]),
-            ("browser_scroll", json!({"down": true}))
-        );
-        assert_eq!(
-            tool("wait", &["--text", "Welcome", "--timeout", "2.5"]),
-            ("browser_wait", json!({"text": "Welcome", "seconds": 2.5}))
-        );
-        assert_eq!(
-            tool("wait", &["--load", "domcontentloaded"]),
-            ("browser_wait", json!({"load": "domcontentloaded"}))
-        );
-        assert_eq!(
-            tool("wait", &["--gone", "Loading…", "--load=load"]),
-            ("browser_wait", json!({"gone": "Loading…", "load": "load"}))
-        );
-        assert_eq!(tool("tabs", &[]), ("browser_list_tabs", json!({})));
-        assert_eq!(tool("close", &[]), ("stop", Value::Null));
-        let (name, arguments) = tool("shot", &["out.png"]);
-        assert_eq!(name, "browser_screenshot");
-        let path = arguments["path"].as_str().unwrap();
-        assert!(std::path::Path::new(path).is_absolute() && path.ends_with("out.png"));
-    }
-
-    #[test]
-    fn verb_flags_and_arity_are_checked() {
-        let open = parse_verb(
-            "open",
-            &a(&[
-                "https://shop.example/",
-                "--session",
-                "s1",
-                "--cdp=http://127.0.0.1:9333",
-                "--allow-domain",
-                "shop.example",
-                "--confirm-press",
-                "Pay*",
-            ]),
-        )
-        .unwrap();
-        assert_eq!(open.session.as_str(), "s1");
-        assert_eq!(open.cdp, "http://127.0.0.1:9333");
-        assert_eq!(open.allow_domains, ["shop.example"]);
-        assert_eq!(open.confirm_press, ["Pay*"]);
-        assert_eq!(
-            parse_verb("snap", &[]).unwrap().cdp,
-            "http://127.0.0.1:9222"
-        );
-        for (verb, args) in [
-            ("open", &[][..]),
-            ("click", &[][..]),
-            ("type", &["@e1"][..]),
-            ("key", &["Enter"][..]),
-            ("scroll", &["left"][..]),
-            ("wait", &[][..]),
-            ("wait", &["--timeout", "x", "--url", "/a"][..]),
-            ("wait", &["--load", "networkidle"][..]),
-            ("wait", &["--gone"][..]),
-            ("snap", &["--confirm", "x"][..]),
-            ("click", &["@e1", "--allow-domain", "x"][..]),
-            ("open", &["https://a/", "--allow-domain", "https://a/"][..]),
-            ("snap", &["--session", "bad name"][..]),
-            ("tabs", &["extra"][..]),
-        ] {
-            assert!(parse_verb(verb, &a(args)).is_err(), "{verb} {args:?}");
-        }
-        assert!(parse_verb("fly", &[]).is_err());
-    }
-
-    #[test]
-    fn refusals_render_short_and_fail() {
-        let click = parse_verb("click", &a(&["@e5"])).unwrap();
-        let reply = |text: &str, is_error: bool| {
-            json!({"jsonrpc": "2.0", "id": 1, "result": {
-                "content": [{"type": "text", "text": text}], "isError": is_error}})
-            .to_string()
-        };
-        let ok = render(
-            &click,
-            &reply(
-                r#"{"acted":"click","ticket":41,"verification":"navigation"}"#,
-                false,
-            ),
-        )
-        .unwrap();
-        assert_eq!(ok, "✓ ticket 41 · navigation\n");
-        let stale = render(
-            &click,
-            &reply(
-                r#"{"variant":"TicketInvalid","message":"ticket target-gone"}"#,
-                true,
-            ),
-        )
-        .unwrap_err();
-        assert_eq!(stale.to_string(), "✗ refused: TargetGone · run aui snap");
-        let confirm = render(
-            &click,
-            &reply(
-                r#"{"variant":"TicketInvalid","message":"needs-confirm: \"Pay $18\""}"#,
-                true,
-            ),
-        )
-        .unwrap_err();
-        assert_eq!(
-            confirm.to_string(),
-            "✗ refused: NeedsConfirm \"Pay $18\" · rerun with --confirm \"Pay \\$18\""
-        );
-        let gate = render(
-            &click,
-            &reply(r#"{"variant":"TicketInvalid","message":"occluded"}"#, true),
-        )
-        .unwrap_err();
-        assert_eq!(gate.to_string(), "✗ refused: Occluded · run aui snap");
-        let other = render(
-            &click,
-            &reply(r#"{"variant":"Browser","message":"socket closed"}"#, true),
-        )
-        .unwrap_err();
-        assert_eq!(other.to_string(), "✗ error: socket closed");
-    }
-
-    #[test]
     fn the_daemon_names_its_endpoint_unless_the_call_does() {
         let line = request_line(&Request::Tool {
             name: "browser_get_state",
@@ -973,9 +616,45 @@ mod tests {
         assert_eq!(value["params"]["arguments"]["cdp"], "http://h:1");
     }
 
+    /// Nothing listens on the endpoint: the connect error says how to get a
+    /// browser, and keeps the original error text.
+    #[test]
+    fn a_dead_endpoint_hints_launch_and_doctor() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let cdp = format!("http://127.0.0.1:{port}");
+        let err = connect_hint(
+            ultra_instinct_browser::CdpError::Transport {
+                message: "connection refused".into(),
+            },
+            &cdp,
+        );
+        let text = err.to_string();
+        assert!(text.contains("connection refused"), "{text}");
+        assert!(
+            text.contains("aui open --launch") && text.contains("aui doctor"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn daemon_flags_are_checked() {
+        for bad in [
+            &["--session"][..],
+            &["--session", "a", "--session", "b"][..],
+            &["--headless"][..],
+            &["extra"][..],
+        ] {
+            assert!(daemon_command(&a(bad)).is_err(), "{bad:?}");
+        }
+    }
+
     #[cfg(unix)]
     mod socket {
-        use super::super::imp::run_verb_at as run_verb_with;
+        use super::super::imp::{run_verb_at as run_verb_with, serve_failure};
         use super::super::*;
         use super::a;
         use std::os::unix::fs::PermissionsExt;
@@ -1058,6 +737,26 @@ mod tests {
             let _ = std::fs::remove_dir(path.parent().unwrap());
         }
 
+        /// Read-only verbs of the new tool families round-trip too: `count`
+        /// over a fresh observe, `is` over the same observation.
+        #[test]
+        fn count_and_is_round_trip_through_the_socket() {
+            let path = path("ci");
+            let script = ScriptBuilder::new()
+                .observe_compact(&page())
+                .observe_compact(&page());
+            let handle = start(&path, script);
+            let no_spawn = || panic!("the daemon is running");
+            let count = parse_verb("count", &a(&["--role", "button"])).unwrap();
+            assert_eq!(run_verb_with(&count, &path, no_spawn).unwrap(), "1  @e2\n");
+            let is = parse_verb("is", &a(&["enabled", "@e2"])).unwrap();
+            assert_eq!(run_verb_with(&is, &path, no_spawn).unwrap(), "true\n");
+            let close = parse_verb("close", &[]).unwrap();
+            run_verb_with(&close, &path, no_spawn).unwrap();
+            handle.join().unwrap();
+            let _ = std::fs::remove_dir(path.parent().unwrap());
+        }
+
         #[test]
         fn a_missing_socket_spawns_the_daemon_and_a_stale_one_is_replaced() {
             let path = path("sp");
@@ -1075,6 +774,10 @@ mod tests {
             assert!(out.contains("@e2 button \"Sign in\""), "{out}");
             // A second daemon on a live socket refuses to start.
             assert!(Daemon::bind(&path).is_err());
+            // Spawn-time settings on a running session are refused.
+            let launch = parse_verb("open", &a(&["https://a/", "--launch"])).unwrap();
+            let err = run_verb_with(&launch, &path, || panic!("running")).unwrap_err();
+            assert!(err.to_string().contains("already running"), "{err}");
             let close = parse_verb("close", &[]).unwrap();
             run_verb_with(&close, &path, || panic!("running")).unwrap();
             handle.unwrap().join().unwrap();
@@ -1104,6 +807,45 @@ mod tests {
                 })
             });
             serve_on(daemon, &mut server, "http://x", Duration::from_millis(50)).unwrap();
+            assert!(!path.exists());
+            let _ = std::fs::remove_dir(path.parent().unwrap());
+        }
+
+        /// A directory someone else made first (`aui doctor` makes it 0700)
+        /// is reused, and made private if it was not.
+        #[test]
+        fn a_socket_dir_made_before_the_daemon_is_reused() {
+            let path = path("pre");
+            let dir = path.parent().unwrap();
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let daemon = Daemon::bind(&path).unwrap();
+            let mode = std::fs::metadata(dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
+            drop(daemon);
+            let _ = std::fs::remove_dir(dir);
+        }
+
+        /// A daemon whose Chrome did not start answers the waiting verb with
+        /// the launch error text, unchanged, then exits and removes its socket.
+        #[test]
+        fn a_failed_launch_reaches_the_verb_unchanged() {
+            let path = path("lf");
+            let message = ultra_instinct_browser::launch::LaunchError::NotFound.to_string();
+            let mut failing = None;
+            let open = parse_verb("open", &a(&["https://a/", "--launch"])).unwrap();
+            let err = run_verb_with(&open, &path, || {
+                // The spawned daemon binds, then its launch fails.
+                let daemon = Daemon::bind(&path).unwrap();
+                let message = message.clone();
+                failing = Some(std::thread::spawn(move || {
+                    serve_failure(daemon, &message, Duration::from_secs(5))
+                }));
+                Ok(())
+            })
+            .unwrap_err();
+            assert_eq!(err.to_string(), format!("✗ error: {message}"));
+            failing.unwrap().join().unwrap();
             assert!(!path.exists());
             let _ = std::fs::remove_dir(path.parent().unwrap());
         }

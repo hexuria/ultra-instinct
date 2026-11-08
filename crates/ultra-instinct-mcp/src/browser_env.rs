@@ -628,10 +628,8 @@ fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
 
 fn download(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
-    let index = opt_u64(arguments, "index")?.ok_or_else(|| bad("missing required `index`"))?;
-    if index == 0 {
-        return Err(bad("`index` is 1-based"));
-    }
+    // 5, "5" or "@e5", like every other index tool.
+    let index = crate::browser_extra::index_arg(arguments)? as u64;
     let path = PathBuf::from(req_str(arguments, "path")?);
     let overwrite = opt_bool(arguments, "overwrite")?.unwrap_or(false);
     let mouse = opt_bool(arguments, "mouse")?.unwrap_or(false);
@@ -1148,7 +1146,7 @@ pub(crate) fn spec(name: &str) -> (String, Map<String, Value>, Vec<&'static str>
             "Browser settings for the current tab: viewport {width, height, scale?}, device {name} (viewport + mobile + touch + user agent), media {color_scheme}, offline {on}, headers {map} (extra HTTP headers), reset (clears all of these). The next observe uses the new viewport."
         }
         "browser_download" => {
-            props.insert("index".into(), json!({"type": "integer"}));
+            props.insert("index".into(), json!({"type": ["integer", "string"], "description": "1-based index from browser_get_state: 5, \"5\" or \"@e5\""}));
             props.insert("path".into(), json!({"type": "string"}));
             props.insert("overwrite".into(), json!({"type": "boolean"}));
             props.insert("mouse".into(), json!({"type": "boolean"}));

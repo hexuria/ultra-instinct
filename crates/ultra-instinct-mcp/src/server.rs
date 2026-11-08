@@ -89,14 +89,21 @@ impl Server {
     /// A server whose `cdp` endpoints are live websockets, under the policy
     /// in [`ENV_ALLOW_DOMAINS`] / [`ENV_CONFIRM_PRESS`] (unset: allow all).
     pub fn new() -> Self {
-        let mut server = Self::with_connector(|url| {
+        Self::with_connector(|url| {
             WebSocketTransport::connect(url)
                 .map(|transport| Box::new(transport) as Box<dyn CdpTransport>)
-        });
+        })
+        .with_env_policy()
+    }
+
+    /// This server under the policy in [`ENV_ALLOW_DOMAINS`] /
+    /// [`ENV_CONFIRM_PRESS`] (unset: allow all; unparsable: every call that
+    /// needs the policy fails with the parse error).
+    pub fn with_env_policy(mut self) -> Self {
         let var = |name: &str| std::env::var(name).unwrap_or_default();
-        server.policy = Policy::from_lists(&var(ENV_ALLOW_DOMAINS), &var(ENV_CONFIRM_PRESS))
+        self.policy = Policy::from_lists(&var(ENV_ALLOW_DOMAINS), &var(ENV_CONFIRM_PRESS))
             .map_err(|err| format!("{ENV_ALLOW_DOMAINS} / {ENV_CONFIRM_PRESS}: {err}"));
-        server
+        self
     }
 
     /// This server under `policy` instead of the environment's.

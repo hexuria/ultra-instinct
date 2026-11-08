@@ -788,7 +788,7 @@ fn node_params(session: &LiveSession, id: &RegionId) -> Result<Value, BrowserErr
 }
 
 /// `index` as `5`, `"5"` or `"@e5"`, 1-based.
-fn index_arg(arguments: &Value) -> Result<usize, ToolError> {
+pub(crate) fn index_arg(arguments: &Value) -> Result<usize, ToolError> {
     let bad = |got: &Value| {
         ToolError::InvalidArguments(format!(
             "`index` must be a 1-based index (5, \"5\" or \"@e5\"), got {got}"
