@@ -19,6 +19,7 @@ mod identity;
 mod page;
 mod session;
 mod stacking;
+pub mod storage_state;
 mod verify;
 
 pub use error::{ActMechanism, BrowserError};
