@@ -22,7 +22,7 @@ mod cli_execute {
         let first = help.lines().next().unwrap();
         assert_eq!(
             first,
-            "ultra-instinct run|replay|lessons|exams|doctor|install|observe|guard|verify|mcp"
+            "ultra-instinct run|replay|lessons|exams|doctor|install|observe|guard|verify|mcp|skills|open|snap|click|type|select|key|scroll|wait|shot|tabs|close"
         );
         for removed in ["locate", "inspect", "diff", "matcher", "hgra", "act is"] {
             assert!(!help.contains(removed), "{removed}: {help}");

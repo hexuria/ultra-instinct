@@ -35,6 +35,12 @@ pub enum GuardReason {
     WorldChanged,
     /// The target does not claim the requested action (e.g. TYPE on a button).
     UnsupportedAction,
+    /// The page URL's host is not on the user's allowlist. No input goes to
+    /// this page. Not stale: observing again does not change the answer.
+    DomainNotAllowed,
+    /// The target's label matches a confirm pattern the user set and the
+    /// user has not confirmed it (CLICK-family presses only). Not stale.
+    NeedsConfirm,
 }
 
 impl GuardReason {
@@ -54,6 +60,8 @@ impl GuardReason {
             Self::FrontLayer => "front-layer",
             Self::WorldChanged => "world-changed",
             Self::UnsupportedAction => "unsupported-action",
+            Self::DomainNotAllowed => "domain-not-allowed",
+            Self::NeedsConfirm => "needs-confirm",
         }
     }
 }

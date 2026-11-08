@@ -14,13 +14,15 @@
 //! 5. the hard gate re-runs on the fresh region (disabled, hidden, occluded,
 //!    front-layer, offscreen, action claim), and on a DRAG's fresh drop
 //!    target;
-//! 6. the ticket is marked consumed **before** dispatch, so a failed or
+//! 6. the user's [`Policy`] checks the fresh page URL and the fresh region
+//!    (allowed domains, confirm-before-press); an empty policy allows all;
+//! 7. the ticket is marked consumed **before** dispatch, so a failed or
 //!    partial dispatch can never be retried with the same lease;
-//! 7. input goes to `ticket.target_id` — never a caller-supplied id.
+//! 8. input goes to `ticket.target_id` — never a caller-supplied id.
 
 use ultra_instinct_browser::PageState;
 use ultra_instinct_core::{Action, InteractionManifold, RegionId};
-use ultra_instinct_guard::{gate_check, revalidate, TicketLedger};
+use ultra_instinct_guard::{gate_check, revalidate, Policy, TicketLedger};
 use ultra_instinct_protocol::{ActionTicket, GuardReason, TicketInvalid};
 
 use crate::runtime::{BrowserRuntime, Input};
@@ -41,7 +43,8 @@ pub struct Executed {
 pub enum ExecError {
     /// Lease invalid: consumed, mismatched, or stale against the fresh world.
     Ticket(TicketInvalid),
-    /// Fresh hard gate failed on the ticket target.
+    /// Fresh hard gate failed on the ticket target, or the user's policy
+    /// refused it (`domain-not-allowed`, `needs-confirm`).
     Gate(GuardReason),
     /// Observation failed before input (nothing dispatched).
     Observe(String),
@@ -54,6 +57,9 @@ pub enum ExecError {
 
 impl ExecError {
     /// Stale lease: the right response is observe → decide again, not failure.
+    /// Only world / target drift is stale. A policy refusal
+    /// (`Gate(DomainNotAllowed)`, `Gate(NeedsConfirm)`) is not: observing
+    /// again gives the same answer.
     pub fn is_stale(&self) -> bool {
         matches!(
             self,
@@ -81,11 +87,25 @@ impl std::fmt::Display for ExecError {
 impl std::error::Error for ExecError {}
 
 /// Revalidate and consume `ticket`, then send `input` to its exact target.
+/// No user policy: [`execute_ticketed_with`] and an empty [`Policy`].
 pub fn execute_ticketed<B: BrowserRuntime + ?Sized>(
     browser: &mut B,
     ledger: &mut TicketLedger,
     ticket: &ActionTicket,
     input: &Input,
+) -> Result<Executed, ExecError> {
+    execute_ticketed_with(browser, ledger, ticket, input, &Policy::default())
+}
+
+/// [`execute_ticketed`] under the user's `policy`, checked on the fresh
+/// observation after revalidation and the hard gate, before the ticket is
+/// consumed. A refusal leaves the ticket unconsumed and dispatches nothing.
+pub fn execute_ticketed_with<B: BrowserRuntime + ?Sized>(
+    browser: &mut B,
+    ledger: &mut TicketLedger,
+    ticket: &ActionTicket,
+    input: &Input,
+    policy: &Policy,
 ) -> Result<Executed, ExecError> {
     if ledger.is_consumed(ticket.ticket_id) {
         return Err(ExecError::Ticket(TicketInvalid::TicketConsumed));
@@ -138,6 +158,13 @@ pub fn execute_ticketed<B: BrowserRuntime + ?Sized>(
             .ok_or(ExecError::Ticket(TicketInvalid::TargetGone))?;
         ultra_instinct_guard::check_drop_target(&fresh, drop).map_err(ExecError::Gate)?;
     }
+    policy
+        .check(
+            before_page.as_ref().and_then(PageState::url),
+            region,
+            ticket.action,
+        )
+        .map_err(ExecError::Gate)?;
 
     ledger
         .mark_consumed(ticket.ticket_id)
@@ -230,6 +257,49 @@ mod tests {
         let err = execute_ticketed(&mut b, &mut ledger, &t, &Input::Click).unwrap_err();
         assert_eq!(err, ExecError::Ticket(TicketInvalid::WorldChanged));
         assert!(b.press_log().is_empty());
+    }
+
+    /// The page left the allowlist between the ticket and the press: the
+    /// executor refuses on the fresh URL, does not consume, presses nothing.
+    #[test]
+    fn fresh_url_off_the_allowlist_is_refused_unconsumed() {
+        let m = parse_fixture(PAGE).unwrap();
+        let mut b = MockBrowser::new(m.clone()).with_page(PageState::new(
+            "https://shop.example/cart",
+            "Cart",
+            None,
+        ));
+        let mut ledger = TicketLedger::new();
+        let policy = Policy::from_lists("shop.example", "").unwrap();
+        let t = gate(&m, &id("go"), Action::Click, None, 0).unwrap();
+        b.replace_page(PageState::new("https://evil.test/cart", "Cart", None));
+        let err =
+            execute_ticketed_with(&mut b, &mut ledger, &t, &Input::Click, &policy).unwrap_err();
+        assert_eq!(err, ExecError::Gate(GuardReason::DomainNotAllowed));
+        assert!(!err.is_stale());
+        assert!(!ledger.is_consumed(t.ticket_id));
+        assert!(b.input_log().is_empty());
+        // Back on the allowed host the same ticket still runs once.
+        b.replace_page(PageState::new("https://shop.example/cart", "Cart", None));
+        execute_ticketed_with(&mut b, &mut ledger, &t, &Input::Click, &policy).unwrap();
+        assert!(ledger.is_consumed(t.ticket_id));
+    }
+
+    #[test]
+    fn confirm_pattern_refuses_a_click_until_the_label_is_confirmed() {
+        let m = parse_fixture(PAGE).unwrap();
+        let mut b = MockBrowser::new(m.clone());
+        let mut ledger = TicketLedger::new();
+        let policy = Policy::from_lists("", "g*").unwrap();
+        let t = gate(&m, &id("go"), Action::Click, None, 0).unwrap();
+        let err =
+            execute_ticketed_with(&mut b, &mut ledger, &t, &Input::Click, &policy).unwrap_err();
+        assert_eq!(err, ExecError::Gate(GuardReason::NeedsConfirm));
+        assert!(!ledger.is_consumed(t.ticket_id));
+        assert!(b.press_log().is_empty());
+        let confirmed = policy.with_confirmed("go");
+        execute_ticketed_with(&mut b, &mut ledger, &t, &Input::Click, &confirmed).unwrap();
+        assert_eq!(b.press_log(), &[(id("go"), Action::Click)]);
     }
 
     #[test]

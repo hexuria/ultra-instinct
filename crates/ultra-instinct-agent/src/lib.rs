@@ -20,7 +20,7 @@ pub use agent::{
     DEFAULT_WAIT_POLLS, WAIT_POLL_MS,
 };
 pub use error::AgentError;
-pub use executor::{execute_ticketed, ExecError, Executed};
+pub use executor::{execute_ticketed, execute_ticketed_with, ExecError, Executed};
 pub use journal::JournalEvent;
 pub use outcome::{AgentOutcome, StepRecord, VerificationKind};
 pub use runtime::{BrowserRuntime, FieldValue, Input, MockBrowser, PAGE_TEXT_MAX_CHARS};

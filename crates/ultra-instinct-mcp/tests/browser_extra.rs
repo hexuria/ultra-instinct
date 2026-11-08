@@ -592,7 +592,7 @@ fn max_chars_cuts_text_at_a_multibyte_boundary() {
     let out = call(
         &mut server,
         "browser_get_state",
-        json!({"cdp": CDP, "max_chars": 200}),
+        json!({"cdp": CDP, "max_chars": 200, "format": "json"}),
     );
     let kept = out["elements"].as_array().unwrap().len();
     assert!(kept < 3, "{out}");

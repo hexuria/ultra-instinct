@@ -29,6 +29,7 @@
 #![forbid(unsafe_code)]
 
 pub mod gate;
+pub mod policy;
 pub mod ticket;
 pub mod world;
 
@@ -41,6 +42,9 @@ use ultra_instinct_protocol::MatcherConfidence;
 pub use gate::{
     check as gate_check, check_drop_target, gate, gate_drag, gate_drag_to_cell, gate_key,
     gate_point,
+};
+pub use policy::{
+    consume_ticket_once_checked, host_of, HostPattern, LabelGlob, Policy, PolicyError,
 };
 #[allow(deprecated)]
 pub use ticket::consume_ticket;

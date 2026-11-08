@@ -163,7 +163,11 @@ fn set_viewport_overrides_metrics_and_the_next_observe_reads_it() {
         params_of(&calls, "Emulation.setDeviceMetricsOverride"),
         [json!({"width": 390, "height": 844, "deviceScaleFactor": 1.0, "mobile": false})]
     );
-    let state = call(&mut server, "browser_get_state", json!({"cdp": CDP}));
+    let state = call(
+        &mut server,
+        "browser_get_state",
+        json!({"cdp": CDP, "format": "json"}),
+    );
     let labels: Vec<&str> = state["elements"]
         .as_array()
         .unwrap()

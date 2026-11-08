@@ -139,15 +139,18 @@ proptest! {
 
     /// Stale (observe → decide again) is exactly world / target drift. A spent
     /// lease (`ticket-consumed`), an operation swap (`ticket-mismatch`), a gate
-    /// refusal, an observe failure, a page rejection, or a dispatch failure is
-    /// never "stale", so the agent never silently retries it.
+    /// refusal, a policy refusal (`domain-not-allowed`, `needs-confirm`), an
+    /// observe failure, a page rejection, or a dispatch failure is never
+    /// "stale", so the agent never silently retries it.
     #[test]
-    fn is_stale_is_exactly_world_or_target_drift(k in 0usize..9) {
+    fn is_stale_is_exactly_world_or_target_drift(k in 0usize..11) {
         let err = match k {
             0..=4 => ExecError::Ticket(TICKET_INVALID[k]),
             5 => ExecError::Gate(GuardReason::Occluded),
             6 => ExecError::Observe("x".into()),
             7 => ExecError::Rejected("x".into()),
+            8 => ExecError::Gate(GuardReason::DomainNotAllowed),
+            9 => ExecError::Gate(GuardReason::NeedsConfirm),
             _ => ExecError::Dispatch("x".into()),
         };
         let expect = matches!(

@@ -114,6 +114,16 @@ fn tools_call(server: &mut Server, params: &Value) -> Result<Value, ToolError> {
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
     match server.call_tool(name, &arguments) {
         Ok(body) if name == "browser_screenshot" => Ok(image_result(body)),
+        // The text state goes back as plain text, not a JSON-escaped string.
+        Ok(body)
+            if name == "browser_get_state"
+                && body.get("format").and_then(Value::as_str) == Some("text") =>
+        {
+            match body.get("text").and_then(Value::as_str) {
+                Some(text) => Ok(tool_result(text.to_owned(), false)),
+                None => Ok(tool_result(body.to_string(), false)),
+            }
+        }
         Ok(body) => Ok(tool_result(body.to_string(), false)),
         Err(err) => Ok(tool_result(err.to_json_string(), true)),
     }
@@ -338,5 +348,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(reply["result"]["content"][0]["type"], "text", "{reply}");
+    }
+
+    /// The default text state reaches an MCP client as plain text (not a
+    /// JSON-escaped string); `format: "json"` keeps today's JSON body.
+    #[test]
+    fn text_state_is_a_plain_text_item() {
+        use ultra_instinct_browser::script::{Control, PageSpec};
+        let page = PageSpec::of(
+            &[Control::button(11, 101, "Go", (20.0, 20.0, 80.0, 28.0))],
+            "http://127.0.0.1/a",
+            "A",
+        );
+        let mut server = server_replaying(ScriptBuilder::new().observe_compact(&page));
+        let reply: Value = serde_json::from_str(
+            &handle_line_with(&mut server, &tools_call_line("browser_get_state")).unwrap(),
+        )
+        .unwrap();
+        let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.starts_with("A  http://127.0.0.1/a\n@e1 button \"Go\"\n"),
+            "{reply}"
+        );
+        assert!(
+            serde_json::from_str::<Value>(text).is_err(),
+            "plain text: {text}"
+        );
+
+        let mut server = server_replaying(ScriptBuilder::new().observe_compact(&page));
+        let line = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "browser_get_state",
+                       "arguments": {"cdp": "http://127.0.0.1:9222", "format": "json"}}})
+        .to_string();
+        let reply: Value =
+            serde_json::from_str(&handle_line_with(&mut server, &line).unwrap()).unwrap();
+        let body: Value =
+            serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["elements"][0]["label"], "Go", "{reply}");
     }
 }
