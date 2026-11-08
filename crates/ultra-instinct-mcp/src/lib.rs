@@ -35,7 +35,7 @@ pub const TOOL_DIFF: &str = "diff";
 pub const TOOL_VERIFY: &str = "verify";
 
 #[allow(deprecated)]
-pub const TOOLS: [&str; 44] = [
+pub const TOOLS: [&str; 48] = [
     TOOL_OBSERVE,
     TOOL_LOCATE,
     TOOL_INSPECT,
@@ -80,11 +80,17 @@ pub const TOOLS: [&str; 44] = [
     "browser_extract_content",
     "browser_read_console",
     "browser_read_network",
+    "browser_state_save",
+    "browser_state_load",
+    "browser_cookies",
+    "browser_storage",
 ];
 
 pub const PRODUCT_TOOLS: [&str; 3] = [TOOL_OBSERVE, TOOL_GUARD, TOOL_VERIFY];
 
+mod browser_state;
 mod browser_tools;
+pub use browser_state::STATE_TOOLS;
 pub use browser_tools::BROWSER_TOOLS;
 
 /// Tool name for a legacy protocol phase.

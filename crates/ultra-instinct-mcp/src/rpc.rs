@@ -159,7 +159,8 @@ fn tools_list() -> Value {
 
 fn tool_spec(name: &str) -> Value {
     if name.starts_with("browser_") {
-        let (description, properties, required) = crate::browser_tools::spec(name);
+        let (description, properties, required) =
+            crate::browser_state::spec(name).unwrap_or_else(|| crate::browser_tools::spec(name));
         return json!({
             "name": name,
             "description": description,
