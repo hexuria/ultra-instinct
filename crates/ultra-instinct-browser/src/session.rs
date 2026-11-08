@@ -1196,6 +1196,20 @@ impl<T: CdpTransport> BrowserSession<T> {
         }
     }
 
+    /// `(nodeId, backendNodeId)` the observed region `id` is bound to, for a
+    /// host call that names the node (`DOM.focus`, `DOM.getAttributes`).
+    pub fn node_ids(&self, id: &RegionId) -> Result<(Option<i64>, Option<i64>), BrowserError> {
+        let binding = self.binding_for(id)?;
+        Ok((binding.dom_node_id, binding.backend_node_id))
+    }
+
+    /// One raw CDP call that may change the page (key input, focus, a
+    /// dialog answer, reload): the stored observation becomes stale.
+    pub fn page_input(&mut self, method: &str, params_json: &str) -> Result<String, BrowserError> {
+        self.stale = true;
+        self.call(method, params_json)
+    }
+
     /// Read `(value, selected text)` without mutation; `None` if absent.
     pub fn field_value(&mut self, id: &RegionId) -> Result<Option<(String, String)>, BrowserError> {
         let binding = self.binding_for(id)?;
