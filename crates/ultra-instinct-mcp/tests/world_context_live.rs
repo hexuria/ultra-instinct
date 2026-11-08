@@ -124,32 +124,44 @@ fn live_modal_confirm_refuses_buried_delete_and_allows_dialog_cancel() {
         }
     }
 
+    // Two exact "Cancel" labels: ambiguous until the host proposes one.
+    let cancel = || {
+        LocateQuery::new()
+            .text("Cancel")
+            .unwrap()
+            .role(Role::Button)
+    };
+    let twins = guard(&manifold, &GuardRequest::click(cancel())).unwrap();
+    let candidates = match twins {
+        GuardDecision::Escalate {
+            reason: GuardReason::Ambiguous,
+            candidates,
+        } => candidates,
+        other => panic!("expected escalate ambiguous for the Cancel twins, got {other:?}"),
+    };
+    let dialog_cancel = candidates
+        .iter()
+        .find(|candidate| {
+            let region = manifold.get(&candidate.id).expect("candidate region");
+            blocker(&manifold, region).is_none()
+        })
+        .expect("one Cancel sits in the dialog")
+        .id
+        .clone();
     let twin = guard(
         &manifold,
-        &GuardRequest::click(
-            LocateQuery::new()
-                .text("Cancel")
-                .unwrap()
-                .role(Role::Button),
-        ),
+        &GuardRequest::click(cancel()).proposed(dialog_cancel.clone()),
     )
     .unwrap();
     match twin {
-        GuardDecision::Allow { ref target, .. } => {
-            let region = manifold.get(&target.id).expect("allow target");
-            assert!(
-                blocker(&manifold, region).is_none(),
-                "allowed Cancel must not be blocked; got {}",
-                target.id
-            );
-        }
+        GuardDecision::Allow { ref target, .. } => assert_eq!(target.id, dialog_cancel),
         other => panic!("expected allow dialog Cancel, got {other:?}"),
     }
 }
 
 #[test]
 #[ignore = "live Chrome: examples/world-context/smoke.sh"]
-fn live_twin_suspend_near_focus_picks_beta_row() {
+fn live_twin_suspend_within_the_focused_row_picks_beta() {
     let mut session = session_for("/twin-suspend.html");
     let manifold = session.observe().expect("observe twins").clone();
     let page = session.page().expect("page").clone();
@@ -188,6 +200,18 @@ fn live_twin_suspend_near_focus_picks_beta_row() {
         other => panic!("expected escalate ambiguous without context, got {other:?}"),
     }
 
+    // The host scopes by the focused field's row (`near` went with the
+    // matcher): the innermost ancestor of focus that holds a Suspend.
+    let row = manifold
+        .ancestors(&focused)
+        .into_iter()
+        .find(|ancestor| {
+            manifold
+                .regions()
+                .any(|r| r.label() == "Suspend" && manifold.is_within(r.id(), ancestor))
+        })
+        .cloned()
+        .expect("focused field should sit in a row with Suspend");
     let focused_guard = guard(
         &manifold,
         &GuardRequest::click(
@@ -195,26 +219,14 @@ fn live_twin_suspend_near_focus_picks_beta_row() {
                 .text("Suspend")
                 .unwrap()
                 .role(Role::Button)
-                .near(Some(focused.clone())),
+                .within(row.clone()),
         ),
     )
     .unwrap();
     match focused_guard {
         GuardDecision::Allow { ref target, .. } => {
-            let region = manifold.get(&target.id).expect("target");
-            let row = manifold
-                .ancestors(&focused)
-                .into_iter()
-                .find(|ancestor| {
-                    manifold
-                        .regions()
-                        .any(|r| r.label() == "Suspend" && manifold.is_within(r.id(), ancestor))
-                })
-                .cloned()
-                .or_else(|| region.parent().cloned())
-                .expect("focused field should sit in a row with Suspend");
             assert!(
-                manifold.is_within(region.id(), &row) || region.id() == &row,
+                manifold.is_within(&target.id, &row),
                 "allowed Suspend {} not under focused row {row}",
                 target.id
             );
@@ -224,7 +236,7 @@ fn live_twin_suspend_near_focus_picks_beta_row() {
                 "allowed id missing from Suspend set"
             );
         }
-        other => panic!("expected allow Suspend near focus, got {other:?}"),
+        other => panic!("expected allow Suspend within the focused row, got {other:?}"),
     }
 }
 

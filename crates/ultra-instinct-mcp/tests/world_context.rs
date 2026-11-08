@@ -151,6 +151,7 @@ fn guard_refuses_a_click_behind_the_modal_and_allows_the_dialog_twin() {
         let script = ScriptBuilder::new()
             .observe(&page)
             .observe(&page)
+            .observe(&page)
             .observe(&page);
         let (mut server, log) = server(script);
         let buried = call(
@@ -169,10 +170,19 @@ fn guard_refuses_a_click_behind_the_modal_and_allows_the_dialog_twin() {
         );
         assert_eq!(proposed["reason"], "front-layer", "{proposed}");
 
-        let twin = call(
+        // Two exact "Cancel" labels: the guard does not pick one for the host.
+        let twins = call(
             &mut server,
             "guard",
             json!({"cdp": TAB, "target": "Cancel", "role": "button"}),
+        );
+        assert_eq!(twins["decision"], "escalate", "{twins}");
+        assert_eq!(twins["reason"], "ambiguous", "{twins}");
+
+        let twin = call(
+            &mut server,
+            "guard",
+            json!({"cdp": TAB, "target": "Cancel", "role": "button", "proposed": "n210"}),
         );
         assert_eq!(twin["decision"], "allow", "{twin}");
         assert_eq!(twin["target"]["id"], "n210", "{twin}");

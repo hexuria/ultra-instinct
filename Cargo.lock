@@ -1692,7 +1692,6 @@ dependencies = [
  "ultra-instinct-core",
  "ultra-instinct-geometry",
  "ultra-instinct-protocol",
- "ultra-instinct-resonance",
 ]
 
 [[package]]

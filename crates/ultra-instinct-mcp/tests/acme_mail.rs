@@ -202,3 +202,67 @@ fn guard_with_compose_open_blocks_nothing_outside_the_compose_box() {
     assert_eq!(decision["reason"], "ambiguous", "{decision}");
     assert_eq!(presses(&log), 0);
 }
+
+/// t7: "Send" asked as a link. No link is named Send. The removed matcher
+/// tied 63 near-misses; the exact-label guard has no match and refuses.
+#[test]
+fn t7_send_as_a_link_is_a_missing_target_and_does_not_click() {
+    let page = thread_page(false);
+    let (mut server, log) = server(ScriptBuilder::new().observe(&page).observe(&page));
+
+    let observed = call(&mut server, "observe", json!({"cdp": TAB}));
+    let unnamed = observed["regions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|region| region["label"] == "")
+        .count();
+    assert!(
+        unnamed >= 10,
+        "replica must carry unnamed AX nodes: {observed}"
+    );
+
+    let decision = call(
+        &mut server,
+        "guard",
+        json!({"cdp": TAB, "target": "Send", "role": "link"}),
+    );
+    assert_eq!(decision["decision"], "refuse", "{decision}");
+    assert_eq!(decision["reason"], "missing-target", "{decision}");
+    assert_eq!(decision["candidates"], json!([]), "{decision}");
+    assert_eq!(presses(&log), 0);
+}
+
+/// t8: thread open and Compose open, so two visible "Send" buttons. Guard
+/// escalates with both as candidates; the host names the reply Send with
+/// `proposed` and gets an Allow ticket for it. Nothing is clicked.
+#[test]
+fn t8_twin_send_escalates_then_the_proposed_reply_send_is_allowed() {
+    let page = thread_page(true);
+    let (mut server, log) = server(ScriptBuilder::new().observe(&page).observe(&page));
+
+    let twins = call(
+        &mut server,
+        "guard",
+        json!({"cdp": TAB, "target": "Send", "role": "button"}),
+    );
+    assert_eq!(twins["decision"], "escalate", "{twins}");
+    assert_eq!(twins["reason"], "ambiguous", "{twins}");
+    let ids: Vec<&str> = twins["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["n714", "n750"], "{twins}");
+
+    let reply = call(
+        &mut server,
+        "guard",
+        json!({"cdp": TAB, "target": "Send", "role": "button", "proposed": "n714"}),
+    );
+    assert_eq!(reply["decision"], "allow", "{reply}");
+    assert_eq!(reply["ticket"]["target_id"], "n714", "{reply}");
+    assert_eq!(reply["executed"], false);
+    assert_eq!(presses(&log), 0);
+}

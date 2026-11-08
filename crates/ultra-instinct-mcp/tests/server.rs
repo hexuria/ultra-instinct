@@ -269,3 +269,32 @@ fn guard_refuses_the_matcher_arguments_by_name() {
         }
     }
 }
+
+#[test]
+fn guard_finds_its_target_by_exact_label() {
+    let saves = fixture("settings-saves.manifold");
+    // Three "Save" buttons: unique or refuse, so the guard escalates.
+    let twins = call("guard", json!({"fixture": &saves, "target": "save"})).unwrap();
+    assert_eq!(twins["decision"], "escalate", "{twins}");
+    assert_eq!(twins["reason"], "ambiguous");
+    assert_eq!(twins["candidates"].as_array().unwrap().len(), 3);
+    assert!(twins.get("matcher").is_none(), "{twins}");
+
+    let proposed = json!({"fixture": &saves, "target": "Save", "proposed": "z-save-signature"});
+    let allowed = call("guard", proposed).unwrap();
+    assert_eq!(allowed["decision"], "allow", "{allowed}");
+    assert_eq!(allowed["target"]["id"], "z-save-signature");
+    assert_eq!(allowed["confidence"], 1.0);
+    assert!(allowed.get("margin").is_none(), "{allowed}");
+
+    let disabled = call(
+        "guard",
+        json!({"fixture": &saves, "target": "Save", "proposed": "a-save-vacation"}),
+    )
+    .unwrap();
+    assert_eq!(disabled["reason"], "disabled", "{disabled}");
+
+    let miss = call("guard", json!({"fixture": &saves, "target": "Sav"})).unwrap();
+    assert_eq!(miss["reason"], "missing-target", "{miss}");
+    assert_eq!(miss["candidates"], json!([]));
+}
