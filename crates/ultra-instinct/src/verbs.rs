@@ -618,7 +618,11 @@ pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
         Request::Stop => return Ok("✓ daemon stopped\n".to_owned()),
         Request::Tool { name, arguments } => (*name, arguments),
     };
-    let text = result["content"][0]["text"].as_str().unwrap_or_default();
+    // A screenshot's first item is the image; its metadata is the text item.
+    let text = result["content"]
+        .as_array()
+        .and_then(|items| items.iter().find_map(|item| item["text"].as_str()))
+        .unwrap_or_default();
     if result["isError"] == true {
         return Err(CliError::Refused(render_error(text)));
     }
@@ -1465,6 +1469,21 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(launch.to_string(), "✗ error: no Chrome found");
+    }
+
+    /// Over MCP a screenshot answers with the image first, then its
+    /// metadata as text.
+    #[test]
+    fn a_screenshot_reply_renders_from_its_text_item() {
+        let shot = parse_verb("shot", &a(&["/x/s.png"])).unwrap();
+        let reply = json!({"jsonrpc": "2.0", "id": 1, "result": {"content": [
+            {"type": "image", "data": "iVBO", "mimeType": "image/png"},
+            {"type": "text", "text": r#"{"format":"png","path":"/x/s.png","bytes":4}"#}],
+            "isError": false}});
+        assert_eq!(
+            render(&shot, &reply.to_string()).unwrap(),
+            "✓ saved /x/s.png (4 bytes)\n"
+        );
     }
 
     #[test]

@@ -152,6 +152,24 @@ pub(crate) fn daemon_command(args: &[String]) -> Result<String, CliError> {
     Ok(String::new())
 }
 
+/// `aui session [--session <name>]` prints the session name;
+/// `aui session list` lists the live ones and removes stale sockets.
+pub(crate) fn session_command(args: &[String]) -> Result<String, CliError> {
+    let mut flags = crate::verbs::Flags::scan(args)?;
+    let session = flags.one("--session")?;
+    flags.finish()?;
+    match flags.positional().as_slice() {
+        [] => {
+            let name = SessionName::parse(session.as_deref().unwrap_or(DEFAULT_SESSION))?;
+            Ok(format!("{}\n", name.as_str()))
+        }
+        [list] if list == "list" && session.is_none() => imp::list_sessions(&imp::socket_dir()),
+        _ => Err(CliError::Config(
+            "usage: aui session [--session <name>] | aui session list".into(),
+        )),
+    }
+}
+
 /// Give a `tools/call` line the daemon's `cdp` endpoint when it names none.
 pub fn with_endpoint(line: &str, cdp: &str) -> Option<Value> {
     let mut value: Value = serde_json::from_str(line).ok()?;
@@ -175,9 +193,13 @@ pub fn connect_hint(
     if crate::doctor_cmd::probe_version(cdp).is_ok() {
         return err;
     }
+    let detail = match err {
+        ultra_instinct_browser::CdpError::Transport { message } => message,
+        other => other.to_string(),
+    };
     ultra_instinct_browser::CdpError::Transport {
         message: format!(
-            "{err} · nothing answers on {cdp}: run `aui open --launch <url>` (aui starts Chrome) or `aui doctor`"
+            "{detail} · nothing answers on {cdp}: run `aui open --launch <url>` (aui starts Chrome) or `aui doctor`"
         ),
     }
 }
@@ -433,6 +455,49 @@ mod imp {
         serve_on(daemon, &mut owned.server, &endpoint, IDLE)
     }
 
+    /// `aui session list` over `dir`: each `*.sock` that answers is a live
+    /// session; the rest are removed and named.
+    pub(super) fn list_sessions(dir: &Path) -> Result<String, CliError> {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                return Ok("no sessions\n".to_owned())
+            }
+            Err(err) => return Err(io_err(dir, err)),
+        };
+        let mut sockets: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "sock"))
+            .collect();
+        sockets.sort();
+        let (mut live, mut removed) = (Vec::new(), Vec::new());
+        for path in sockets {
+            let name = path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if UnixStream::connect(&path).is_ok() {
+                live.push(name);
+            } else if std::fs::remove_file(&path).is_ok() {
+                removed.push(name);
+            }
+        }
+        let mut out = String::new();
+        for name in &live {
+            out.push_str(&format!("{name}\n"));
+        }
+        out.push_str(&match live.len() {
+            0 => "no sessions\n".to_owned(),
+            1 => "1 live session\n".to_owned(),
+            n => format!("{n} live sessions\n"),
+        });
+        for name in &removed {
+            out.push_str(&format!("removed stale socket {name}.sock\n"));
+        }
+        Ok(out)
+    }
+
     /// Send one line on a fresh connection and read one reply line.
     pub(super) fn send(path: &Path, line: &str) -> Result<String, CliError> {
         let mut stream = UnixStream::connect(path).map_err(|err| io_err(path, err))?;
@@ -582,6 +647,14 @@ mod imp {
     ) -> Result<(), CliError> {
         Err(CliError::Config(UNSUPPORTED.into()))
     }
+
+    pub fn socket_dir() -> std::path::PathBuf {
+        std::env::temp_dir().join("aui")
+    }
+
+    pub(super) fn list_sessions(_dir: &std::path::Path) -> Result<String, CliError> {
+        Err(CliError::Config(UNSUPPORTED.into()))
+    }
 }
 
 #[cfg(test)]
@@ -601,6 +674,18 @@ mod tests {
         for bad in ["", "a b", "../x", "a/b", "a.b", "a_b", "é", long.as_str()] {
             assert!(SessionName::parse(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn session_prints_its_name() {
+        assert_eq!(session_command(&[]).unwrap(), "default\n");
+        assert_eq!(
+            session_command(&a(&["--session", "shop-2"])).unwrap(),
+            "shop-2\n"
+        );
+        assert!(session_command(&a(&["--session", "a b"])).is_err());
+        assert!(session_command(&a(&["kill"])).is_err());
+        assert!(session_command(&a(&["list", "--session", "x"])).is_err());
     }
 
     #[test]
@@ -654,7 +739,7 @@ mod tests {
 
     #[cfg(unix)]
     mod socket {
-        use super::super::imp::{run_verb_at as run_verb_with, serve_failure};
+        use super::super::imp::{list_sessions, run_verb_at as run_verb_with, serve_failure};
         use super::super::*;
         use super::a;
         use std::os::unix::fs::PermissionsExt;
@@ -848,6 +933,32 @@ mod tests {
             failing.unwrap().join().unwrap();
             assert!(!path.exists());
             let _ = std::fs::remove_dir(path.parent().unwrap());
+        }
+
+        #[test]
+        fn session_list_names_live_sockets_and_removes_stale_ones() {
+            let live = path("ls");
+            let dir = live.parent().unwrap().to_owned();
+            let handle = start(&live, ScriptBuilder::new());
+            drop(std::os::unix::net::UnixListener::bind(dir.join("old.sock")).unwrap());
+            std::fs::write(dir.join("notes.txt"), b"x").unwrap();
+            let out = list_sessions(&dir).unwrap();
+            assert_eq!(
+                out, "s\n1 live session\nremoved stale socket old.sock\n",
+                "{out}"
+            );
+            assert!(!dir.join("old.sock").exists());
+            assert!(dir.join("notes.txt").exists(), "only sockets are touched");
+            let close = parse_verb("close", &[]).unwrap();
+            run_verb_with(&close, &live, || panic!("running")).unwrap();
+            handle.join().unwrap();
+            assert_eq!(list_sessions(&dir).unwrap(), "no sessions\n");
+            assert_eq!(
+                list_sessions(&dir.join("missing")).unwrap(),
+                "no sessions\n"
+            );
+            let _ = std::fs::remove_file(dir.join("notes.txt"));
+            let _ = std::fs::remove_dir(&dir);
         }
     }
 }

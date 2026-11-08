@@ -17,6 +17,11 @@ fn main() {
     }
     match ultra_instinct::execute(&args) {
         Ok(stdout) => print!("{stdout}"),
+        // A batch with a failed command: every command's output, then exit 1.
+        Err(ultra_instinct::CliError::BatchFailed(body)) => {
+            print!("{body}");
+            std::process::exit(1);
+        }
         // A shell-verb refusal is already one short line.
         Err(err @ ultra_instinct::CliError::Refused(_)) => {
             eprintln!("{err}");
