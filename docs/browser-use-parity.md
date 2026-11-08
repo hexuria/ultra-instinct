@@ -72,7 +72,7 @@ resolve. Coordinate clicks are deliberately not offered: indices only.
 
 ## agent-browser
 
-[agent-browser](https://github.com/vercel-labs/agent-browser) is a shell
+[agent-browser](https://github.com/vercel-labs/agent-browser) ([command reference](https://agent-browser.dev/commands), checked 2026-11-08) is a shell
 CLI. Its commands map to MCP tools here and to `aui` shell verbs over the
 session daemon (`aui skills get core`). Refs are `@eN` from `aui snap` /
 `browser_get_state`; there are no CSS / XPath selectors and no coordinate
@@ -92,17 +92,17 @@ mouse.
 | `wait` (text, url, selector gone, load) | `browser_wait` | `wait --text\|--url\|--control\|--gone <v>`, `wait --load domcontentloaded\|load` |
 | `get text\|value\|attr\|box` | `browser_get`, `browser_get_text` | `get value\|label\|role\|box <ref>`, `get attr <ref> <name>` |
 | `is visible\|enabled\|checked` | `browser_is` | `is visible\|enabled\|checked\|editable <ref>` |
-| `count` / `find` | `browser_count` / `browser_find` | `count [--label L] [--role R]` |
+| `get count` / `find` | `browser_count` / `browser_find` | `count [--label L] [--role R]` |
 | `screenshot [--annotate]` | `browser_screenshot` (`annotate`) | `shot [--annotate] [path]` |
 | `back` / `forward` / `reload` | `browser_go_back` / `browser_go_forward` / `browser_reload` | `forward`, `reload [--ignore-cache]` |
 | `dialog accept\|dismiss` | `browser_dialog` | `dialog [status]\|accept [text]\|dismiss` |
-| `tab list\|new\|switch\|close` | tab tools | `tabs` |
+| `tab` / `tab new\|close` / `tab <id>` | tab tools | `tabs` |
 | `state save\|load` | `browser_state_save` / `browser_state_load` | `state save\|load <path>` |
 | `cookies` | `browser_cookies` | `cookies [list]\|set\|clear` |
 | `storage local\|session` | `browser_storage` | `storage local\|session [list]\|get\|set\|clear` |
 | `set viewport\|device\|media\|offline\|headers` | `browser_set` | `set viewport W H [scale]\|device\|media\|offline\|headers K=V…\|reset` |
 | `download` | `browser_download` | `download <ref> <path>` |
-| `network route\|unroute`, `har` | `browser_network` (block / unblock, HAR) | `network block\|unblock`, `network har start\|stop <path>` |
+| `network route\|unroute`, `network har start\|stop` | `browser_network` (block / unblock, HAR) | `network block\|unblock`, `network har start\|stop <path>` |
 | `--max-output` | `max_chars` | `--max-output N` |
 | `batch` | — | `batch "<verb args>"…` |
 | `session` / `session list` | — | `session`, `session list` |
