@@ -772,7 +772,7 @@ mod tests {
         let frame = frame_fields(&format!("{{\"method\":\"X.y\",\"params\":{deep}}}"))
             .unwrap()
             .unwrap();
-        assert!(frame.get("id").is_none());
+        assert!(!frame.contains_key("id"));
         assert_eq!(
             frame
                 .get("method")
