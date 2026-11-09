@@ -1,7 +1,7 @@
 <p align="center">
   <a href="https://hdqwalls.com/wallpaper/3440x1440/goku-jiren-masterd-ultra-instinct">
     <img
-      src="https://images.hdqwalls.com/download/goku-jiren-masterd-ultra-instinct-2e-3440x1440.jpg"
+      src="https://github.com/user-attachments/assets/5d173f2a-a61f-4069-ae76-66d0be44ece9"
       alt="Ultra Instinct Goku"
       width="100%"
     >
