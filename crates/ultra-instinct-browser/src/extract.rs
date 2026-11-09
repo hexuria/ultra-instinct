@@ -157,11 +157,10 @@ enum Names {
 
 /// Record the label facts of one element node.
 fn note_label_facts(node: &Value, backend: i64, scope: u32, facts: &mut LabelFacts) {
-    let attributes = attr_map(node);
-    if let Some(id) = attributes.get("id").filter(|id| !id.is_empty()) {
+    if let Some(id) = attr(node, "id").filter(|id| !id.is_empty()) {
         facts
             .ids
-            .entry((scope, id.clone()))
+            .entry((scope, id.to_owned()))
             .and_modify(|seen| *seen = None)
             .or_insert(Some(backend));
     }
@@ -170,10 +169,10 @@ fn note_label_facts(node: &Value, backend: i64, scope: u32, facts: &mut LabelFac
     }
     let name = node.get("nodeName").and_then(Value::as_str).unwrap_or("");
     if name.eq_ignore_ascii_case("LABEL") {
-        match attributes.get("for") {
+        match attr(node, "for") {
             Some(target) => facts
                 .labels
-                .push((backend, Names::For(scope, target.clone()))),
+                .push((backend, Names::For(scope, target.to_owned()))),
             None => {
                 if let Some(control) = first_labelable(node) {
                     facts.labels.push((backend, Names::Wraps(control)));
@@ -181,8 +180,8 @@ fn note_label_facts(node: &Value, backend: i64, scope: u32, facts: &mut LabelFac
             }
         }
     }
-    if let Some(ids) = attributes.get("aria-labelledby") {
-        facts.labelledby.push((backend, scope, ids.clone()));
+    if let Some(ids) = attr(node, "aria-labelledby") {
+        facts.labelledby.push((backend, scope, ids.to_owned()));
     }
 }
 
@@ -209,9 +208,7 @@ fn first_labelable(label: &Value) -> Option<i64> {
 fn is_labelable(node: &Value) -> bool {
     let name = node.get("nodeName").and_then(Value::as_str).unwrap_or("");
     match name.to_ascii_uppercase().as_str() {
-        "INPUT" => !attr_map(node)
-            .get("type")
-            .is_some_and(|t| t.eq_ignore_ascii_case("hidden")),
+        "INPUT" => !attr(node, "type").is_some_and(|t| t.eq_ignore_ascii_case("hidden")),
         "SELECT" | "TEXTAREA" | "BUTTON" | "METER" | "OUTPUT" | "PROGRESS" => true,
         _ => false,
     }
@@ -567,10 +564,7 @@ fn walk_dom(
                 }
                 next_parent = Some(backend);
                 note_label_facts(node, backend, scope, facts);
-                if let Some(k) = attr_map(node)
-                    .get(crate::compact::HU_K_ATTR)
-                    .and_then(|raw| raw.parse::<u32>().ok())
-                {
+                if let Some(k) = hu_k_of(node) {
                     out.hu_k_of_backend.insert(backend, k);
                     out.backend_of_hu_k.insert(k, backend);
                 }
@@ -1335,13 +1329,18 @@ fn direct_text(node: &Value) -> String {
 
 /// The node's `data-hu-k`, read without building its attribute map.
 fn hu_k_of(node: &Value) -> Option<u32> {
+    attr(node, crate::compact::HU_K_ATTR)?.parse().ok()
+}
+
+/// One attribute's value, read without building the attribute map.
+fn attr<'a>(node: &'a Value, name: &str) -> Option<&'a str> {
     let attributes = node.get("attributes").and_then(Value::as_array)?;
     attributes
         .as_chunks::<2>()
         .0
         .iter()
-        .find(|[name, _]| name.as_str() == Some(crate::compact::HU_K_ATTR))
-        .and_then(|[_, value]| value.as_str()?.parse().ok())
+        .find(|[key, _]| key.as_str() == Some(name))
+        .and_then(|[_, value]| value.as_str())
 }
 
 fn attr_map(node: &Value) -> std::collections::BTreeMap<String, String> {
