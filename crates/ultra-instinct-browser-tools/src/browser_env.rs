@@ -606,10 +606,14 @@ fn download(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, To
         Downloads::Off => return Err(ToolError::DownloadsOff),
         Downloads::Anywhere => std::env::temp_dir(),
         Downloads::Dir(dir) => {
-            let inside = path.parent() == Some(dir.as_path())
-                && !path
-                    .components()
-                    .any(|c| matches!(c, std::path::Component::ParentDir));
+            // Canonical containment, as uploads: `..` and symlinks (the
+            // destination itself, or a folder on the way) cannot leave it.
+            let real = std::fs::canonicalize(&path).or_else(|_| {
+                let parent = path.parent().ok_or(std::io::ErrorKind::NotFound)?;
+                std::fs::canonicalize(parent).map(|p| p.join(path.file_name().unwrap_or_default()))
+            });
+            let inside = matches!((real, std::fs::canonicalize(&dir)),
+                (Ok(real), Ok(dir)) if real.parent() == Some(dir.as_path()));
             if !inside {
                 return Err(ToolError::PathNotAllowed {
                     path: path.display().to_string(),

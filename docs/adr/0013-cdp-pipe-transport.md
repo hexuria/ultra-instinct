@@ -149,7 +149,11 @@ surface.
   64 a new one refuses `secrets_full` before it is typed. `run_goal`
   remembers each payload before dispatch (non-sensitive ones from 4
   chars) and returns them in `RunReport::typed` (must not be logged).
-  `browser_get_html` drops text inputs' `value` attributes. Observe no
+  `browser_get_html` drops text inputs' `value` attributes.
+  `browser_get_state` JSON with `values: true` (opt-in, added later) carries
+  the value / checked / expanded observe read, never for a sensitive
+  element, cut at the state / text limit (`value_truncated`), masked at the
+  one exit like the rest. Observe no
   longer names a text area by its own text (its value). Whether typed
   text is secret is read off the observation the input lands on: the
   executor's own fresh one for `browser_type` (the field the caller saw,
@@ -179,9 +183,74 @@ surface.
   retry, then `output_too_large`), 60 s waits, 1 000 000 chars of
   `browser_get_text` / `browser_get_html` (cut inside the page script, so
   a huge page rarely makes a frame near the cap).
-- **Paths.** Screenshot, PDF, state, download and HAR paths must be
-  absolute (`path_not_absolute`); nothing invents a default.
-  `Server::with_downloads(Anywhere | Off | Dir)`.
+- **Paths.** Screenshot, PDF, state, download, HAR and upload paths must
+  be absolute (`path_not_absolute`); nothing invents a default.
+  `Server::with_downloads(Anywhere | Off | Dir)`, and (added after the
+  first cut, which left uploads unchecked) `Server::with_uploads(Anywhere
+  | Off | Dir)`: `uploads_off`, or under `Dir` the canonical file inside
+  the canonical folder (`..` and symlinks cannot escape), else
+  `path_not_allowed`; Chrome gets the canonical path. `Anywhere` stays the
+  default, so a host that does not opt in can still hand a page any file
+  it can read.
+- **Domain scope.** The allow-list is checked on the page an input starts
+  on, before it is sent (and on `browser_navigate`'s URL), and on where a
+  press that submits a form would send it: observe records each form's
+  target in the per-form table (the submit button's `formaction`, else the
+  form's `action`, resolved; an empty `action` is the page) and a submit
+  button's own (`fa`); a click / Enter / Space on a submit button, or an
+  Enter in a field or box that submits its form, refuses
+  `domain_not_allowed {host}` when that host is off the list, or the
+  target is `javascript:` or unread (`Policy::check_detail`'s `Refusal`
+  carries the host to every path: agent, executor, host consume, keyboard
+  tools). Other navigation (a clicked link) is checked at the next input.
+- **Form-rule review fixes.** Enter on a checkbox / radio goes through the
+  form rule (Chrome submits from it, pinned in `pipe_live.rs`); only a
+  button-like control that is no box presses itself on Enter. A nameless
+  submit button is `(form submit)`. Observe emits the form table once per
+  walk (`forms`, indexed by a control's `fm`) and a compact record without
+  `fm` reads as in no form, so "unread" means only missing evidence (the
+  per-node fallback). Enter carries `"\r"` in `key_event`, as in
+  `press_key`. The executor's policy refusal (`ExecError::Policy { reason,
+  label }`) carries the label its fresh look checked, which the agent and
+  the host tools report.
+- **Keyboard input with no target** (added after the first cut, which
+  sent it unchecked). `browser_keyboard` and `browser_send_key` /
+  `browser_hold_key` without an index observe first when a policy is set
+  and check the host before any `Input.*` call, by the press rule
+  (`Policy::check_url`, an unreadable URL fails closed), then run the key
+  on the focused region through the guard's press rule below. Text with an
+  Enter / Space after a Tab is refused while confirm patterns are set (the
+  focus it lands on is not observed).
+- **Keys are presses** (guard policy + world evidence; the second
+  follow-up, replacing a first cut that checked only the keyboard tools).
+  `Policy::check` takes the KEY's key, and `Policy::press_label` names
+  what a confirm is checked against: the CLICK family on the target; an
+  Enter / Space / NumpadEnter KEY (any modifiers) on a button-like target
+  (clicks, toggles or takes points; no text / select); Enter in another
+  form control: its form's implicit-submission button. Observe records
+  that as evidence (`ElementState::form`, not in the fingerprint): inside
+  the existing compact walk, no new CDP call, the first submit button in
+  tree order (`button` / `input type=submit|image`) of `el.form`, by its
+  accessible name in the AX order (`aria-labelledby`, `aria-label`, text /
+  value), so it reads as the click check does; a text area or select
+  submits nothing. A button-less form that Enter still submits (HTML
+  implicit submission: at most one field that blocks it) and form evidence
+  not read (the per-node fallback, a replayed or fixture page) need, while
+  confirm patterns are set, a confirm of the label `(form submit)`, as does
+  a submit button with no name
+  (`FORM_SUBMIT_UNKNOWN`); a button-less form with two or more blocking
+  fields, or no form: nothing to confirm. The keyboard tools refuse an
+  activating key to a focus no observation names with `(unobserved
+  focus)` (`UNOBSERVED_FOCUS`), so splitting a Tab and an Enter across two
+  calls gets nothing past the rule; `ultra_instinct_guard::is_activating_key`
+  is the one key list both use. Text typed after a Tab in `browser_keyboard`
+  is remembered as a secret (the Tab may have moved into a password field). Space in a field and other keys press nothing. One rule for
+  the agent's pre-ticket check (a refusal ends `Blocked` with the button's
+  label), `execute_ticketed_with`'s fresh re-check, the host's
+  `consume_ticket_once_checked` and the `browser_*` tools; no second gate,
+  no score. Owners: guard `policy.rs` unit tests, `executor.rs`
+  `enter_whose_fresh_form_submits_a_confirm_label_is_refused_unconsumed`,
+  `mock_loop.rs`, mcp `keyboard_policy.rs`, the live `pipe_live.rs`.
 - **Allow-list.** `Server::with_tool_allowlist`: other tools refuse
   `tool_not_allowed` and `tools/list` shows only the allowed ones.
   `Server::run_goal` is gated by the name `run_goal` (not a tool, never
@@ -198,10 +267,15 @@ surface.
   `confirm` lifts its own call only. `ultra_instinct_mcp::run_goal` runs the
   agent loop (InstinctPolicy, deterministic text, no model) under a guard
   `Policy`, with a step cap and a deadline checked between steps
-  (`AgentBuilder::deadline`).
+  (`AgentBuilder::deadline`). A policy stop is `RunOutcome::Blocked` with a
+  typed `kind` (`BlockKind::NeedsConfirm` / `DomainNotAllowed { host }`)
+  taken from the agent's `GuardReason`, its `code()` the matching error
+  code; a refusal before the loop starts is `Failed` with that error's
+  `code`.
 
 Owners: `crates/ultra-instinct-mcp/tests/pipe_mode.rs`, `snapshot_refs.rs`,
-`secrets.rs`, `host_options.rs`, `run_goal.rs`, the ignored live
+`secrets.rs`, `host_options.rs`, `keyboard_policy.rs`, `uploads.rs`,
+`run_goal.rs`, the ignored live
 `pipe_live.rs`; `crates/ultra-instinct-browser-tools/tests/error_codes.rs`.
 
 ## Consequences

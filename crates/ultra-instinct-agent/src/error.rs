@@ -27,6 +27,8 @@ pub enum AgentError {
     PolicyRefused {
         reason: ultra_instinct_protocol::GuardReason,
         label: String,
+        /// What a domain refusal checked: the page, or a form's target.
+        url: Option<String>,
     },
 }
 
@@ -46,7 +48,7 @@ impl fmt::Display for AgentError {
             Self::DeadlineExceeded => f.write_str("deadline exceeded"),
             Self::MaxPolicyCalls => f.write_str("max policy calls exceeded"),
             Self::TooManyStale(n) => write!(f, "{n} consecutive stale predictions"),
-            Self::PolicyRefused { reason, label } => {
+            Self::PolicyRefused { reason, label, .. } => {
                 write!(f, "policy refused: {reason} {label:?}")
             }
         }

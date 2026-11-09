@@ -446,10 +446,7 @@ fn check(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
         let mut ledger = server.take_ledger(key);
         let executed = execute_ticketed_with(&mut session, &mut ledger, &ticket, &input, &policy);
         server.keep_ledger(key, ledger);
-        executed.map_err(|err| {
-            let url = session.page().and_then(|p| p.url().map(str::to_owned));
-            exec_error(err, &ticket.target_label, url.as_deref())
-        })?;
+        executed.map_err(exec_error)?;
         let after = session.observe().map_err(browser_err)?;
         let read = after.get(&id).and_then(|r| r.state().checked);
         if read != Some(want) {
@@ -508,7 +505,7 @@ fn focus(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
             },
         );
         server.keep_ledger(key, ledger);
-        result.map_err(|err| consume_error(err, &ticket.target_label, url.as_deref()))?;
+        result.map_err(consume_error)?;
         Ok(json!({"focused": index, "region": id.as_str()}))
     })();
     keep(server, key, session);
@@ -530,23 +527,49 @@ fn keyboard(
             "`mode` must be type|insert, got `{mode}`"
         )));
     }
+    // The policy first (host, and a confirm for an Enter / Space on the
+    // focused control), on an observation taken now when one is set. Insert
+    // mode sends no keys: it presses nothing. In type mode an Enter after a
+    // Tab, or a Space right after one, would press a control not seen yet.
+    let policy = press_policy(server, arguments)?;
+    let keys = mode == "type";
+    let tab_then_press = text
+        .find('\t')
+        .is_some_and(|tab| text[tab..].contains('\n') || text.contains("\t "));
+    if keys && tab_then_press && !policy.confirm_press.is_empty() {
+        return Err(ToolError::InvalidArguments(
+            "with confirm patterns set, send an Enter after a Tab (or a Space right after one) in its own call".into(),
+        ));
+    }
+    let now = crate::press::focus_now(server, key, !policy.is_empty())?;
+    // Every activating key that lands on the observed focus (before the
+    // first Tab; after it the Tab rules above apply), each checked.
+    let before_tab = text.split('\t').next().unwrap_or_default();
+    for (ch, key) in [(' ', " "), ('\n', "Enter")] {
+        if keys && before_tab.contains(ch) {
+            crate::press::check_focused(&policy, &now, Some(key))?;
+        }
+    }
+    crate::press::check_focused(&policy, &now, None)?;
     // Fail closed: unless a current observation shows a focused field that
     // is not sensitive, this text is masked in every later output. One taken
     // before a press is stale (the press may have moved the focus): observe
     // again. No observation at all, or a failed one, counts as sensitive.
-    let focused_plain = server.take_session(key).map(|mut session| {
-        if session.is_stale() {
-            crate::host::best_effort(server, |_| session.observe().is_ok());
-        }
-        let plain = session
-            .fresh_manifold()
-            .and_then(|manifold| manifold.get(session.page()?.focused()?))
-            .is_some_and(|region| !crate::secrets::sensitive(region));
-        keep(server, key, session);
-        plain
-    })?;
+    let focused_plain = now
+        .1
+        .as_ref()
+        .is_some_and(|r| !crate::secrets::sensitive(r));
     if !focused_plain {
         server.tool_state_mut().secrets.remember(text, true)?;
+    } else if let Some((_, after)) = text.split_once('\t') {
+        // A Tab moves the focus after it was read (into a password field,
+        // say): every piece typed after the first Tab may be a secret.
+        for piece in after
+            .split(['\t', '\n', '\r'])
+            .filter(|p| !p.trim().is_empty())
+        {
+            server.tool_state_mut().secrets.remember(piece, true)?;
+        }
     }
     let mut session = server.take_session(key)?;
     let outcome = (|| {
@@ -581,20 +604,8 @@ fn keyboard(
 fn type_char(session: &mut LiveSession, ch: char) -> Result<(), BrowserError> {
     let named = match ch {
         '\r' => return Ok(()),
-        '\n' => {
-            // Enter must carry its text ("\r") to insert a line or submit.
-            let enter = json!({"key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13,
-                "nativeVirtualKeyCode": 13});
-            let mut down = enter.clone();
-            down["type"] = json!("keyDown");
-            down["text"] = json!("\r");
-            down["unmodifiedText"] = json!("\r");
-            let mut up = enter;
-            up["type"] = json!("keyUp");
-            session.page_input("Input.dispatchKeyEvent", &down.to_string())?;
-            session.page_input("Input.dispatchKeyEvent", &up.to_string())?;
-            return Ok(());
-        }
+        // Enter carries its text ("\r") to insert a line or submit.
+        '\n' => "Enter".to_owned(),
         '\t' => "Tab".to_owned(),
         other => other.to_string(),
     };
@@ -966,8 +977,9 @@ pub(crate) fn spec(name: &str) -> (String, Map<String, Value>, Vec<&'static str>
                 "mode".into(),
                 json!({"type": "string", "enum": ["type", "insert"]}),
             );
+            props.insert("confirm".into(), crate::browser_tools::confirm_prop());
             required.push("text");
-            "Type text at the focused element, no target: mode type (default) sends key events per char, insert sends one Input.insertText. Refuses when nothing is focused."
+            "Type text at the focused element, no target: mode type (default) sends key events per char, insert sends one Input.insertText. Refuses when nothing is focused, or on a page off the domain allow-list (and a form it would submit off the list; a link it follows is checked on the next call); an Enter / Space on a focused control whose label needs a confirm needs `confirm`."
         }
         "browser_get" => {
             props.insert("index".into(), index());

@@ -82,7 +82,7 @@ mouse.
 | agent-browser | MCP tool | `aui` verb |
 |---|---|---|
 | `open <url>` | `browser_navigate` | `open <url> [--launch [--headed]]` |
-| `snapshot` | `browser_get_state` (text default, `format:"json"`) | `snap [--json]` |
+| `snapshot` | `browser_get_state` (text default, `format:"json"`; `values:true` adds field values, never a sensitive one) | `snap [--json]` |
 | `click` / `dblclick` | `browser_click` / `browser_double_click` | `click <ref>` |
 | `fill` / `type` | `browser_type` / `browser_keyboard` | `type <ref> <text>`, `keyboard type\|insert <text>` |
 | `press <key>` | `browser_send_key` | `key <ref> <key>` |

@@ -293,6 +293,9 @@ pub struct PageSpec {
     /// Backend ids `DOMSnapshot.captureSnapshot` reports `isClickable` (a
     /// click listener added by script).
     pub listeners: BTreeSet<i64>,
+    /// The compact walk's per-form table (`forms`) that a node's `fm`
+    /// compact state indexes.
+    pub forms: Vec<Value>,
 }
 
 impl PageSpec {
@@ -446,6 +449,7 @@ impl PageSpec {
             hit_overrides: BTreeMap::new(),
             style_overrides: BTreeMap::new(),
             listeners: BTreeSet::new(),
+            forms: Vec::new(),
         }
     }
 
@@ -631,7 +635,7 @@ impl ScriptBuilder {
         }
         self.calls.push(result(
             "Runtime.evaluate",
-            json!({"result": {"type": "object", "value": {"nodes": nodes}}}),
+            json!({"result": {"type": "object", "value": {"nodes": nodes, "forms": page.forms}}}),
         ));
         self.calls.push(result(
             "Page.getLayoutMetrics",

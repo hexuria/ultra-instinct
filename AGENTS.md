@@ -59,11 +59,27 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    the same consume-before-press order. `Predicted` carries no fingerprint of
 >    its own; do not add a "pre-ticket check" that is not wired into a refusal.
 >    The user's `Policy` (guard `policy.rs`: allowed domains, confirm-before-press)
->    is checked by `execute_ticketed_with` on the fresh observe's URL and region
+>    is checked on the page the input starts on, and on where a press that
+>    submits a form sends it (`ElementState::form` / `submit_action`; other
+>    navigation is checked at the next input there), by `execute_ticketed_with`
+>    on the fresh observe's URL and region
 >    after `revalidate` and the hard gate, before mark-consumed;
 >    `execute_ticketed` runs it with an empty policy. The agent also checks it
 >    after the gate; `consume_ticket_once_checked` runs it after `revalidate`,
->    before consume. An empty policy allows everything.
+>    before consume. An empty policy allows everything. A confirm applies to
+>    a press (`Policy::press_label`): the CLICK family on the target, an
+>    activating KEY (Enter / Space / NumpadEnter, any modifiers) on a
+>    button-like target (Enter on a checkbox / radio submits its form
+>    instead), and Enter in a form control, which presses its
+>    form's implicit-submission button by its accessible name (observe's
+>    `ElementState::form` evidence; a button-less form Enter still submits,
+>    or unread evidence → `FORM_SUBMIT_UNKNOWN` refuses while any pattern is
+>    set; an activating key to an unnamed focus in the keyboard tools →
+>    `UNOBSERVED_FOCUS`; a nameless submit button is `FORM_SUBMIT_UNKNOWN`).
+>    The executor's refusal (`ExecError::Policy { reason, label }`) names the
+>    label its fresh look checked. Space in a field and other keys press
+>    nothing. One rule for the agent, the executor's fresh re-check and the
+>    host tools.
 > 5. **Stale ≠ spent.** `WorldChanged` / `TargetChanged` / `TargetGone` are
 >    stale → discard the prediction, re-observe, decide again (bounded by
 >    `max_consecutive_stale`). `TicketConsumed` / `TicketMismatch` / gate
@@ -195,8 +211,8 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 | `ultra-instinct-guard` | Hard `gate`, `ActionTicket` issue / `revalidate`, `TicketLedger`, `consume_ticket_once` / `consume_ticket_once_checked`, front layer + `WorldSnapshot`; the user's `Policy` (`HostPattern` allowed domains, `LabelGlob` confirm-before-press); exact-label `guard()` for MCP / CLI preflight |
 | `ultra-instinct-agent` | `Agent` state machine, `execute_ticketed` / `execute_ticketed_with` (policy), `AgentBuilder::guard_policy`, `AgentBuilder::deadline` (checked between steps), `BrowserRuntime`, `BeforeDispatch` (forwards every `BrowserRuntime` method and runs a hook just before `dispatch`; handed only to `execute_ticketed_with`), verification mapping, `MockBrowser` |
 | `ultra-instinct-protocol` | Guard / ticket / verify wire types |
-| `ultra-instinct-browser-tools` | The `browser_*` host surface as MCP tool families (`call` / `spec`, the tool-name lists, `ToolError` with a stable `code` on every variant) over a `BrowserHost` trait (sessions, tab binding, ledgers, events, snapshot record and lookup, `require_snapshot`, `Policy`, the tab `backend`, `ToolLimits`, `Downloads`, the tools' own `ToolState`): snapshot-bound index refs (`bound.rs`), secret masking (`secrets.rs`: `sensitive`, typed secrets scrubbed from every output), browser-use names, `browser_wait` conditions, `browser_extra` (dialog, forward / reload, check, focus, keyboard, get / is / count, annotate, `max_chars`), `browser_state` (state save / load, cookies, storage), `browser_env` (set, download, network) |
-| `ultra-instinct-mcp` | Optional JSON-RPC adapter (observe / guard / verify), `TOOLS`, and the `Server` that keeps sessions and the snapshot ring and serves the `browser_*` tools through a crate-private `BrowserHost` adapter (`Server` itself does not implement it); host options (`with_pipe` / `with_backend`, `require_snapshot`, `set_policy`, `with_limits`, `with_downloads`, `with_tool_allowlist`); `run_goal` / `run_goal_on` / `Server::run_goal` (the agent loop with InstinctPolicy and the deterministic resolver, no model); re-exports `ToolError`, `Policy` and the tool-name lists ([`docs/embedding.md`](docs/embedding.md)) |
+| `ultra-instinct-browser-tools` | The `browser_*` host surface as MCP tool families (`call` / `spec`, the tool-name lists, `ToolError` with a stable `code` on every variant) over a `BrowserHost` trait (sessions, tab binding, ledgers, events, snapshot record and lookup, `require_snapshot`, `Policy`, the tab `backend`, `ToolLimits`, `Downloads`, `Uploads`, the tools' own `ToolState`): snapshot-bound index refs (`bound.rs`), secret masking (`secrets.rs`: `sensitive`, typed secrets scrubbed from every output), browser-use names, `browser_wait` conditions, `browser_extra` (dialog, forward / reload, check, focus, keyboard, get / is / count, annotate, `max_chars`), `browser_state` (state save / load, cookies, storage), `browser_env` (set, download, network) |
+| `ultra-instinct-mcp` | Optional JSON-RPC adapter (observe / guard / verify), `TOOLS`, and the `Server` that keeps sessions and the snapshot ring and serves the `browser_*` tools through a crate-private `BrowserHost` adapter (`Server` itself does not implement it); host options (`with_pipe` / `with_backend`, `require_snapshot`, `set_policy`, `with_limits`, `with_downloads`, `with_uploads`, `with_tool_allowlist`); `run_goal` / `run_goal_on` / `Server::run_goal` (the agent loop with InstinctPolicy and the deterministic resolver, no model); re-exports `ToolError`, `Policy` and the tool-name lists ([`docs/embedding.md`](docs/embedding.md)) |
 | `ultra-instinct-remote` | Remote decision transports and the HTTP text model, the only crate with a model SDK / HTTP client: `typesafe` (feature `jev`), `clef` (feature `clef`), `http_text` (feature `model-text`); re-exported by `ultra-instinct` |
 | `ultra-instinct` | `ultra-instinct run` (agent loop, `--policy instinct|jev|clef|clef-flash`, `--diary <dir>`); `replay --diary` (offline arena: agree / would-abstain / regress per recorded decision); `observe` / `guard` / `verify` preflight commands; `mcp` (stdio); the shell verbs over the session daemon (`verbs.rs`, `daemon.rs`), `batch`, `session`, `skills`, `doctor`, `install`; `run --launch/--load-state/--save-state/--allow-domain/--confirm-press/--confirm`; `TypesafeTransport` (feature `jev`: JEV-primary over the closed remote wire); `ClefTransport` (feature `clef`: Cloudflare Workers AI Clef / Clef-Flash over the same wire through `typesafe-sdk`'s Clef provider, one decision call, single-candidate heads answered locally) |
 | `ultra-instinct-dojo` | Battle diary schema v1 (`DiaryLine` JSONL), `DiaryWriter` / `read_diary`, site + situation keys, decision→`ActionSpace` rebuild for the replay arena; versioned `LessonStore` (words / places / moves / trust, keyed per situation, carrying proving diary ids); lessons only adjust evidence inside the finite `ActionSpace` |
@@ -218,7 +234,9 @@ deliberate eval.
 - User policy (allowed domains, confirm-before-press): guard
   `tests/policy_props.rs`; the `executor.rs` policy tests; the
   `tests/mock_loop.rs` policy tests (`needs_confirm_ends_blocked_without_pressing`,
-  `domain_off_the_allowlist_ends_blocked`).
+  `domain_off_the_allowlist_ends_blocked`,
+  `enter_in_a_field_whose_form_submits_with_a_confirm_label_blocks_unpressed`);
+  the guard's `activating_keys_are_presses_of_the_target_or_its_form`.
 - Shell verbs and the session daemon: `verbs.rs` / `batch.rs` unit tests and
   the `daemon.rs` socket tests (round trip, spawn / stale socket, idle exit,
   `--idle`, failed launch, session list). `browser_*` families over CDP
@@ -332,7 +350,8 @@ press runs; `browser_hover`, `browser_drag` (index→index), `browser_zoom`,
 
 `browser_get_state` defaults to text: a title / url line, then one line per
 control, `@eN role "label"  state`; `format:"json"` returns `elements[]`
-(with `input_type` and `sensitive`). Both formats record the observation and
+(with `input_type` and `sensitive`; `values:true` adds `value` / `checked` /
+`expanded`, never on a sensitive element). Both formats record the observation and
 return its `snapshot` id. Index arguments take `5`, `"5"` or `"@e5"`; an
 index press given `snapshot` resolves the index in that snapshot and mints
 its ticket there, so an element that moved, changed, or left refuses
@@ -356,7 +375,14 @@ Policy: `ULTRA_INSTINCT_ALLOW_DOMAINS` / `ULTRA_INSTINCT_CONFIRM_PRESS`
 names the label the user confirmed, for that call only (`Server::set_policy`
 replaces the policy between calls). Ticketed inputs return `ticket`;
 `verify:true` adds `verification`. `browser_send_key` with `index` is a
-ticketed KEY.
+ticketed KEY. Input with no target (`browser_keyboard`, `browser_send_key`
+/ `browser_hold_key` without `index`) checks the page host on an
+observation taken now, before any `Input.*` call, the way presses do;
+the focused region then goes through the guard's press rule (Enter /
+Space on a button-like control, Enter in a field whose form submits with
+a confirm label, needs `confirm`), as a ticketed KEY does. `browser_file_upload` paths
+must be absolute; `Server::with_uploads(Anywhere | Off | Dir)` limits
+which files (`Dir`: canonical path inside the canonical folder).
 
 `browser_extra` ports (from agent-browser): `browser_dialog`,
 `browser_go_forward`, `browser_reload`, `browser_check`, `browser_focus`,

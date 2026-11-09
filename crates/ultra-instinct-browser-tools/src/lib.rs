@@ -27,7 +27,7 @@ pub use browser_extra::EXTRA_TOOLS;
 pub use browser_state::STATE_TOOLS;
 pub use browser_tools::BROWSER_TOOLS;
 pub use error::ToolError;
-pub use host::{BrowserHost, Downloads, LiveSession, ToolLimits, ToolState, RUNS_INSIDE};
+pub use host::{BrowserHost, Downloads, LiveSession, ToolLimits, ToolState, Uploads, RUNS_INSIDE};
 pub use secrets::{sensitive, MASK, MAX_SENSITIVE_SECRETS};
 pub use ultra_instinct_cdp::{CdpConnector, HttpBackend, PageTab, TargetBackend};
 

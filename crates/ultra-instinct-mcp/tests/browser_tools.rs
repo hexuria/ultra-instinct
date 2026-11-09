@@ -109,6 +109,39 @@ fn get_state_indexes_elements_in_reading_order() {
     assert_eq!(elements[2]["label"], "Country");
 }
 
+/// Reading order groups controls by 20 px rows, then x: a control 2 px
+/// lower on the same row still comes before the next row, whatever order
+/// the page lists them in, and the same page indexes the same way twice.
+#[test]
+fn get_state_reading_order_is_by_row_then_x_and_stable() {
+    let page = PageSpec::of(
+        &[
+            Control::button(10, 100, "b2", (10.0, 40.0, 50.0, 10.0)),
+            Control::button(11, 101, "a1", (10.0, 10.0, 50.0, 10.0)),
+            Control::button(12, 102, "a2", (200.0, 12.0, 50.0, 10.0)),
+        ],
+        "http://127.0.0.1/rows",
+        "Rows",
+    );
+    let (mut server, _log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&page)
+            .observe_compact(&page),
+    );
+    let labels = |out: Value| -> Vec<String> {
+        out["elements"]
+            .as_array()
+            .expect("elements")
+            .iter()
+            .map(|e| e["label"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let args = json!({"cdp": CDP, "format": "json"});
+    let first = labels(call(&mut server, "browser_get_state", args.clone()));
+    assert_eq!(first, ["a1", "a2", "b2"]);
+    assert_eq!(labels(call(&mut server, "browser_get_state", args)), first);
+}
+
 /// The default state is one line per control, in the same order and with
 /// the same 1-based refs the index-taking tools accept.
 #[test]
@@ -125,6 +158,93 @@ fn get_state_text_is_one_line_per_control() {
     assert!(lines[3].contains("selected=\"Canada\""), "{text}");
     assert!(lines[4].starts_with("3 controls · snapshot "), "{text}");
     assert_eq!(lines.len(), 5, "{text}");
+}
+
+/// Each control's line carries its state: a value, `checked`, collapsed and
+/// the selected option; a password prints no value (even one the page
+/// reported), quotes are escaped, and a long label is cut.
+#[test]
+fn get_state_text_carries_control_state_and_never_a_password() {
+    let checkbox = Control {
+        tag: "INPUT",
+        role: "checkbox",
+        ..Control::button(12, 102, "Send me news", (20.0, 80.0, 20.0, 20.0))
+    };
+    let long = "x".repeat(150);
+    let mut page = PageSpec::of(
+        &[
+            Control::text_field(10, 100, "Email", (20.0, 20.0, 300.0, 28.0)),
+            Control::text_field(11, 101, "Password", (20.0, 50.0, 300.0, 28.0)),
+            checkbox,
+            Control::button(13, 103, "Sign \"up\"", (20.0, 110.0, 120.0, 28.0)),
+            Control::combobox(14, 104, &long, (20.0, 140.0, 200.0, 28.0)),
+        ],
+        "https://shop.example/join",
+        "Sign up",
+    );
+    let states = [
+        json!({"v": "", "it": "email"}),
+        json!({"v": "hunter2", "it": "password"}),
+        json!({"c": true, "it": "checkbox"}),
+        json!({}),
+        json!({"sel": "Canada", "x": false}),
+    ];
+    for (node, state) in page.dom.iter_mut().zip(states) {
+        *node = node.clone().with_compact_state(state);
+    }
+    page.dom[2] = page.dom[2].clone().with_attr("type", "checkbox");
+    let (mut server, _log) = server(ScriptBuilder::new().observe_compact(&page));
+    let out = call(&mut server, "browser_get_state", json!({"cdp": CDP}));
+    let text = out["text"].as_str().expect("text");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        lines[..5],
+        [
+            "Sign up  https://shop.example/join",
+            "@e1 textbox \"Email\"  value=\"\"",
+            "@e2 textbox \"Password\"",
+            "@e3 checkbox \"Send me news\"  checked",
+            "@e4 button \"Sign \\\"up\\\"\"",
+        ],
+        "{text}"
+    );
+    assert!(lines[5].starts_with("@e5 combobox \"xxxx"), "{text}");
+    assert!(lines[5].contains("…\""), "{text}");
+    assert!(
+        lines[5].ends_with("  collapsed  selected=\"Canada\""),
+        "{text}"
+    );
+    assert!(lines[6].starts_with("5 controls · snapshot "), "{text}");
+    assert!(!text.contains("hunter2"), "{text}");
+}
+
+/// `values: true`: a select's value is its selected option, and a value
+/// past the state / text limit is cut and marked.
+#[test]
+fn get_state_values_carry_select_checked_and_cut_values() {
+    let mut page = page();
+    page.dom[0] = page.dom[0]
+        .clone()
+        .with_compact_state(json!({"it": "email", "v": "kid@example.com"}));
+    page.dom[2] = page.dom[2].clone().with_compact_state(
+        json!({"it": "select-one", "o": ["Canada", "France"], "sel": "Canada"}),
+    );
+    let (server_, _log) = server(ScriptBuilder::new().observe_compact(&page));
+    let mut server = server_.with_limits(ultra_instinct_mcp::ToolLimits {
+        max_text_chars: 3,
+        ..Default::default()
+    });
+    let out = call(
+        &mut server,
+        "browser_get_state",
+        json!({"cdp": CDP, "format": "json", "values": true}),
+    );
+    let elements = &out["elements"];
+    assert_eq!(elements[0]["value"], "kid… [truncated 12 chars]", "{out}");
+    assert_eq!(elements[0]["value_truncated"], true);
+    assert!(elements[1].get("value").is_none(), "{out}");
+    assert_eq!(elements[2]["value"], "Can… [truncated 3 chars]", "{out}");
+    assert_eq!(elements[0]["label"], "Email");
 }
 
 #[test]

@@ -99,8 +99,10 @@ aui run --goal "buy the blue mug" --cdp --url https://shop.example/ \
 ```
 
 - `--allow-domain <host>` (repeatable): `shop.example` is that host only,
-  `*.shop.example` is any subdomain of it. Every other host gets no input
-  (`domain-not-allowed`), and `--url` itself must match.
+  `*.shop.example` is any subdomain of it. Input only starts on an allowed
+  host (`domain-not-allowed`), and `--url` itself must match. A form that
+  would be sent to another host is refused too; a link to one is checked
+  at the next step there.
 - `--confirm-press <glob>` (repeatable, `*` wildcard, case-insensitive): a
   click on a matching label ends the run `blocked` with
   `rerun with --confirm "<label>"`. Ask the user. Only when they say yes,
@@ -163,7 +165,7 @@ Verbs:
 | `forward`, `reload [--ignore-cache]` | history forward, reload |
 | `check <ref>`, `uncheck <ref>` | set a checkbox; `--mouse` presses a real pointer |
 | `focus <ref>` | focus a control (ticketed) |
-| `keyboard type\|insert <text>` | keys into whatever has focus (`insert` sends the text in one go) |
+| `keyboard type\|insert <text> [--confirm <label>]` | keys into whatever has focus (`insert` sends the text in one go); refused off `--allow-domain`; an Enter / space on a focused button matching `--confirm-press` needs `--confirm` like a click |
 | `get value\|label\|role\|box <ref>`, `get attr <ref> <name>` | read one fact; never a password value |
 | `is visible\|enabled\|checked\|editable <ref>` | prints `true` or `false` |
 | `count [--label L] [--role R]` | how many controls match, and their refs |

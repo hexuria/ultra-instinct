@@ -32,7 +32,7 @@ use crate::args::{browser_err, opt_bool, opt_str, opt_usize, req_str};
 use crate::bound::{self, at_index};
 use crate::error::ToolError;
 use crate::host::{endpoint_of, keep, session_key, BrowserHost};
-use crate::press::{consume_error, exec_error, press_policy, refusal_for, refused};
+use crate::press::{consume_error, exec_error, press_policy, refused};
 use ultra_instinct_cdp::PageTab;
 
 /// All `browser_*` tool names this module serves.
@@ -443,6 +443,28 @@ fn element_json(index: usize, region: &InteractionRegion) -> Value {
     element
 }
 
+/// `values: true`: the state observe already read, never for a sensitive
+/// field: `value` (a select's selected option), `checked`, `expanded`. A
+/// value past `max` chars is cut with the marker and `value_truncated`.
+fn add_values(element: &mut Value, region: &InteractionRegion, max: usize) {
+    let state = region.state();
+    if crate::secrets::sensitive(region) {
+        return;
+    }
+    if let Some(value) = state.value.as_deref().or(state.selected.as_deref()) {
+        let cut = crate::browser_extra::truncate_output(value, max);
+        if cut.len() != value.len() {
+            element["value_truncated"] = json!(true);
+        }
+        element["value"] = json!(cut);
+    }
+    for (key, on) in [("checked", state.checked), ("expanded", state.expanded)] {
+        if let Some(on) = on {
+            element[key] = json!(on);
+        }
+    }
+}
+
 fn get_state(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let text = match opt_str(arguments, "format")?.unwrap_or("text") {
@@ -454,6 +476,7 @@ fn get_state(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, T
             )))
         }
     };
+    let values = opt_bool(arguments, "values")? == Some(true);
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
     let observed = (|| {
@@ -502,7 +525,15 @@ fn get_state(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, T
     let elements: Vec<Value> = order
         .iter()
         .enumerate()
-        .filter_map(|(i, id)| manifold.get(id).map(|r| element_json(i + 1, r)))
+        .filter_map(|(i, id)| {
+            let region = manifold.get(id)?;
+            let mut element = element_json(i + 1, region);
+            if values {
+                let max = limits.max_state_chars.min(limits.max_text_chars);
+                add_values(&mut element, region, max);
+            }
+            Some(element)
+        })
         .collect();
     let mut out = json!({
         "url": page.as_ref().and_then(|p| p.url().map(str::to_owned)),
@@ -724,11 +755,12 @@ fn gated_input(
         }
         // The user's policy after the gate, before the ticket is used; the
         // executor checks it again on its fresh observation.
-        let label = ticket.target_label.clone();
+        // A refusal names the press (the target, or the button its form
+        // submits with) and what a domain refusal checked.
         if let Some(region) = fresh.get(&region_id).or_else(|| manifold.get(&region_id)) {
             policy
-                .check(url.as_deref(), region, action)
-                .map_err(|reason| refusal_for(reason, &label, url.as_deref()))?;
+                .check_detail(url.as_deref(), region, action, ticket.key.as_deref())
+                .map_err(crate::press::refusal_error)?;
         }
         let mut ledger = server.take_ledger(&key);
         // The executor's own observation decides again whether the text is
@@ -749,10 +781,7 @@ fn gated_input(
         if let Some(full) = refused {
             return Err(full);
         }
-        let done = executed.map_err(|err| {
-            let fresh_url = session.page().and_then(|p| p.url().map(str::to_owned));
-            exec_error(err, &label, fresh_url.as_deref())
-        })?;
+        let done = executed.map_err(exec_error)?;
         let mut body = json!({
             "acted": input_kind,
             "index": index,
@@ -858,7 +887,7 @@ fn gated_press_at(
         server.keep_ledger(&key, ledger);
         result
             .map(|_| json!({"acted": true, "index": index, "ticket": ticket.ticket_id}))
-            .map_err(|err| consume_error(err, &ticket.target_label, url.as_deref()))
+            .map_err(consume_error)
     })();
     keep(server, &key, session);
     outcome
@@ -976,7 +1005,7 @@ fn drag(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolEr
         server.keep_ledger(&key, ledger);
         result
             .map(|_| json!({"dragged": {"from": from, "to": to}}))
-            .map_err(|err| consume_error(err, &ticket.target_label, url.as_deref()))
+            .map_err(consume_error)
     })();
     keep(server, &key, session);
     outcome
@@ -994,6 +1023,11 @@ fn send_key(
     let endpoint = endpoint_of(arguments)?;
     let key_name = req_str(arguments, "key")?.to_owned();
     let key = session_key(server, &endpoint);
+    let policy = press_policy(server, arguments)?;
+    if !policy.is_empty() {
+        let now = crate::press::focus_now(server, &key, true)?;
+        crate::press::check_focused(&policy, &now, Some(&key_name))?;
+    }
     let mut session = take(server, &key)?;
     let outcome = session
         .key_event(&key_name, hold_ms)
@@ -1038,6 +1072,7 @@ fn file_upload(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value,
             "missing required `path` or `paths`".into(),
         ));
     }
+    let files = crate::host::upload_paths(&server.uploads(), &files)?;
     gated_press_at(server, arguments, move |session, target| {
         session.set_files(target, &files)
     })
@@ -1524,7 +1559,7 @@ fn index_prop() -> Value {
 }
 
 /// Schema of the `confirm` argument of a press.
-fn confirm_prop() -> Value {
+pub(crate) fn confirm_prop() -> Value {
     json!({"type": "string", "description": "The label of a press the user confirmed; lifts a needs-confirm refusal (ULTRA_INSTINCT_CONFIRM_PRESS) for that label only."})
 }
 
@@ -1569,6 +1604,10 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             props.insert(
                 "format".into(),
                 json!({"type": "string", "enum": ["text", "json"], "description": "text (default): one line per control, `@eN role \"label\"  state`; json: the elements[] body"}),
+            );
+            props.insert(
+                "values".into(),
+                json!({"type": "boolean", "description": "json only: each element also carries the state observe read (`value`, a select's selected option as `value`, `checked`, `expanded`); never for a `sensitive` element; masked like every output; a value cut at the state / text limit has `value_truncated`. Default false."}),
             );
             "Page title, url, and interactive elements as 1-based indexes in reading order (@e1, @e2, …) — the refs browser_click/browser_type take. Default format text: one short line per control with its value / checked / expanded / selected state; format json returns elements[]."
         }
@@ -1664,15 +1703,17 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             props.insert("key".into(), json!({"type": "string"}));
             props.insert("index".into(), index_prop());
             props.insert("verify".into(), verify_prop());
+            props.insert("confirm".into(), confirm_prop());
             required.push("key");
-            "One key event (Enter, Tab, Escape, arrows, letters...) via Input.dispatchKeyEvent. With index: a ticketed KEY on that element (it must take keys; key is one of ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Home, End, PageUp, PageDown, Enter, Escape)."
+            "One key event (Enter, Tab, Escape, arrows, letters...) via Input.dispatchKeyEvent. With index: a ticketed KEY on that element (it must take keys; key is one of ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Home, End, PageUp, PageDown, Enter, Escape). Without index the key goes to the focus: on a page off the domain allow-list it refuses (and a form it would submit off the list; a link it follows is checked on the next call), and Enter / Space on a focused control whose label needs a confirm needs `confirm`."
         }
         "browser_hold_key" => {
             props.insert("key".into(), json!({"type": "string"}));
             props.insert("seconds".into(), json!({"type": "number"}));
             props.insert("hold_ms".into(), json!({"type": "integer"}));
+            props.insert("confirm".into(), confirm_prop());
             required.push("key");
-            "Hold a key for a duration (seconds or hold_ms, capped 10s)."
+            "Hold a key for a duration (seconds or hold_ms, capped 10s). On a page off the domain allow-list it refuses (and a form it would submit off the list; a link it follows is checked on the next call); Enter / Space on a focused control whose label needs a confirm needs `confirm`."
         }
         "browser_file_upload" => {
             props.insert("index".into(), index_prop());
@@ -1680,7 +1721,7 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             props.insert("paths".into(), json!({"type": "array", "items": {"type": "string"}}));
             props.insert("confirm".into(), confirm_prop());
             required.push("index");
-            "Set files on the file input at a browser_get_state index (DOM.setFileInputFiles; paths resolved by the Chrome process)."
+            "Set files on the file input at a browser_get_state index (DOM.setFileInputFiles). Paths must be absolute; the server may turn uploads off or keep them inside one folder."
         }
         "browser_save_as_pdf" => {
             props.insert("landscape".into(), json!({"type": "boolean"}));
@@ -1714,70 +1755,4 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
         other => return (other.to_owned(), props, required),
     };
     (description.to_owned(), props, required)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn region(id: &str, x: f64, y: f64, actions: &[Action]) -> InteractionRegion {
-        use ultra_instinct_core::{Rect, RegionFlags, RegionParts, Role, SourceMask};
-        InteractionRegion::try_new(RegionParts {
-            id: RegionId::try_new(id).unwrap(),
-            role: Role::Button,
-            label: id.to_owned(),
-            rect: Rect::try_new(x, y, 50.0, 10.0).unwrap(),
-            actions: actions.to_vec(),
-            parent: None,
-            sources: SourceMask::DOM.union(SourceMask::ACCESSIBILITY),
-            flags: RegionFlags::default(),
-            temporal_stability: ultra_instinct_core::UnitInterval::ONE,
-        })
-        .unwrap()
-    }
-
-    #[test]
-    fn console_entry_parses_console_and_log_events() {
-        let console = ultra_instinct_cdp::CdpEvent {
-            method: "Runtime.consoleAPICalled".to_owned(),
-            params: json!({"type": "warn", "args": [{"value": "careful"}, {"description": "obj"}]}),
-        };
-        let entry = console_entry(&console).unwrap();
-        assert_eq!(entry["level"], "warn");
-        assert!(entry["text"].as_str().unwrap().contains("careful"));
-
-        let log = ultra_instinct_cdp::CdpEvent {
-            method: "Log.entryAdded".to_owned(),
-            params: json!({"entry": {"level": "error", "text": "boom", "source": "network"}}),
-        };
-        let entry = console_entry(&log).unwrap();
-        assert_eq!(entry["level"], "error");
-        assert_eq!(entry["text"], "boom");
-
-        let other = ultra_instinct_cdp::CdpEvent {
-            method: "Network.requestWillBeSent".to_owned(),
-            params: json!({}),
-        };
-        assert!(console_entry(&other).is_none());
-    }
-
-    #[test]
-    fn index_is_reading_order_and_stable() {
-        use ultra_instinct_core::{InteractionManifold, Rect};
-        let manifold = InteractionManifold::try_new(
-            Rect::try_new(0.0, 0.0, 800.0, 600.0).unwrap(),
-            vec![
-                region("b2", 10.0, 40.0, &[Action::Click]),
-                region("a1", 10.0, 10.0, &[Action::Click]),
-                region("a2", 200.0, 12.0, &[Action::Click]),
-            ],
-            0,
-        )
-        .unwrap();
-        let order = interactive_index(&manifold);
-        let names: Vec<&str> = order.iter().map(RegionId::as_str).collect();
-        assert_eq!(names, ["a1", "a2", "b2"]);
-        // Deterministic: same manifold → same order.
-        assert_eq!(interactive_index(&manifold), order);
-    }
 }

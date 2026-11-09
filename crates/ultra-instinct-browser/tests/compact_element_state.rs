@@ -1,7 +1,7 @@
 use serde_json::json;
 use ultra_instinct_browser::script::{DomSpec, PageSpec, ScriptBuilder};
 use ultra_instinct_browser::{BrowserSession, ReplayTransport};
-use ultra_instinct_core::ElementState;
+use ultra_instinct_core::{ElementState, FormSubmit};
 
 #[test]
 fn compact_observe_attaches_input_and_select_state_to_regions() {
@@ -30,6 +30,7 @@ fn compact_observe_attaches_input_and_select_state_to_regions() {
         manifold.get_str("n100").unwrap().state(),
         &ElementState {
             value: Some("Ana".to_owned()),
+            form: Some(FormSubmit::NotInForm),
             ..ElementState::default()
         }
     );
@@ -38,6 +39,7 @@ fn compact_observe_attaches_input_and_select_state_to_regions() {
         &ElementState {
             selected: Some("UTC".to_owned()),
             options: vec!["UTC".to_owned(), "Asia/Manila".to_owned()],
+            form: Some(FormSubmit::NotInForm),
             ..ElementState::default()
         }
     );

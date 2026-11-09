@@ -4,25 +4,35 @@
 //! A [`Policy`] is a hard refusal next to the gate, never a score. An empty
 //! policy allows everything (the behaviour without one).
 //!
-//! - **Domains** ([`Policy::allow_domains`]): when the list is non-empty, a
-//!   page whose URL host matches no [`HostPattern`] gets no input
-//!   ([`GuardReason::DomainNotAllowed`]). A URL with no host (`about:blank`,
+//! - **Domains** ([`Policy::allow_domains`]): when the list is non-empty,
+//!   input begins only on a page whose URL host matches a [`HostPattern`]
+//!   (else [`GuardReason::DomainNotAllowed`]), and a press that submits a
+//!   form (a submit button, or Enter in its field / box) is refused when
+//!   the form is sent off the list (or to `javascript:`, or the target could
+//!   not be read). Other navigation the input causes (a link) is checked at
+//!   the next input there. A URL with no host (`about:blank`,
 //!   `file:///…`, fixtures) is allowed. An *unknown* URL (the observation
 //!   could not read one) is refused while the list is non-empty.
-//! - **Confirm** ([`Policy::confirm_press`]): a CLICK-family press (click,
-//!   toggle, surface point) on a target whose label matches a [`LabelGlob`]
-//!   is refused ([`GuardReason::NeedsConfirm`]) unless that label is in
-//!   [`Policy::confirmed`].
+//! - **Confirm** ([`Policy::confirm_press`]): a press whose label matches a
+//!   [`LabelGlob`] is refused ([`GuardReason::NeedsConfirm`]) unless that
+//!   label is in [`Policy::confirmed`]. A press is a CLICK-family input
+//!   (click, toggle, surface point) on the target, an Enter / Space KEY on
+//!   a button-like target, or an Enter KEY in a form control, which presses
+//!   its form's submit button ([`Policy::press_label`]).
 //!
 //! Neither refusal is stale: observing again does not change the answer, so
 //! a host never retries it with the same lease.
 
 use std::fmt;
 
-use ultra_instinct_core::{Action, InteractionManifold, InteractionRegion, RegionId};
+use ultra_instinct_core::{
+    Action, FormSubmit, InteractionManifold, InteractionRegion, RegionId, Role,
+};
 use ultra_instinct_protocol::{ActionTicket, GuardReason, TicketInvalid};
 
 use crate::ticket::{revalidate, ConsumeError, TicketLedger};
+#[cfg(doc)]
+use ultra_instinct_core::ElementState;
 
 /// A bad allow-domain or confirm-press entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -129,7 +139,7 @@ impl fmt::Display for LabelGlob {
 pub struct Policy {
     /// Hosts the agent may give input to. Empty: any host.
     pub allow_domains: Vec<HostPattern>,
-    /// Label patterns whose CLICK-family press needs a confirm.
+    /// Label patterns whose press needs a confirm ([`Policy::press_label`]).
     pub confirm_press: Vec<LabelGlob>,
     /// Labels the user confirmed (case-insensitive, whitespace-folded).
     pub confirmed: Vec<String>,
@@ -183,35 +193,213 @@ impl Policy {
     }
 
     /// May `region` on the page at `url` receive `action`? `url` is `None`
-    /// when the observation could not read it.
+    /// when the observation could not read it; `key` is a KEY's key (`None`
+    /// for other actions; a KEY without one is taken as Enter). The reason
+    /// alone of [`Self::check_detail`].
     pub fn check(
         &self,
         url: Option<&str>,
         region: &InteractionRegion,
         action: Action,
+        key: Option<&str>,
     ) -> Result<(), GuardReason> {
+        self.check_detail(url, region, action, key)
+            .map_err(|refusal| refusal.reason)
+    }
+
+    /// [`Self::check`] with what refused: the page's host (input begins
+    /// only on an allowed host), then, for a press that submits a form, the
+    /// host the form is sent to (an off-list, `javascript:` or unread target
+    /// refuses while the allow-list is set), then the confirm patterns
+    /// against [`Self::press_label`]. Other navigation the input causes is
+    /// checked at the next input.
+    pub fn check_detail(
+        &self,
+        url: Option<&str>,
+        region: &InteractionRegion,
+        action: Action,
+        key: Option<&str>,
+    ) -> Result<(), Refusal> {
+        let press = self.press(region, action, key);
+        let label = press.as_ref().map_or(region.label(), |p| p.0);
+        let refuse = |reason, url: Option<&str>| Refusal {
+            reason,
+            label: label.to_owned(),
+            url: url.map(str::to_owned),
+        };
+        let on_list = |url: &str| self.check_url(url).is_ok();
         match url {
-            Some(url) => self.check_url(url)?,
-            None if !self.allow_domains.is_empty() => return Err(GuardReason::DomainNotAllowed),
-            None => {}
+            Some(url) if !on_list(url) => {
+                return Err(refuse(GuardReason::DomainNotAllowed, Some(url)))
+            }
+            None if !self.allow_domains.is_empty() => {
+                return Err(refuse(GuardReason::DomainNotAllowed, None))
+            }
+            _ => {}
         }
-        if is_press(action) && self.needs_confirm(region.label()) {
-            return Err(GuardReason::NeedsConfirm);
+        let Some((label, submit)) = press else {
+            return Ok(());
+        };
+        if let Some(target) = submit.filter(|_| !self.allow_domains.is_empty()) {
+            let script = |t: &str| {
+                t.trim_start()
+                    .to_ascii_lowercase()
+                    .starts_with("javascript:")
+            };
+            match target.filter(|t| !t.is_empty()) {
+                Some(t) if !script(t) && on_list(t) => {}
+                t => return Err(refuse(GuardReason::DomainNotAllowed, t)),
+            }
+        }
+        if self.needs_confirm(label) {
+            return Err(refuse(GuardReason::NeedsConfirm, None));
         }
         Ok(())
     }
 
+    /// The label a confirm is checked against when `region` gets `action`
+    /// (`key` for a KEY), `None` when it presses nothing:
+    ///
+    /// - the CLICK family (click, toggle, surface point): the target's label;
+    /// - an activating KEY (Enter / Space / NumpadEnter, any modifiers) on a
+    ///   button-like target (it clicks, toggles or takes points, and takes
+    ///   no text or select): the target's label, except Enter on a checkbox
+    ///   / radio, which submits its form (below; the box's own label when it
+    ///   is in no form);
+    /// - Enter / NumpadEnter in any other form control: the label of the
+    ///   button its form's implicit submission presses (observe evidence,
+    ///   [`FormSubmit`]); none when it is in no form or its form does not
+    ///   submit on Enter; [`FORM_SUBMIT_UNKNOWN`] when the submit button has
+    ///   no name, the form submits with no button, or observe could not read
+    ///   it (then any confirm pattern refuses).
+    ///
+    /// Space in a field is text; other keys press nothing.
+    pub fn press_label<'a>(
+        &self,
+        region: &'a InteractionRegion,
+        action: Action,
+        key: Option<&str>,
+    ) -> Option<&'a str> {
+        self.press(region, action, key).map(|(label, _)| label)
+    }
+
+    /// [`Self::press_label`] and, when the press submits a form, where to:
+    /// `Some(target)` (`None` / `""`: not read). A submit button submits
+    /// when clicked or pressed by key ([`ElementState::submit_action`]);
+    /// Enter in a form control submits its form ([`FormSubmit`]).
+    fn press<'a>(
+        &self,
+        region: &'a InteractionRegion,
+        action: Action,
+        key: Option<&str>,
+    ) -> Option<(&'a str, Option<Option<&'a str>>)> {
+        let state = region.state();
+        let own = || (region.label(), state.submit_action.as_deref().map(Some));
+        if is_press(action) {
+            return Some(own());
+        }
+        if action != Action::Key {
+            return None;
+        }
+        let key = key.unwrap_or("Enter");
+        if !is_activating_key(key) {
+            return None;
+        }
+        let acts = region.actions();
+        let takes_text = acts
+            .iter()
+            .any(|a| matches!(a, Action::Type | Action::Select));
+        let button_like = !takes_text && acts.iter().any(|a| is_press(*a));
+        // Enter on a box submits its form; only a button or link presses itself.
+        let toggle = region.role() == Role::Checkbox || acts.contains(&Action::Toggle);
+        if button_like && !(toggle && is_enter_key(key)) {
+            return Some(own());
+        }
+        if !is_enter_key(key) {
+            return None;
+        }
+        match &state.form {
+            Some(FormSubmit::Button { label, action }) => {
+                let label = if label.trim().is_empty() {
+                    FORM_SUBMIT_UNKNOWN
+                } else {
+                    label
+                };
+                Some((label, Some(action.as_deref())))
+            }
+            Some(FormSubmit::Implicit { action }) => {
+                Some((FORM_SUBMIT_UNKNOWN, Some(action.as_deref())))
+            }
+            Some(FormSubmit::NotInForm | FormSubmit::NoSubmitButton) => {
+                button_like.then(|| (region.label(), None))
+            }
+            // Evidence observe could not read: an unknown submission.
+            None => Some((FORM_SUBMIT_UNKNOWN, Some(None))),
+        }
+    }
+
     /// The first confirm pattern `label` matches, unless it was confirmed.
     pub fn confirm_pattern(&self, label: &str) -> Option<&LabelGlob> {
-        let folded = fold(label);
-        if self.confirmed.iter().any(|c| fold(c) == folded) {
+        if self.is_confirmed(label) {
             return None;
         }
         self.confirm_press.iter().find(|g| g.matches(label))
     }
 
-    fn needs_confirm(&self, label: &str) -> bool {
+    fn is_confirmed(&self, label: &str) -> bool {
+        let folded = fold(label);
+        self.confirmed.iter().any(|c| fold(c) == folded)
+    }
+
+    /// `label` needs a confirm: it matches a pattern, or it is
+    /// [`FORM_SUBMIT_UNKNOWN`] / [`UNOBSERVED_FOCUS`] while any pattern is
+    /// set; and it was not confirmed.
+    pub fn needs_confirm(&self, label: &str) -> bool {
+        if label == FORM_SUBMIT_UNKNOWN || label == UNOBSERVED_FOCUS {
+            return !self.confirm_press.is_empty() && !self.is_confirmed(label);
+        }
         self.confirm_pattern(label).is_some()
+    }
+}
+
+/// A policy refusal with what refused: `label` names the press a confirm
+/// must name (the target, or the button its form submits with); `url` is
+/// what a domain refusal checked (the page, or where the form is sent;
+/// `None` when it could not be read).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refusal {
+    pub reason: GuardReason,
+    pub label: String,
+    pub url: Option<String>,
+}
+
+/// The label of a form submission whose button is not known: Enter in a
+/// field whose form submits with no submit button, or whose form evidence
+/// observe could not read. With any confirm pattern set it needs a confirm
+/// of exactly this label.
+pub const FORM_SUBMIT_UNKNOWN: &str = "(form submit)";
+
+/// The label of an activating key sent to a focus no observation names (a
+/// cross-origin frame, say): with any confirm pattern set it needs a
+/// confirm of exactly this label.
+pub const UNOBSERVED_FOCUS: &str = "(unobserved focus)";
+
+/// The key, with any modifiers (`Control+Enter`), presses what it lands
+/// on: Enter, NumpadEnter or Space.
+pub fn is_activating_key(key: &str) -> bool {
+    is_enter_key(key) || matches!(base_key(key), " " | "Space" | "Spacebar")
+}
+
+/// Enter or NumpadEnter, with any modifiers: it submits a field's form.
+fn is_enter_key(key: &str) -> bool {
+    matches!(base_key(key), "Enter" | "Return" | "NumpadEnter")
+}
+
+/// `Control+Enter` → `Enter`; `+` keeps its `+`.
+fn base_key(key: &str) -> &str {
+    match key.rsplit_once('+') {
+        Some((_, base)) if !base.is_empty() => base,
+        _ => key,
     }
 }
 
@@ -263,7 +451,7 @@ pub fn consume_ticket_once_checked<E>(
         .get(&ticket.target_id)
         .ok_or(ConsumeError::Invalid(TicketInvalid::TargetGone))?;
     policy
-        .check(url, region, ticket.action)
+        .check_detail(url, region, ticket.action, ticket.key.as_deref())
         .map_err(ConsumeError::Refused)?;
     ledger
         .mark_consumed(ticket.ticket_id)
@@ -327,10 +515,10 @@ mod tests {
         let p = Policy::default();
         assert!(p.is_empty());
         assert_eq!(
-            p.check(Some("https://any.where/"), pay, Action::Click),
+            p.check(Some("https://any.where/"), pay, Action::Click, None),
             Ok(())
         );
-        assert_eq!(p.check(None, pay, Action::Click), Ok(()));
+        assert_eq!(p.check(None, pay, Action::Click, None), Ok(()));
         assert_eq!(p.check_url("https://evil.example/"), Ok(()));
     }
 
@@ -357,10 +545,13 @@ mod tests {
         let m = parse_fixture(PAGE).unwrap();
         let pay = m.get(&RegionId::try_new("pay").unwrap()).unwrap();
         assert_eq!(
-            policy("shop.example", "").check(None, pay, Action::Click),
+            policy("shop.example", "").check(None, pay, Action::Click, None),
             Err(GuardReason::DomainNotAllowed)
         );
-        assert_eq!(policy("", "Pay*").check(None, pay, Action::Type), Ok(()));
+        assert_eq!(
+            policy("", "Pay*").check(None, pay, Action::Type, None),
+            Ok(())
+        );
     }
 
     #[test]
@@ -371,26 +562,324 @@ mod tests {
         let p = policy("", "pay*");
         let url = Some("https://shop.example/");
         assert_eq!(
-            p.check(url, pay, Action::Click),
+            p.check(url, pay, Action::Click, None),
             Err(GuardReason::NeedsConfirm)
         );
         assert_eq!(
-            p.check(url, pay, Action::Toggle),
+            p.check(url, pay, Action::Toggle, None),
             Err(GuardReason::NeedsConfirm)
         );
         // Typing into a field whose label matches is not a press.
-        assert_eq!(p.check(url, note, Action::Type), Ok(()));
+        assert_eq!(p.check(url, note, Action::Type, None), Ok(()));
         assert_eq!(
             p.confirm_pattern("Pay $18").map(LabelGlob::as_str),
             Some("pay*")
         );
         let confirmed = p.clone().with_confirmed("  pay   $18 ");
-        assert_eq!(confirmed.check(url, pay, Action::Click), Ok(()));
+        assert_eq!(confirmed.check(url, pay, Action::Click, None), Ok(()));
         // Confirming one label does not confirm another match.
         assert_eq!(
-            confirmed.check(url, note, Action::Click),
+            confirmed.check(url, note, Action::Click, None),
             Err(GuardReason::NeedsConfirm)
         );
+    }
+
+    /// An activating KEY is a press: Enter / Space on a button-like target
+    /// checks its label; Enter in a form control checks the label of the
+    /// button its form submits with (observe evidence); Space in a field
+    /// and other keys press nothing.
+    #[test]
+    fn activating_keys_are_presses_of_the_target_or_its_form() {
+        use ultra_instinct_core::{ElementState, FormSubmit};
+        let m = parse_fixture(PAGE).unwrap();
+        let pay = m.get(&RegionId::try_new("pay").unwrap()).unwrap();
+        let mut pay_key = pay.to_parts();
+        pay_key.actions.push(Action::Key);
+        let pay_key = InteractionRegion::try_new(pay_key).unwrap();
+        let field = |form: Option<FormSubmit>| {
+            let mut parts = m
+                .get(&RegionId::try_new("name").unwrap())
+                .unwrap()
+                .to_parts();
+            parts.label = "Email".into();
+            parts.actions.push(Action::Key);
+            InteractionRegion::try_new(parts)
+                .unwrap()
+                .with_state(ElementState {
+                    form,
+                    ..ElementState::default()
+                })
+        };
+        let p = policy("", "pay*");
+        let url = Some("https://shop.example/");
+        let needs = Err(GuardReason::NeedsConfirm);
+        for key in [
+            "Enter",
+            " ",
+            "Space",
+            "NumpadEnter",
+            "Control+Enter",
+            "Shift+ ",
+        ] {
+            assert_eq!(
+                p.check(url, &pay_key, Action::Key, Some(key)),
+                needs,
+                "{key}"
+            );
+        }
+        assert_eq!(p.check(url, &pay_key, Action::Key, Some("Tab")), Ok(()));
+        assert_eq!(p.check(url, &pay_key, Action::Key, Some("Escape")), Ok(()));
+        let confirmed = p.clone().with_confirmed("Pay $18");
+        assert_eq!(
+            confirmed.check(url, &pay_key, Action::Key, Some("Enter")),
+            Ok(())
+        );
+
+        let in_pay_form = field(Some(FormSubmit::Button {
+            label: "Pay $18".into(),
+            action: None,
+        }));
+        assert_eq!(
+            p.check(url, &in_pay_form, Action::Key, Some("Enter")),
+            needs
+        );
+        assert_eq!(
+            p.press_label(&in_pay_form, Action::Key, Some("Enter")),
+            Some("Pay $18")
+        );
+        assert_eq!(
+            confirmed.check(url, &in_pay_form, Action::Key, Some("Enter")),
+            Ok(())
+        );
+        // Space and Tab in a field are not presses; neither is Enter in no
+        // form, in a form with no submit button, or one that submits elsewhere.
+        assert_eq!(p.check(url, &in_pay_form, Action::Key, Some(" ")), Ok(()));
+        assert_eq!(p.check(url, &in_pay_form, Action::Key, Some("Tab")), Ok(()));
+        // A form with no submit button that Enter still submits (at most
+        // one field blocks implicit submission) names no button.
+        let implicit = field(Some(FormSubmit::Implicit { action: None }));
+        assert_eq!(p.check(url, &implicit, Action::Key, Some("Enter")), needs);
+        assert_eq!(
+            p.press_label(&implicit, Action::Key, Some("Enter")),
+            Some(FORM_SUBMIT_UNKNOWN)
+        );
+        assert!(is_activating_key("Shift+ ") && is_activating_key("NumpadEnter"));
+        assert!(!is_activating_key("Tab") && !is_activating_key("+"));
+        assert!(p.needs_confirm(UNOBSERVED_FOCUS));
+        assert!(!p
+            .clone()
+            .with_confirmed(UNOBSERVED_FOCUS)
+            .needs_confirm(UNOBSERVED_FOCUS));
+        assert!(!policy("", "").needs_confirm(UNOBSERVED_FOCUS));
+        for form in [
+            FormSubmit::NotInForm,
+            FormSubmit::NoSubmitButton,
+            FormSubmit::Button {
+                label: "Search".into(),
+                action: None,
+            },
+        ] {
+            let f = field(Some(form.clone()));
+            assert_eq!(
+                p.check(url, &f, Action::Key, Some("Enter")),
+                Ok(()),
+                "{form:?}"
+            );
+        }
+        // Unread form evidence fails closed while any pattern is set, until
+        // the call confirms the placeholder label.
+        let unknown = field(None);
+        assert_eq!(p.check(url, &unknown, Action::Key, Some("Enter")), needs);
+        assert_eq!(
+            p.press_label(&unknown, Action::Key, Some("Enter")),
+            Some(FORM_SUBMIT_UNKNOWN)
+        );
+        let lifted = p.clone().with_confirmed(FORM_SUBMIT_UNKNOWN);
+        assert_eq!(
+            lifted.check(url, &unknown, Action::Key, Some("Enter")),
+            Ok(())
+        );
+        assert_eq!(
+            policy("", "").check(url, &unknown, Action::Key, Some("Enter")),
+            Ok(())
+        );
+        assert_eq!(
+            policy("", "").check(url, &unknown, Action::Key, None),
+            Ok(())
+        );
+    }
+
+    /// Enter on a checkbox (or radio) in a form submits the form, which
+    /// presses its submit button: that label is checked, not the box's.
+    /// Space only toggles the box: its own label. A submit button with no
+    /// name fails closed as an unknown submission.
+    #[test]
+    fn enter_on_a_box_submits_its_form_and_a_nameless_submit_fails_closed() {
+        use ultra_instinct_core::{ElementState, FormSubmit, Role};
+        let m = parse_fixture(PAGE).unwrap();
+        let in_form = |role: Role, label: &str, actions: &[Action], form: FormSubmit| {
+            let mut parts = m
+                .get(&RegionId::try_new("pay").unwrap())
+                .unwrap()
+                .to_parts();
+            parts.role = role;
+            parts.label = label.into();
+            parts.actions = actions.to_vec();
+            InteractionRegion::try_new(parts)
+                .unwrap()
+                .with_state(ElementState {
+                    form: Some(form),
+                    ..ElementState::default()
+                })
+        };
+        let p = policy("", "pay*, accept*");
+        let url = Some("https://shop.example/");
+        let pay = FormSubmit::Button {
+            label: "Pay $18".into(),
+            action: None,
+        };
+        let terms = in_form(
+            Role::Checkbox,
+            "Accept terms",
+            &[Action::Click, Action::Toggle],
+            pay.clone(),
+        );
+        assert_eq!(
+            p.press_label(&terms, Action::Key, Some("Enter")),
+            Some("Pay $18")
+        );
+        let confirmed = p.clone().with_confirmed("Accept terms");
+        assert_eq!(
+            confirmed.check(url, &terms, Action::Key, Some("Enter")),
+            Err(GuardReason::NeedsConfirm)
+        );
+        assert_eq!(
+            p.press_label(&terms, Action::Key, Some(" ")),
+            Some("Accept terms")
+        );
+        // A box in no form: Enter is taken as pressing the box itself.
+        let lone = in_form(
+            Role::Checkbox,
+            "Accept terms",
+            &[Action::Click, Action::Toggle],
+            FormSubmit::NotInForm,
+        );
+        assert_eq!(
+            p.press_label(&lone, Action::Key, Some("Enter")),
+            Some("Accept terms")
+        );
+        // A button presses itself, in a form or not.
+        let go = in_form(Role::Button, "Continue", &[Action::Click], pay);
+        assert_eq!(
+            p.press_label(&go, Action::Key, Some("Enter")),
+            Some("Continue")
+        );
+        // An icon-only submit button has no name: unknown, so it needs a confirm.
+        for name in ["", "   "] {
+            let field = in_form(
+                Role::TextField,
+                "Email",
+                &[Action::Click, Action::Type, Action::Key],
+                FormSubmit::Button {
+                    label: name.into(),
+                    action: None,
+                },
+            );
+            assert_eq!(
+                p.press_label(&field, Action::Key, Some("Enter")),
+                Some(FORM_SUBMIT_UNKNOWN)
+            );
+            assert_eq!(
+                p.check(url, &field, Action::Key, Some("Enter")),
+                Err(GuardReason::NeedsConfirm)
+            );
+        }
+    }
+
+    /// A press that submits a form is checked against where the form is
+    /// sent: an off-list, `javascript:` or unread target refuses
+    /// `domain-not-allowed` naming it, while the allow-list is set; the
+    /// page itself (an empty action) and on-list hosts pass.
+    #[test]
+    fn a_form_submit_to_an_off_list_host_is_refused() {
+        use std::sync::Arc;
+        use ultra_instinct_core::{ElementState, FormSubmit};
+        let m = parse_fixture(PAGE).unwrap();
+        let with = |id: &str, actions: &[Action], state: ElementState| {
+            let mut parts = m.get(&RegionId::try_new(id).unwrap()).unwrap().to_parts();
+            parts.actions = actions.to_vec();
+            InteractionRegion::try_new(parts).unwrap().with_state(state)
+        };
+        let p = policy("shop.example", "");
+        let url = Some("https://shop.example/join");
+        let field = |action: Option<&str>| {
+            with(
+                "name",
+                &[Action::Click, Action::Type, Action::Key],
+                ElementState {
+                    form: Some(FormSubmit::Button {
+                        label: "Join".into(),
+                        action: action.map(Arc::from),
+                    }),
+                    ..ElementState::default()
+                },
+            )
+        };
+        let enter =
+            |region: &InteractionRegion| p.check_detail(url, region, Action::Key, Some("Enter"));
+        let refused = |target: Option<&str>| {
+            Err(Refusal {
+                reason: GuardReason::DomainNotAllowed,
+                label: "Join".into(),
+                url: target.map(str::to_owned),
+            })
+        };
+        assert_eq!(
+            enter(&field(Some("https://evil.test/collect"))),
+            refused(Some("https://evil.test/collect"))
+        );
+        assert_eq!(
+            enter(&field(Some("javascript:send()"))),
+            refused(Some("javascript:send()"))
+        );
+        assert_eq!(enter(&field(None)), refused(None));
+        assert_eq!(enter(&field(Some("https://shop.example/join"))), Ok(()));
+        // A submit button submits when clicked; the page itself passes.
+        let submit = |target: &str| {
+            with(
+                "pay",
+                &[Action::Click],
+                ElementState {
+                    submit_action: Some(target.into()),
+                    ..ElementState::default()
+                },
+            )
+        };
+        assert_eq!(
+            p.check(url, &submit("https://evil.test/pay"), Action::Click, None),
+            Err(GuardReason::DomainNotAllowed)
+        );
+        assert_eq!(
+            p.check(url, &submit(""), Action::Click, None),
+            Err(GuardReason::DomainNotAllowed)
+        );
+        assert_eq!(
+            p.check(
+                url,
+                &submit("https://shop.example/pay"),
+                Action::Click,
+                None
+            ),
+            Ok(())
+        );
+        // With no allow-list the target is not checked; typing never submits.
+        let off = field(Some("https://evil.test/collect"));
+        assert_eq!(
+            policy("", "").check(url, &off, Action::Key, Some("Enter")),
+            Ok(())
+        );
+        assert_eq!(p.check(url, &off, Action::Type, None), Ok(()));
+        assert_eq!(p.check(url, &off, Action::Key, Some("Tab")), Ok(()));
     }
 
     #[test]
@@ -428,7 +917,11 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             err,
-            ConsumeError::Refused(GuardReason::DomainNotAllowed)
+            ConsumeError::Refused(Refusal {
+                reason: GuardReason::DomainNotAllowed,
+                ref label,
+                url: Some(ref url),
+            }) if label == "Pay $18" && url == "https://evil.test/"
         ));
         assert!(!ledger.is_consumed(ticket.ticket_id));
         assert_eq!(pressed, 0);

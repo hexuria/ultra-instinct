@@ -230,7 +230,8 @@ fn ranked_lines(ranked: &[RankedAction]) -> Vec<RankedLine> {
 }
 
 fn offered_state(state: &ElementState) -> Option<OfferedState> {
-    if state.is_empty() {
+    // Form evidence is not part of the diary schema.
+    if state.is_empty_but_form() {
         return None;
     }
     Some(OfferedState {

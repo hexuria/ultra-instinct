@@ -24,7 +24,7 @@ use ultra_instinct_browser::{
     BrowserSession, CdpError, CdpTransport, PageState, WebSocketTransport,
 };
 use ultra_instinct_browser_tools::{
-    BrowserHost, Downloads, HttpBackend, LiveSession, TargetBackend, ToolLimits, ToolState,
+    BrowserHost, Downloads, HttpBackend, LiveSession, TargetBackend, ToolLimits, ToolState, Uploads,
 };
 use ultra_instinct_cdp::CdpEvent;
 use ultra_instinct_core::InteractionManifold;
@@ -91,6 +91,7 @@ pub struct Server {
     require_snapshot: bool,
     limits: ToolLimits,
     downloads: Downloads,
+    uploads: Uploads,
     /// `Some`: only these tools run and `tools/list` shows only them.
     allowlist: Option<BTreeSet<String>>,
 }
@@ -160,6 +161,7 @@ impl Server {
             require_snapshot: false,
             limits: ToolLimits::default(),
             downloads: Downloads::default(),
+            uploads: Uploads::default(),
             allowlist: None,
         }
     }
@@ -180,10 +182,19 @@ impl Server {
 
     /// Where `browser_download` may write: [`Downloads::Anywhere`] (default,
     /// any absolute path), [`Downloads::Off`] (refuses `downloads_off`), or
-    /// [`Downloads::Dir`] (only files directly in that folder, else
-    /// `path_not_allowed`).
+    /// [`Downloads::Dir`] (only files directly in that existing folder once
+    /// `..` and symlinks are resolved, else `path_not_allowed`).
     pub fn with_downloads(mut self, downloads: Downloads) -> Self {
         self.downloads = downloads;
+        self
+    }
+
+    /// Which local files `browser_file_upload` may give the page:
+    /// [`Uploads::Anywhere`] (default, any absolute path), [`Uploads::Off`]
+    /// (refuses `uploads_off`), or [`Uploads::Dir`] (only files under that
+    /// folder once `..` and symlinks are resolved, else `path_not_allowed`).
+    pub fn with_uploads(mut self, uploads: Uploads) -> Self {
+        self.uploads = uploads;
         self
     }
 
@@ -221,20 +232,23 @@ impl Server {
     /// length, any other field's from 4 chars (typed text is user data).
     /// [`crate::RunReport::typed`] still holds them: never log it.
     pub fn run_goal(&mut self, goal: &str, limits: crate::RunLimits) -> crate::RunReport {
-        let failed = |error: String| crate::RunReport {
+        let failed = |error: String, err: &ToolError| crate::RunReport {
             steps: Vec::new(),
-            outcome: crate::RunOutcome::Failed { error },
+            outcome: crate::RunOutcome::Failed {
+                error,
+                code: Some(err.code()),
+            },
             typed: crate::TypedText::default(),
         };
         if !self.allows("run_goal") {
             let refused = ToolError::ToolNotAllowed {
                 tool: "run_goal".into(),
             };
-            return failed(format!("{}: {refused}", refused.code()));
+            return failed(format!("{}: {refused}", refused.code()), &refused);
         }
         let policy = match &self.policy {
             Ok(policy) => policy.clone(),
-            Err(err) => return failed(err.clone()),
+            Err(err) => return failed(err.clone(), &ToolError::InvalidArguments(err.clone())),
         };
         let endpoint = self
             .backend
@@ -246,7 +260,7 @@ impl Server {
         let key = self.tab_binding.get(&endpoint).cloned().unwrap_or(endpoint);
         let session = match Host(self).take_session(&key) {
             Ok(session) => session,
-            Err(err) => return failed(err.to_string()),
+            Err(err) => return failed(err.to_string(), &err),
         };
         self.call_deadline.set(limits.deadline);
         let tools = &mut self.tools;
@@ -265,11 +279,18 @@ impl Server {
             crate::RunOutcome::Done { reason } | crate::RunOutcome::Abstained { why: reason } => {
                 scrub(reason)
             }
-            crate::RunOutcome::Blocked { label, reason } => {
+            crate::RunOutcome::Blocked {
+                label,
+                reason,
+                kind,
+            } => {
                 scrub(label);
                 scrub(reason);
+                if let Some(crate::BlockKind::DomainNotAllowed { host: Some(host) }) = kind {
+                    scrub(host);
+                }
             }
-            crate::RunOutcome::Failed { error } => scrub(error),
+            crate::RunOutcome::Failed { error, .. } => scrub(error),
         }
         let events = session.transport_mut().drain_events();
         let mut host = Host(self);
@@ -566,6 +587,10 @@ impl BrowserHost for Host<'_> {
 
     fn downloads(&self) -> Downloads {
         self.0.downloads.clone()
+    }
+
+    fn uploads(&self) -> Uploads {
+        self.0.uploads.clone()
     }
 
     fn policy(&self) -> Result<&Policy, ToolError> {

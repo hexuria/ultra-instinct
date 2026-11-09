@@ -43,9 +43,18 @@ pub struct Executed {
 pub enum ExecError {
     /// Lease invalid: consumed, mismatched, or stale against the fresh world.
     Ticket(TicketInvalid),
-    /// Fresh hard gate failed on the ticket target, or the user's policy
-    /// refused it (`domain-not-allowed`, `needs-confirm`).
+    /// Fresh hard gate failed on the ticket target.
     Gate(GuardReason),
+    /// The user's policy refused the input on the fresh observation
+    /// (`domain-not-allowed`, `needs-confirm`); `label` is what that look
+    /// checked (`Policy::press_label`: the target, or the button its form
+    /// submits with), the label a confirm must name; `url` what a domain
+    /// refusal checked (the page, or where a form submit would go).
+    Policy {
+        reason: GuardReason,
+        label: String,
+        url: Option<String>,
+    },
     /// Observation failed before input (nothing dispatched).
     Observe(String),
     /// The page refused the input (disabled / readonly / no unique option).
@@ -58,8 +67,7 @@ pub enum ExecError {
 impl ExecError {
     /// Stale lease: the right response is observe → decide again, not failure.
     /// Only world / target drift is stale. A policy refusal
-    /// (`Gate(DomainNotAllowed)`, `Gate(NeedsConfirm)`) is not: observing
-    /// again gives the same answer.
+    /// ([`Self::Policy`]) is not: observing again gives the same answer.
     pub fn is_stale(&self) -> bool {
         matches!(
             self,
@@ -76,7 +84,7 @@ impl std::fmt::Display for ExecError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Ticket(t) => write!(f, "ticket {t}"),
-            Self::Gate(r) => write!(f, "gate refused: {r}"),
+            Self::Gate(r) | Self::Policy { reason: r, .. } => write!(f, "gate refused: {r}"),
             Self::Observe(m) => write!(f, "observe before input failed: {m}"),
             Self::Rejected(m) => write!(f, "page rejected input: {m}"),
             Self::Dispatch(m) => write!(f, "dispatch failed: {m}"),
@@ -159,12 +167,17 @@ pub fn execute_ticketed_with<B: BrowserRuntime + ?Sized>(
         ultra_instinct_guard::check_drop_target(&fresh, drop).map_err(ExecError::Gate)?;
     }
     policy
-        .check(
+        .check_detail(
             before_page.as_ref().and_then(PageState::url),
             region,
             ticket.action,
+            ticket.key.as_deref(),
         )
-        .map_err(ExecError::Gate)?;
+        .map_err(|r| ExecError::Policy {
+            reason: r.reason,
+            label: r.label,
+            url: r.url,
+        })?;
 
     ledger
         .mark_consumed(ticket.ticket_id)
@@ -275,7 +288,14 @@ mod tests {
         b.replace_page(PageState::new("https://evil.test/cart", "Cart", None));
         let err =
             execute_ticketed_with(&mut b, &mut ledger, &t, &Input::Click, &policy).unwrap_err();
-        assert_eq!(err, ExecError::Gate(GuardReason::DomainNotAllowed));
+        assert_eq!(
+            err,
+            ExecError::Policy {
+                reason: GuardReason::DomainNotAllowed,
+                label: "Go".into(),
+                url: Some("https://evil.test/cart".into()),
+            }
+        );
         assert!(!err.is_stale());
         assert!(!ledger.is_consumed(t.ticket_id));
         assert!(b.input_log().is_empty());
@@ -283,6 +303,52 @@ mod tests {
         b.replace_page(PageState::new("https://shop.example/cart", "Cart", None));
         execute_ticketed_with(&mut b, &mut ledger, &t, &Input::Click, &policy).unwrap();
         assert!(ledger.is_consumed(t.ticket_id));
+    }
+
+    /// Enter in a field submits its form: the executor's own fresh look
+    /// decides which button that presses (form evidence is not in the
+    /// fingerprint, so the ticket is not stale), and a confirm label there
+    /// refuses unconsumed.
+    #[test]
+    fn enter_whose_fresh_form_submits_a_confirm_label_is_refused_unconsumed() {
+        use ultra_instinct_core::{ElementState, FormSubmit};
+        let with_form = |form: FormSubmit| {
+            let mut m = parse_fixture(PAGE).unwrap();
+            let mut parts = m.get(&id("name")).unwrap().to_parts();
+            parts.actions.push(Action::Key);
+            let region = ultra_instinct_core::InteractionRegion::try_new(parts)
+                .unwrap()
+                .with_state(ElementState {
+                    form: Some(form),
+                    ..ElementState::default()
+                });
+            m.replace(region);
+            m
+        };
+        let seen = with_form(FormSubmit::NotInForm);
+        let mut b = MockBrowser::new(seen.clone());
+        let mut ledger = TicketLedger::new();
+        let policy = Policy::from_lists("", "Pay*").unwrap();
+        let t = ultra_instinct_guard::gate_key(&seen, &id("name"), "Enter", None, 0).unwrap();
+        b.replace_manifold(with_form(FormSubmit::Button {
+            label: "Pay $18".into(),
+            action: None,
+        }));
+        let enter = Input::Key("Enter".into());
+        let err = execute_ticketed_with(&mut b, &mut ledger, &t, &enter, &policy).unwrap_err();
+        assert_eq!(
+            err,
+            ExecError::Policy {
+                reason: GuardReason::NeedsConfirm,
+                label: "Pay $18".into(),
+                url: None,
+            }
+        );
+        assert!(!ledger.is_consumed(t.ticket_id));
+        assert!(b.input_log().is_empty());
+        let confirmed = policy.with_confirmed("Pay $18");
+        execute_ticketed_with(&mut b, &mut ledger, &t, &enter, &confirmed).unwrap();
+        assert_eq!(b.input_log().len(), 1);
     }
 
     #[test]
@@ -294,7 +360,14 @@ mod tests {
         let t = gate(&m, &id("go"), Action::Click, None, 0).unwrap();
         let err =
             execute_ticketed_with(&mut b, &mut ledger, &t, &Input::Click, &policy).unwrap_err();
-        assert_eq!(err, ExecError::Gate(GuardReason::NeedsConfirm));
+        assert_eq!(
+            err,
+            ExecError::Policy {
+                reason: GuardReason::NeedsConfirm,
+                label: "Go".into(),
+                url: None,
+            }
+        );
         assert!(!ledger.is_consumed(t.ticket_id));
         assert!(b.press_log().is_empty());
         let confirmed = policy.with_confirmed("go");

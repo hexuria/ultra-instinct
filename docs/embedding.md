@@ -10,7 +10,7 @@ same `browser_*` tools the MCP server serves.
 
 | Crate | Why | Features |
 |---|---|---|
-| `ultra-instinct-mcp` | `Server`, the `browser_*` tools, `run_goal`, `ToolError`, `ToolLimits`, `Downloads`, `Policy` (re-exported) | none |
+| `ultra-instinct-mcp` | `Server`, the `browser_*` tools, `run_goal`, `ToolError`, `ToolLimits`, `Downloads`, `Uploads`, `Policy` (re-exported) | none |
 | `ultra-instinct-cdp` | `PipeBrowser` / `PipeLimits` (and `PipeBackend` if you build the server with `with_backend`) | none |
 | `ultra-instinct-guard` | `Policy` if you prefer it from its home crate | none |
 
@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 use ultra_instinct_cdp::{PipeBrowser, PipeLimits};
-use ultra_instinct_mcp::{Downloads, Policy, RunLimits, Server, ToolLimits};
+use ultra_instinct_mcp::{Downloads, Policy, RunLimits, Server, ToolLimits, Uploads};
 
 // `reader` is the end Chrome writes (its fd 4), `writer` the end it reads
 // (its fd 3): File, OwnedFd, PipeReader / PipeWriter, ChildStdout / ChildStdin.
@@ -37,6 +37,7 @@ let mut server = Server::with_pipe(browser)
     .require_snapshot(true)
     .with_limits(ToolLimits::default())
     .with_downloads(Downloads::Dir("/srv/box/downloads".into()))
+    .with_uploads(Uploads::Dir("/srv/box/uploads".into()))
     .with_tool_allowlist([
         "browser_navigate", "browser_get_state", "browser_click", "browser_type",
         "browser_select_dropdown", "browser_check", "browser_send_key",
@@ -71,6 +72,19 @@ println!("{:?}", report.outcome);
 loop on any `CdpTransport` (a `PipePage` you attached yourself, say);
 `Server::run_goal` uses the server's current tab and policy and keeps the
 session.
+
+A run the policy stops ends `RunOutcome::Blocked { label, reason, kind }`
+with nothing pressed. `kind` is the guard's refusal, typed (never parsed
+from `reason`): `Some(BlockKind::NeedsConfirm)` (`label` is the press to
+confirm), `Some(BlockKind::DomainNotAllowed { host })` (`host` is `None`
+when the page URL could not be read), or `None` when the loop blocked
+itself (repeated no-effect presses, a remote policy's BLOCKED).
+`BlockKind::code()` is the matching error code (`needs_confirm` /
+`domain_not_allowed`). `RunOutcome::Failed { error, code }` carries the
+error code when `Server::run_goal` refused before the loop started
+(`tool_not_allowed`, `invalid_arguments` for an invalid policy, a session
+error's code); the loop's own failures (`max steps exceeded`, `deadline
+exceeded`, a browser error) have `code: None`.
 
 ## Threading
 
@@ -132,7 +146,7 @@ the list through `BrowserHost::allows` (default: everything allowed).
 `Server::run_goal` is not a tool, but an allow-list gates it by the name
 `run_goal`: with a list set and `run_goal` not on it, the run ends
 `RunOutcome::Failed` with ``tool_not_allowed: tool `run_goal` is not allowed
-on this server`` before any CDP call. Naming it allows the whole loop, which
+on this server`` (`code: Some("tool_not_allowed")`) before any CDP call. Naming it allows the whole loop, which
 presses whatever the page offers (click, type, select, hover, drag, scroll,
 key), still under the server's `Policy`, the hard gate and tickets, whichever
 press tools the list names. `tools/list` never shows it.
@@ -149,12 +163,40 @@ Leave out, unless you need them and trust the caller:
   sends.
 - `browser_file_upload`, `browser_download`, `browser_save_as_pdf`,
   `browser_screenshot` `path`: touch the host's file system (paths must be
-  absolute; downloads follow `with_downloads`).
+  absolute; downloads follow `with_downloads`, uploads `with_uploads`).
+
+## Files the page may get or write
+
+Every file path a tool takes is absolute or the call refuses
+`path_not_absolute {path}` before any CDP call; nothing resolves a
+relative path against the server's working directory (the `aui` verbs
+absolutize against the shell's before they call).
+
+- `Server::with_downloads(Downloads::Anywhere | Off | Dir(dir))`:
+  `browser_download` writes anywhere (default), refuses `downloads_off`, or
+  only directly in the existing folder `dir`, compared after resolving `..`
+  and symlinks (the destination and the folder are canonicalized, as for
+  uploads), else `path_not_allowed {path, dir}`.
+- `Server::with_uploads(Uploads::Anywhere | Off | Dir(dir))`:
+  `browser_file_upload` hands the page any absolute path (default; a page
+  can be given any file the host process can read), refuses `uploads_off`,
+  or only files under `dir`. Under `Dir` the file and the folder are both
+  canonicalized first (`..` and symlinks resolved), the file must be a
+  regular file inside the folder, else `path_not_allowed {path, dir}`, and
+  Chrome gets the canonical path. A missing file refuses the same way.
 
 ## Secrets
 
 `browser_get_state` JSON elements carry `input_type` (when observe read it)
-and `sensitive`. A field is sensitive when it is a password, hidden or file
+and `sensitive`. With `values: true` (default false) each element that is
+not sensitive also carries the state observe read: `value` (a text-like
+input's or text area's value, or a select's selected option), `checked`
+and `expanded`. A sensitive element never carries any of them. A value
+longer than `max_state_chars` / `max_text_chars` (the smaller) is cut with
+`… [truncated N chars]` and `value_truncated: true`; observe itself reads
+at most 200 chars of a value. Values are masked like every output (below),
+and labels are never taken from values. The text format already prints
+non-sensitive values and is unchanged. A field is sensitive when it is a password, hidden or file
 input, when its label names a secret (password, passcode, PIN, CVV, CVC,
 OTP, SSN, card, security, one-time), or when its input type could not be
 read. A sensitive field's value is never shown, and text typed into one
@@ -190,7 +232,9 @@ Whether typed text is a secret is decided on the page as the input lands:
 `browser_type` checks the field on the executor's own fresh observation as
 well as the one the caller saw (a text box that became a password input in
 between is a secret), and `browser_keyboard` reads the focus again when a
-press ran since the last observation. When neither can tell, the text is
+press ran since the last observation (on every call when a policy is set).
+A Tab inside `browser_keyboard` text moves the focus after it was read, so
+every piece typed after the first Tab is treated as a secret. When neither can tell, the text is
 treated as a secret.
 
 `Server::run_goal` remembers every TYPE / SELECT payload before it is
@@ -232,7 +276,7 @@ codes are only ever appended.
 | `code` | Fields | Meaning |
 |---|---|---|
 | `needs_confirm` | `label` | the policy needs a confirm for this press; repeat with `confirm: label` (that call only) |
-| `domain_not_allowed` | `host` | the page or URL is off the policy's allow-list |
+| `domain_not_allowed` | `host` | the page the input starts on, the URL to navigate to, or where a form the press submits is sent, is off the policy's allow-list |
 | `stale_ref` | `reason` (`world-changed`, `target-changed`, `target-gone`, `other-tab`) | the element the ref named is not what the caller saw; nothing pressed |
 | `unknown_ref` | `index`, `indexed` | no element at that index (among those the given snapshot showed, or on the page) |
 | `snapshot_required` | | the server requires `snapshot` with an index press |
@@ -243,8 +287,9 @@ codes are only ever appended.
 | `frame_too_large` | `limit` | this call's reply went past `max_frame_bytes`; it was skipped and the pipe stays usable |
 | `tool_not_allowed` | `tool` | not on the allow-list |
 | `path_not_absolute` | `path` | file paths must be absolute |
-| `path_not_allowed` | `path`, `dir` | `Downloads::Dir` forces another folder |
+| `path_not_allowed` | `path`, `dir` | `Downloads::Dir` / `Uploads::Dir` keeps files in another folder |
 | `downloads_off` | | `Downloads::Off` |
+| `uploads_off` | | `Uploads::Off` |
 | `output_too_large` | `limit`, `bytes` | a screenshot over `max_screenshot_bytes` even as JPEG |
 | `secrets_full` | `limit` | the server already masks 64 typed secrets; the new one was not typed |
 | `secret_on_screen` | `message` | a screenshot / PDF could not hide the page's sensitive fields; nothing was captured |
@@ -270,5 +315,71 @@ observe / guard / verify and the legacy executors.
 ## Policy at runtime
 
 `Server::set_policy(Policy)` replaces the policy between calls; sessions
-stay open. A press's `confirm` argument lifts a confirm for that call only:
+stay open. The domain allow-list is checked on the page an input starts
+on, before it is sent (and `browser_navigate` checks its URL first): input
+begins on an allowed host. A press that submits a form (a click, Enter or
+Space on a submit button, or Enter in a field or box that submits its
+form) is also refused `domain_not_allowed {host}` when the form would be
+sent off the list: observe reads the target (`formaction`, else `action`;
+an empty one is the page itself), and a `javascript:` or unreadable target
+fails closed. Other navigation the input causes (a link) is not checked
+where it goes; the next call on that page is. With an allow-list set, an
+Enter / Space to a focus no observation names refuses too (it could
+submit any form). A press's `confirm` argument lifts a confirm for that call only:
 the next call is refused again.
+
+Input with no target (`browser_keyboard`, and `browser_send_key` /
+`browser_hold_key` without an `index`) goes to whatever has focus, so it
+runs under the policy like a press. With a policy set, the call observes
+the page first and, before any `Input.*` call:
+
+- checks the page's host exactly as a press does: off the allow-list is
+  `domain_not_allowed {host}`, an unreadable URL while the list is set
+  fails closed (`ticket_invalid`, `domain-not-allowed`, as for a press), a
+  URL with no host (`about:blank`, `data:`) passes;
+- runs the key on the focused control through the guard's press rule
+  (below), as a ticketed KEY on that control would be. With confirm
+  patterns set, an Enter / Space to a focus no observation names (no
+  observation, nothing focused, or focus in a cross-origin frame) refuses
+  `needs_confirm` with the label `(unobserved focus)`, lifted only by
+  confirming exactly that label; and `browser_keyboard` text with an Enter
+  / Space after a Tab refuses `invalid_arguments` (the Tab moves the focus
+  to a control not observed yet): send it in its own call.
+
+Keys are presses for the confirm rule, on every path (the agent loop and
+`Server::run_goal`, a ticketed `browser_send_key` with an index, and the
+keyboard tools above), checked by the guard on the observation the input
+lands on:
+
+- Enter, Space or NumpadEnter (with any modifiers) on a button-like
+  control (it can be clicked or toggled and takes no text) presses it: its
+  label is checked. Enter on a checkbox or radio is the exception: Chrome
+  submits its form (pinned live), so the form rule below applies, and the
+  box's own label only when it is in no form. Space on a box toggles it:
+  its own label.
+- Enter in a field (or another form control) submits its form, which
+  presses the form's first submit button: that button's accessible name
+  (`aria-labelledby`, then `aria-label`, then its text or value, as the
+  click check reads it) is checked, and `needs_confirm` names it (`label:
+  "Pay $18"`, though the target was the field). Observe records the form
+  evidence. A form with no submit button still submits on Enter when at
+  most one of its fields blocks implicit submission (text, search, url,
+  tel, email, password, number, date / time inputs): that refuses with the
+  label `(form submit)`, as do a submit button with no name (icon-only)
+  and form evidence observe could not read; confirm that label to send
+  it. A field in no form, a button-less form with two or more such fields,
+  a text area, a select, and anything that is no form control (a `div`
+  combobox, an option, a contenteditable box) submit nothing.
+- The refusal names what the input's own fresh look checked: if the page
+  changed its submit button between the caller's look and the press, the
+  label is the new one.
+- Space in a field is text, and other keys (Tab, arrows, Escape) press
+  nothing. Enter (and NumpadEnter) is sent with its text `"\r"` by every
+  key tool, so it fires `keypress` and really submits a field's form.
+
+In `browser_keyboard`, insert mode sends no keys, so nothing in it is a
+press; in type mode, with confirm patterns set, an Enter anywhere after a
+Tab, or a Space right after one (`"\t "`), refuses `invalid_arguments`
+(the focus it lands on is not observed yet); `"Jane\tDoe Smith"` types.
+
+With no policy set these tools send their input as before.

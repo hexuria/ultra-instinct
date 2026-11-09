@@ -1843,3 +1843,166 @@ fn a_passed_deadline_ends_the_run_between_steps() {
     );
     assert!(agent.browser().press_log().is_empty());
 }
+
+/// Presses the first offered KEY once, then DONE.
+struct PressesKey;
+
+impl BrowserPolicy for PressesKey {
+    fn decide(
+        &mut self,
+        space: &ActionSpace,
+        _goal: &AgentGoal,
+        history: &[HistoryEntry],
+    ) -> Result<PolicyOutcome, PolicyError> {
+        let action = if history.is_empty() {
+            space.targets_of(ActionKind::Key).next()
+        } else {
+            space.get_str(ActionKind::Done.as_str())
+        }
+        .expect("offered");
+        Ok(PolicyOutcome::Choice(PolicyDecision {
+            action_id: action.id().clone(),
+            kind: action.kind(),
+            target_label: action.label().to_owned(),
+            confidence_millis: 1_000,
+            operation_ranked: Vec::new(),
+            target_ranked: Vec::new(),
+        }))
+    }
+}
+
+/// Enter in a field submits its form, which presses the form's submit
+/// button: under a confirm pattern for that button's label the run ends
+/// BLOCKED naming it, and nothing is dispatched (guard policy, ADR 0013).
+#[test]
+fn enter_in_a_field_whose_form_submits_with_a_confirm_label_blocks_unpressed() {
+    let page = |form: Option<ultra_instinct_core::FormSubmit>| {
+        let mut m = manifold(
+            r#"
+            viewport w=800 h=600
+            region id=code role=text_field label="Promo code" x=10 y=10 w=200 h=24 actions=click,type,key sources=dom,accessibility
+            "#,
+        );
+        let region = m.get_str("code").unwrap().clone().with_state(ElementState {
+            form,
+            ..ElementState::default()
+        });
+        m.replace(region);
+        m
+    };
+    let policy = ultra_instinct_guard::Policy::from_lists("", "Pay*").unwrap();
+    let pay = Some(ultra_instinct_core::FormSubmit::Button {
+        label: "Pay $18".into(),
+        action: None,
+    });
+    let mut agent = AgentBuilder::new(MockBrowser::new(page(pay)), PressesKey)
+        .max_steps(3)
+        .guard_policy(policy.clone())
+        .build("press Enter in Promo code");
+    let outcome = agent.run();
+    assert!(
+        matches!(outcome, AgentOutcome::Blocked { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        agent.policy_refusal(),
+        Some((ultra_instinct_guard::GuardReason::NeedsConfirm, "Pay $18"))
+    );
+    assert!(agent.browser().input_log().is_empty());
+    assert!(agent.browser().press_log().is_empty());
+
+    // A form that submits with another button: Enter goes through.
+    let search = Some(ultra_instinct_core::FormSubmit::Button {
+        label: "Search".into(),
+        action: None,
+    });
+    let mut agent = AgentBuilder::new(MockBrowser::new(page(search)), PressesKey)
+        .max_steps(3)
+        .guard_policy(policy)
+        .build("press Enter in Promo code");
+    let outcome = agent.run();
+    assert!(agent.policy_refusal().is_none(), "{outcome:?}");
+    assert_eq!(agent.browser().input_log().len(), 1, "{outcome:?}");
+}
+
+/// The executor's fresh look names the refusal: the decision saw a form
+/// that submits with "Continue", the page now submits with "Pay $18", and
+/// the run ends BLOCKED naming "Pay $18", nothing dispatched.
+#[test]
+fn a_refusal_on_the_executors_fresh_look_names_its_label() {
+    let page = |label: &str| {
+        let mut m = manifold(
+            r#"
+            viewport w=800 h=600
+            region id=code role=text_field label="Promo code" x=10 y=10 w=200 h=24 actions=click,type,key sources=dom,accessibility
+            "#,
+        );
+        let region = m.get_str("code").unwrap().clone().with_state(ElementState {
+            form: Some(ultra_instinct_core::FormSubmit::Button {
+                label: label.into(),
+                action: None,
+            }),
+            ..ElementState::default()
+        });
+        m.replace(region);
+        m
+    };
+    let mut browser = MockBrowser::new(page("Continue"));
+    // Observes: the decision's, then the executor's fresh look.
+    browser.schedule_swap(1, page("Pay $18"));
+    let mut agent = AgentBuilder::new(browser, PressesKey)
+        .max_steps(3)
+        .guard_policy(ultra_instinct_guard::Policy::from_lists("", "Pay*").unwrap())
+        .build("press Enter in Promo code");
+    let outcome = agent.run();
+    assert!(
+        matches!(outcome, AgentOutcome::Blocked { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        agent.policy_refusal(),
+        Some((ultra_instinct_guard::GuardReason::NeedsConfirm, "Pay $18"))
+    );
+    assert!(agent.browser().input_log().is_empty());
+}
+
+/// A form that posts to a host off the allow-list: Enter in its field would
+/// send what was typed there, so the run ends BLOCKED naming that host,
+/// nothing dispatched, though the page itself is allowed.
+#[test]
+fn enter_in_a_form_that_posts_off_the_allow_list_blocks_unpressed() {
+    let mut m = manifold(
+        r#"
+        viewport w=800 h=600
+        region id=code role=text_field label="Promo code" x=10 y=10 w=200 h=24 actions=click,type,key sources=dom,accessibility
+        "#,
+    );
+    let region = m.get_str("code").unwrap().clone().with_state(ElementState {
+        form: Some(ultra_instinct_core::FormSubmit::Button {
+            label: "Apply".into(),
+            action: Some("https://evil.test/collect".into()),
+        }),
+        ..ElementState::default()
+    });
+    m.replace(region);
+    let browser = MockBrowser::new(m).with_page(ultra_instinct_browser::PageState::new(
+        "https://shop.example/cart",
+        "Cart",
+        None,
+    ));
+    let mut agent = AgentBuilder::new(browser, PressesKey)
+        .max_steps(3)
+        .guard_policy(ultra_instinct_guard::Policy::from_lists("shop.example", "").unwrap())
+        .build("press Enter in Promo code");
+    let outcome = agent.run();
+    assert!(
+        matches!(outcome, AgentOutcome::Blocked { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        agent.policy_refusal(),
+        Some((ultra_instinct_guard::GuardReason::DomainNotAllowed, "Apply"))
+    );
+    assert_eq!(agent.policy_refusal_host().as_deref(), Some("evil.test"));
+    assert!(agent.browser().input_log().is_empty());
+}
