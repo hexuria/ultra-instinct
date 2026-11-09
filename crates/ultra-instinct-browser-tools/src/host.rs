@@ -125,6 +125,8 @@ pub struct ToolState {
     pub(crate) env: EnvState,
     /// Session key → the JavaScript dialog open on that tab (`browser_dialog`).
     pub(crate) dialogs: BTreeMap<String, Dialog>,
+    /// Text typed into sensitive fields, masked in every output (all tabs).
+    pub(crate) secrets: crate::secrets::Secrets,
 }
 
 impl ToolState {

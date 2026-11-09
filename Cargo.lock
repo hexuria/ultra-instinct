@@ -1730,6 +1730,7 @@ dependencies = [
  "ultra-instinct-core",
  "ultra-instinct-guard",
  "ultra-instinct-observe",
+ "ultra-instinct-policy",
  "ultra-instinct-protocol",
 ]
 

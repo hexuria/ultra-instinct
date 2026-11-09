@@ -18,6 +18,7 @@ mod browser_tools;
 mod error;
 mod host;
 mod page_text;
+mod secrets;
 
 pub use browser_env::ENV_TOOLS;
 pub use browser_extra::EXTRA_TOOLS;
@@ -27,6 +28,7 @@ pub use error::{ToolError, ERROR_CODES};
 pub use host::{
     BrowserHost, CdpConnector, HttpBackend, LiveSession, PageTab, TargetBackend, ToolState,
 };
+pub use secrets::{sensitive, MASK};
 
 use serde_json::{Map, Value};
 
@@ -37,16 +39,24 @@ pub fn call(
     name: &str,
     arguments: &Value,
 ) -> Option<Result<Value, ToolError>> {
-    if ENV_TOOLS.contains(&name) {
-        return Some(browser_env::call(host, name, arguments));
-    }
-    if let Some(result) = browser_state::call(host, name, arguments) {
-        return Some(result);
-    }
-    if name.starts_with("browser_") {
-        return Some(browser_extra::call(host, name, arguments));
-    }
-    None
+    let result = if ENV_TOOLS.contains(&name) {
+        browser_env::call(host, name, arguments)
+    } else if let Some(result) = browser_state::call(host, name, arguments) {
+        result
+    } else if name.starts_with("browser_") {
+        browser_extra::call(host, name, arguments)
+    } else {
+        return None;
+    };
+    // Text typed into a sensitive field never comes back out.
+    let secrets = &host.tool_state().secrets;
+    Some(match result {
+        Ok(mut body) => {
+            secrets.scrub_value(&mut body);
+            Ok(body)
+        }
+        Err(err) => Err(secrets.scrub_error(err)),
+    })
 }
 
 /// `(description, properties, required)` for a `browser_*` tool.

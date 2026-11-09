@@ -519,14 +519,19 @@ pub(crate) fn interactive_index(manifold: &InteractionManifold) -> Vec<RegionId>
 
 fn element_json(index: usize, region: &InteractionRegion) -> Value {
     let rect = region.rect();
-    json!({
+    let mut element = json!({
         "index": index,
         "region": region.id().as_str(),
         "role": region.role().to_string(),
         "label": region.label(),
         "actions": region.actions().iter().map(|a| a.to_string()).collect::<Vec<_>>(),
         "rect": {"x": rect.x(), "y": rect.y(), "w": rect.width(), "h": rect.height()},
-    })
+        "sensitive": crate::secrets::sensitive(region),
+    });
+    if let Some(kind) = region.state().input_type.as_deref() {
+        element["input_type"] = json!(kind);
+    }
+    element
 }
 
 fn get_state(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
@@ -587,9 +592,10 @@ fn get_html(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, To
     let endpoint = endpoint_of(arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
+    // A copy without text inputs' `value` attributes (crate::secrets).
     let outcome = session
-        .outer_html()
-        .map(|html| json!({"html": html}))
+        .evaluate(crate::secrets::SAFE_HTML_JS)
+        .map(|html| json!({"html": html.as_str().unwrap_or_default()}))
         .map_err(browser_err);
     keep(server, &key, session);
     outcome
@@ -714,6 +720,13 @@ fn gated_input(
             ),
         }
         .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
+        // Text for a sensitive field is masked in every output from now on
+        // (before dispatch, so a failed press does not leak it either).
+        if let (Input::Type(text), Some(region)) = (&input, manifold.get(&region_id)) {
+            if crate::secrets::sensitive(region) {
+                server.tool_state_mut().secrets.remember(text);
+            }
+        }
         // The user's policy after the gate, before the ticket is used; the
         // executor checks it again on its fresh observation.
         let label = ticket.target_label.clone();

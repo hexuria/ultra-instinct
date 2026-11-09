@@ -63,10 +63,7 @@ pub(crate) fn control_line(index: usize, region: &InteractionRegion) -> String {
         quoted(region.label())
     );
     let state = region.state();
-    let secret = matches!(
-        state.input_type.as_deref(),
-        Some("password" | "hidden" | "file")
-    );
+    let secret = crate::secrets::sensitive(region);
     if let Some(value) = state.value.as_deref().filter(|_| !secret) {
         line.push_str(&format!("  value={}", quoted(value)));
     }

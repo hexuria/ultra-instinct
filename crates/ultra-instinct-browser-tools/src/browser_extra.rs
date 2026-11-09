@@ -510,6 +510,20 @@ fn keyboard(
             "`mode` must be type|insert, got `{mode}`"
         )));
     }
+    // Fail closed: unless the last observation shows a focused field that
+    // is not sensitive, this text is masked in every later output.
+    let focused_plain = server.take_session(key).map(|session| {
+        let plain = session
+            .page()
+            .and_then(|page| page.focused())
+            .and_then(|id| session.manifold()?.get(id))
+            .is_some_and(|region| !crate::secrets::sensitive(region));
+        keep(server, key, session);
+        plain
+    })?;
+    if !focused_plain {
+        server.tool_state_mut().secrets.remember(text);
+    }
     let mut session = server.take_session(key)?;
     let outcome = (|| {
         let params = json!({"expression": FOCUSED_JS, "returnByValue": true}).to_string();
@@ -600,7 +614,7 @@ fn get(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<Val
         let manifold = fresh(&session)?;
         let region = present(&manifold, &id, index)?;
         let state = region.state();
-        let secret = is_secret(region);
+        let secret = crate::secrets::sensitive(region);
         let value = match what {
             "value" if secret => Value::Null,
             "value" => json!(state.value.clone().or_else(|| state.selected.clone())),
@@ -628,14 +642,6 @@ fn get(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<Val
     })();
     keep(server, key, session);
     outcome
-}
-
-/// Password, hidden and file inputs: observe never reads their value.
-fn is_secret(region: &InteractionRegion) -> bool {
-    matches!(
-        region.state().input_type.as_deref(),
-        Some("password" | "hidden" | "file")
-    )
 }
 
 /// One attribute of the region's node; `null` when it is absent.

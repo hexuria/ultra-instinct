@@ -839,7 +839,9 @@ fn network(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, Too
                 .har
                 .remove(&key)
                 .unwrap_or_default();
-            let har = build_har(&tap.events);
+            let mut har = build_har(&tap.events);
+            // A typed secret a page sent in a URL never reaches the file.
+            server.tool_state().secrets.scrub_value(&mut har);
             let entries = har["log"]["entries"].as_array().map_or(0, Vec::len);
             let text = serde_json::to_vec_pretty(&har)
                 .map_err(|err| ToolError::Browser(err.to_string()))?;
