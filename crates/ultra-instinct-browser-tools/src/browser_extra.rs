@@ -558,6 +558,15 @@ fn keyboard(
         .is_some_and(|r| !crate::secrets::sensitive(r));
     if !focused_plain {
         server.tool_state_mut().secrets.remember(text, true)?;
+    } else if let Some((_, after)) = text.split_once('\t') {
+        // A Tab moves the focus after it was read (into a password field,
+        // say): every piece typed after the first Tab may be a secret.
+        for piece in after
+            .split(['\t', '\n', '\r'])
+            .filter(|p| !p.trim().is_empty())
+        {
+            server.tool_state_mut().secrets.remember(piece, true)?;
+        }
     }
     let mut session = server.take_session(key)?;
     let outcome = (|| {

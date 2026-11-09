@@ -844,3 +844,35 @@ fn get_state_values_never_carry_a_secret() {
         assert_eq!(elements[0]["label"], "Email");
     }
 }
+
+/// A Tab inside `browser_keyboard` text moves the focus after the focus was
+/// read (Email → Password here): everything after the first Tab may be a
+/// secret and is masked in later outputs, at any length.
+#[test]
+fn keyboard_text_after_a_tab_is_masked() {
+    let mut email_focused = page();
+    email_focused.ax[0] = email_focused.ax[0].clone().focused();
+    let focused = json!({"result": {"type": "boolean", "value": true}});
+    // "bob\tpw123": 3 + 1 + 5 keys, each a keyDown and a keyUp.
+    let mut script = ScriptBuilder::new()
+        .observe_compact(&email_focused)
+        .call("Runtime.evaluate", focused);
+    for _ in 0..18 {
+        script = script.call("Input.dispatchKeyEvent", json!({}));
+    }
+    let script = script.call("Runtime.evaluate", string_result("signed in as bob, pw123"));
+    let mut server = connect_once(script);
+    server
+        .call_tool("browser_get_state", &json!({"cdp": CDP}))
+        .expect("state");
+    server
+        .call_tool(
+            "browser_keyboard",
+            &json!({"cdp": CDP, "text": "bob\tpw123"}),
+        )
+        .expect("typed");
+    let text = server
+        .call_tool("browser_get_text", &json!({"cdp": CDP}))
+        .expect("text");
+    assert_eq!(text["text"], format!("signed in as bob, {MASK}"), "{text}");
+}
