@@ -847,7 +847,8 @@ fn resolve(
     let prior = session.fresh_manifold().map(interactive_index);
     let manifold = session.observe().map_err(browser_err)?.clone();
     if snapshot.is_some() {
-        return bound::resolve(server, key, snapshot, &manifold, index);
+        return bound::resolve(server, key, snapshot, &manifold, index)
+            .map(|(seen, id)| (seen.into_owned(), id));
     }
     let order = prior.unwrap_or_else(|| interactive_index(&manifold));
     Ok((manifold, at_index(&order, index)?))

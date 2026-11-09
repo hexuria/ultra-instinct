@@ -14,6 +14,8 @@
 //! Without `snapshot` an index resolves on a fresh observation, as before,
 //! unless the host requires snapshots ([`BrowserHost::require_snapshot`]).
 
+use std::borrow::Cow;
+
 use serde_json::Value;
 use ultra_instinct_core::{Action, InteractionManifold, RegionId};
 use ultra_instinct_guard::{
@@ -100,28 +102,28 @@ pub(crate) fn at_index(order: &[RegionId], index: usize) -> Result<RegionId, Too
 
 /// The manifold an index press mints its ticket on, and the region `index`
 /// names there: the snapshot's (which must be this tab's) when one is given,
-/// else `fresh`.
-pub(crate) fn resolve(
+/// else `fresh`, borrowed. The snapshot's is a copy: it lives in the host,
+/// which the press mutates (ledger, secrets) while the ticket's manifold is
+/// still in use.
+pub(crate) fn resolve<'a>(
     server: &dyn BrowserHost,
     key: &str,
     snapshot: Option<u64>,
-    fresh: &InteractionManifold,
+    fresh: &'a InteractionManifold,
     index: usize,
-) -> Result<(InteractionManifold, RegionId), ToolError> {
-    let seen = match snapshot {
-        None => fresh,
-        Some(id) => {
-            let (from, manifold) = server.snapshot(id)?;
-            if from != origin(key) {
-                return Err(ToolError::StaleRef {
-                    reason: "other-tab".into(),
-                });
-            }
-            manifold
-        }
+) -> Result<(Cow<'a, InteractionManifold>, RegionId), ToolError> {
+    let Some(id) = snapshot else {
+        let region = at_index(&interactive_index(fresh), index)?;
+        return Ok((Cow::Borrowed(fresh), region));
     };
+    let (from, seen) = server.snapshot(id)?;
+    if from != origin(key) {
+        return Err(ToolError::StaleRef {
+            reason: "other-tab".into(),
+        });
+    }
     let region = at_index(&interactive_index(seen), index)?;
-    Ok((seen.clone(), region))
+    Ok((Cow::Owned(seen.clone()), region))
 }
 
 /// A ticket error as the tool error: drift is a stale ref, the rest
