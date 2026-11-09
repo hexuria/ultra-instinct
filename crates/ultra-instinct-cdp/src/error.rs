@@ -35,8 +35,9 @@ pub enum CdpError {
         method: String,
     },
     /// A pipe frame grew past the connection's `max_frame_bytes` before its
-    /// NUL terminator. The pipe is closed for good after this: framing can
-    /// no longer be trusted.
+    /// NUL terminator. The frame was refused (read to its end and dropped)
+    /// and only the call it answers gets this; the pipe stays usable for the
+    /// next call and every other page.
     FrameTooLarge {
         limit: usize,
     },
@@ -76,7 +77,10 @@ impl fmt::Display for CdpError {
                 "a JavaScript dialog opened while `{method}` ran; the call was sent and the page waits on the dialog"
             ),
             Self::FrameTooLarge { limit } => {
-                write!(f, "CDP pipe frame exceeds {limit} bytes; pipe closed")
+                write!(
+                    f,
+                    "CDP pipe frame over {limit} bytes refused; the pipe stays usable"
+                )
             }
             Self::PipeClosed { message } => write!(f, "CDP pipe closed: {message}"),
             Self::TargetGone { target_id } => {

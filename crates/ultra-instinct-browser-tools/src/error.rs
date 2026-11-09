@@ -140,7 +140,8 @@ pub enum ToolError {
     PipeClosed {
         message: String,
     },
-    /// A CDP pipe frame went past the connection's byte cap; the pipe is closed.
+    /// A CDP pipe frame went past the connection's byte cap: that frame was
+    /// refused (this call fails) and the pipe stays usable.
     FrameTooLarge {
         limit: usize,
     },
@@ -383,7 +384,7 @@ impl ToolError {
             }
             Self::PipeClosed { message } => message.clone(),
             Self::FrameTooLarge { limit } => {
-                format!("CDP pipe frame exceeds {limit} bytes; pipe closed")
+                format!("CDP pipe frame over {limit} bytes refused; the pipe stays usable")
             }
             _ => return None,
         })

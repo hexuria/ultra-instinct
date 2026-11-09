@@ -300,3 +300,25 @@ fn typed_refusals_keep_their_old_variant_message_and_display() {
     );
     assert!(ToolError::from_cdp(&CdpError::NoScriptedResponse { method: "X".into() }).is_none());
 }
+
+/// An oversize frame costs its call only: the wording says the frame was
+/// refused and the pipe stays usable, never that it closed.
+#[test]
+fn frame_too_large_says_the_pipe_stays_usable() {
+    let cdp = CdpError::FrameTooLarge { limit: 64 };
+    let tool = ToolError::FrameTooLarge { limit: 64 };
+    let texts = [
+        cdp.to_string(),
+        tool.to_string(),
+        tool.to_value()["message"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+        ToolError::from_cdp(&cdp).expect("typed").to_string(),
+    ];
+    for text in &texts {
+        assert!(!text.contains("closed"), "{text}");
+        assert!(text.contains("refused") && text.contains("64"), "{text}");
+        assert!(text.contains("stays usable"), "{text}");
+    }
+}
