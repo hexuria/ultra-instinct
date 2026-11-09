@@ -790,3 +790,51 @@ fn tools_list_carries_the_new_tools_and_options() {
         json!(["index", "checked"])
     );
 }
+
+/// Console API calls and log entries become `{level, text}` entries; other
+/// buffered events are not console entries.
+#[test]
+fn read_console_turns_console_and_log_events_into_entries() {
+    let script = ScriptBuilder::new()
+        .call("Runtime.enable", json!({}))
+        .call("Log.enable", json!({}));
+    let (mut server, _log) = server_with(
+        script,
+        vec![(
+            "Log.enable",
+            event(
+                "Runtime.consoleAPICalled",
+                json!({"type": "warn", "args": [{"value": "careful"}, {"description": "obj"}]}),
+            ),
+        )],
+    );
+    let out = call(&mut server, "browser_read_console", json!({"cdp": CDP}));
+    let entries = out["entries"].as_array().expect("entries");
+    assert_eq!(entries.len(), 1, "{out}");
+    assert_eq!(entries[0]["level"], "warn");
+    assert!(entries[0]["text"].as_str().unwrap().contains("careful"));
+
+    let script = ScriptBuilder::new()
+        .call("Runtime.enable", json!({}))
+        .call("Log.enable", json!({}));
+    let (mut server, _log) = server_with(
+        script,
+        vec![
+            (
+                "Runtime.enable",
+                event("Network.requestWillBeSent", json!({})),
+            ),
+            (
+                "Log.enable",
+                event(
+                    "Log.entryAdded",
+                    json!({"entry": {"level": "error", "text": "boom", "source": "network"}}),
+                ),
+            ),
+        ],
+    );
+    let out = call(&mut server, "browser_read_console", json!({"cdp": CDP}));
+    assert_eq!(out["entries"].as_array().map(Vec::len), Some(1), "{out}");
+    assert_eq!(out["entries"][0]["level"], "error");
+    assert_eq!(out["entries"][0]["text"], "boom");
+}

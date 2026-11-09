@@ -109,6 +109,39 @@ fn get_state_indexes_elements_in_reading_order() {
     assert_eq!(elements[2]["label"], "Country");
 }
 
+/// Reading order groups controls by 20 px rows, then x: a control 2 px
+/// lower on the same row still comes before the next row, whatever order
+/// the page lists them in, and the same page indexes the same way twice.
+#[test]
+fn get_state_reading_order_is_by_row_then_x_and_stable() {
+    let page = PageSpec::of(
+        &[
+            Control::button(10, 100, "b2", (10.0, 40.0, 50.0, 10.0)),
+            Control::button(11, 101, "a1", (10.0, 10.0, 50.0, 10.0)),
+            Control::button(12, 102, "a2", (200.0, 12.0, 50.0, 10.0)),
+        ],
+        "http://127.0.0.1/rows",
+        "Rows",
+    );
+    let (mut server, _log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&page)
+            .observe_compact(&page),
+    );
+    let labels = |out: Value| -> Vec<String> {
+        out["elements"]
+            .as_array()
+            .expect("elements")
+            .iter()
+            .map(|e| e["label"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let args = json!({"cdp": CDP, "format": "json"});
+    let first = labels(call(&mut server, "browser_get_state", args.clone()));
+    assert_eq!(first, ["a1", "a2", "b2"]);
+    assert_eq!(labels(call(&mut server, "browser_get_state", args)), first);
+}
+
 /// The default state is one line per control, in the same order and with
 /// the same 1-based refs the index-taking tools accept.
 #[test]
