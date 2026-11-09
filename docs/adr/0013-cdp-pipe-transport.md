@@ -192,6 +192,21 @@ surface.
   `path_not_allowed`; Chrome gets the canonical path. `Anywhere` stays the
   default, so a host that does not opt in can still hand a page any file
   it can read.
+- **Domain scope.** The allow-list is checked on the page an input starts
+  on, before it is sent (and on `browser_navigate`'s URL). A navigation the
+  input causes (a clicked link, an Enter that submits a form) is not
+  checked at its destination; the next input there is. Clicks always
+  worked this way; the docs said "gets no input", which overclaimed.
+- **Form-rule review fixes.** Enter on a checkbox / radio goes through the
+  form rule (Chrome submits from it, pinned in `pipe_live.rs`); only a
+  button-like control that is no box presses itself on Enter. A nameless
+  submit button is `(form submit)`. Observe emits the form table once per
+  walk (`forms`, indexed by a control's `fm`) and a compact record without
+  `fm` reads as in no form, so "unread" means only missing evidence (the
+  per-node fallback). Enter carries `"\r"` in `key_event`, as in
+  `press_key`. The executor's policy refusal (`ExecError::Policy { reason,
+  label }`) carries the label its fresh look checked, which the agent and
+  the host tools report.
 - **Keyboard input with no target** (added after the first cut, which
   sent it unchecked). `browser_keyboard` and `browser_send_key` /
   `browser_hold_key` without an index observe first when a policy is set
@@ -215,7 +230,8 @@ surface.
   submits nothing. A button-less form that Enter still submits (HTML
   implicit submission: at most one field that blocks it) and form evidence
   not read (the per-node fallback, a replayed or fixture page) need, while
-  confirm patterns are set, a confirm of the label `(form submit)`
+  confirm patterns are set, a confirm of the label `(form submit)`, as does
+  a submit button with no name
   (`FORM_SUBMIT_UNKNOWN`); a button-less form with two or more blocking
   fields, or no form: nothing to confirm. The keyboard tools refuse an
   activating key to a focus no observation names with `(unobserved

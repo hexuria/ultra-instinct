@@ -274,7 +274,7 @@ codes are only ever appended.
 | `code` | Fields | Meaning |
 |---|---|---|
 | `needs_confirm` | `label` | the policy needs a confirm for this press; repeat with `confirm: label` (that call only) |
-| `domain_not_allowed` | `host` | the page or URL is off the policy's allow-list |
+| `domain_not_allowed` | `host` | the page the input starts on, or the URL to navigate to, is off the policy's allow-list |
 | `stale_ref` | `reason` (`world-changed`, `target-changed`, `target-gone`, `other-tab`) | the element the ref named is not what the caller saw; nothing pressed |
 | `unknown_ref` | `index`, `indexed` | no element at that index (among those the given snapshot showed, or on the page) |
 | `snapshot_required` | | the server requires `snapshot` with an index press |
@@ -313,7 +313,11 @@ observe / guard / verify and the legacy executors.
 ## Policy at runtime
 
 `Server::set_policy(Policy)` replaces the policy between calls; sessions
-stay open. A press's `confirm` argument lifts a confirm for that call only:
+stay open. The domain allow-list is checked on the page an input starts
+on, before it is sent (and `browser_navigate` checks its URL first): input
+begins on an allowed host. A navigation the input itself causes (a link,
+a form submitted by Enter) is not checked where it goes; the next call on
+that page is. A press's `confirm` argument lifts a confirm for that call only:
 the next call is refused again.
 
 Input with no target (`browser_keyboard`, and `browser_send_key` /
@@ -341,7 +345,10 @@ lands on:
 
 - Enter, Space or NumpadEnter (with any modifiers) on a button-like
   control (it can be clicked or toggled and takes no text) presses it: its
-  label is checked.
+  label is checked. Enter on a checkbox or radio is the exception: Chrome
+  submits its form (pinned live), so the form rule below applies, and the
+  box's own label only when it is in no form. Space on a box toggles it:
+  its own label.
 - Enter in a field (or another form control) submits its form, which
   presses the form's first submit button: that button's accessible name
   (`aria-labelledby`, then `aria-label`, then its text or value, as the
@@ -350,10 +357,21 @@ lands on:
   evidence. A form with no submit button still submits on Enter when at
   most one of its fields blocks implicit submission (text, search, url,
   tel, email, password, number, date / time inputs): that refuses with the
-  label `(form submit)`, as does form evidence observe could not read;
-  confirm that label to send it. A field in no form, a button-less form
-  with two or more such fields, a text area and a select submit nothing.
+  label `(form submit)`, as do a submit button with no name (icon-only)
+  and form evidence observe could not read; confirm that label to send
+  it. A field in no form, a button-less form with two or more such fields,
+  a text area, a select, and anything that is no form control (a `div`
+  combobox, an option, a contenteditable box) submit nothing.
+- The refusal names what the input's own fresh look checked: if the page
+  changed its submit button between the caller's look and the press, the
+  label is the new one.
 - Space in a field is text, and other keys (Tab, arrows, Escape) press
-  nothing.
+  nothing. Enter (and NumpadEnter) is sent with its text `"\r"` by every
+  key tool, so it fires `keypress` and really submits a field's form.
+
+In `browser_keyboard`, insert mode sends no keys, so nothing in it is a
+press; in type mode, with confirm patterns set, an Enter anywhere after a
+Tab, or a Space right after one (`"\t "`), refuses `invalid_arguments`
+(the focus it lands on is not observed yet); `"Jane\tDoe Smith"` types.
 
 With no policy set these tools send their input as before.

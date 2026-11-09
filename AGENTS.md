@@ -59,20 +59,26 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    the same consume-before-press order. `Predicted` carries no fingerprint of
 >    its own; do not add a "pre-ticket check" that is not wired into a refusal.
 >    The user's `Policy` (guard `policy.rs`: allowed domains, confirm-before-press)
->    is checked by `execute_ticketed_with` on the fresh observe's URL and region
+>    is checked on the page the input starts on (a navigation the input
+>    causes is checked at the next input there), by `execute_ticketed_with`
+>    on the fresh observe's URL and region
 >    after `revalidate` and the hard gate, before mark-consumed;
 >    `execute_ticketed` runs it with an empty policy. The agent also checks it
 >    after the gate; `consume_ticket_once_checked` runs it after `revalidate`,
 >    before consume. An empty policy allows everything. A confirm applies to
 >    a press (`Policy::press_label`): the CLICK family on the target, an
 >    activating KEY (Enter / Space / NumpadEnter, any modifiers) on a
->    button-like target, and Enter in a form control, which presses its
+>    button-like target (Enter on a checkbox / radio submits its form
+>    instead), and Enter in a form control, which presses its
 >    form's implicit-submission button by its accessible name (observe's
 >    `ElementState::form` evidence; a button-less form Enter still submits,
 >    or unread evidence → `FORM_SUBMIT_UNKNOWN` refuses while any pattern is
 >    set; an activating key to an unnamed focus in the keyboard tools →
->    `UNOBSERVED_FOCUS`). Space in a field and other keys press nothing. One rule for the
->    agent, the executor's fresh re-check and the host tools.
+>    `UNOBSERVED_FOCUS`; a nameless submit button is `FORM_SUBMIT_UNKNOWN`).
+>    The executor's refusal (`ExecError::Policy { reason, label }`) names the
+>    label its fresh look checked. Space in a field and other keys press
+>    nothing. One rule for the agent, the executor's fresh re-check and the
+>    host tools.
 > 5. **Stale ≠ spent.** `WorldChanged` / `TargetChanged` / `TargetGone` are
 >    stale → discard the prediction, re-observe, decide again (bounded by
 >    `max_consecutive_stale`). `TicketConsumed` / `TicketMismatch` / gate
