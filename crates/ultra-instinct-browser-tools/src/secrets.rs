@@ -1,7 +1,7 @@
 //! Secrets never leave the tools, failing closed.
 //!
 //! A field is [`sensitive`] when it is a password / hidden / file input, a
-//! field whose label names a secret (AGENTS.md 7a: PIN, CVV, card, one-time
+//! field whose label names a secret (PIN, CVV, card, one-time
 //! code, …; `ultra_instinct_policy::is_secret_field`), or a text field whose
 //! input type observe could not read. A sensitive field's value is never
 //! printed (`browser_get_state`, `browser_get`), and text typed into one is

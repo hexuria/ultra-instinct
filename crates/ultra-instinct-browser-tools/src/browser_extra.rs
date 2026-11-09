@@ -1,4 +1,4 @@
-//! `browser_*` tools ported from vercel-labs/agent-browser, and the pieces
+//! `browser_*` tools after vercel-labs/agent-browser's verbs, and the pieces
 //! every `browser_*` call shares: JavaScript dialog tracking, the dialog
 //! hint on a failed call, and the `max_chars` output limit.
 //!

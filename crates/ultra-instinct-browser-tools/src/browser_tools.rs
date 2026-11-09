@@ -695,9 +695,9 @@ fn gated_input(
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".into()))?;
     let snapshot = bound::required_snapshot(server, arguments)?;
     let input = match input_kind {
-        // DOM-side click by default, so existing hosts see no change;
-        // `mouse: true` presses like the agent loop does: a trusted pointer
-        // at the center, which moves focus and fires pointerdown / mousedown.
+        // DOM-side click by default; `mouse: true` presses like the agent
+        // loop does: a trusted pointer at the center, which moves focus and
+        // fires pointerdown / mousedown.
         "click" if opt_bool(arguments, "mouse")? == Some(true) => Input::Click,
         "click" => Input::ScriptClick,
         "type" => Input::Type(req_str(arguments, "text")?.to_owned()),

@@ -1,5 +1,5 @@
 //! Browser settings, downloads, and network tools (`browser_set`,
-//! `browser_download`, `browser_network`), ported from agent-browser's
+//! `browser_download`, `browser_network`), after agent-browser's
 //! `set` / `download` / `network` verbs.
 //!
 //! Settings are plain CDP on the session's tab (`Emulation.*`, `Network.*`).

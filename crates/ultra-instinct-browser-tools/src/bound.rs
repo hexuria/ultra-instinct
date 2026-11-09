@@ -11,8 +11,8 @@
 //! and nothing is pressed. Focus is the one world fact taken from the page
 //! now: the caller's own typing moves it between `get_state` and the press.
 //!
-//! Without `snapshot` an index resolves on a fresh observation, as before,
-//! unless the host requires snapshots ([`BrowserHost::require_snapshot`]).
+//! Without `snapshot` an index resolves on a fresh observation, unless the
+//! host requires snapshots ([`BrowserHost::require_snapshot`]).
 
 use std::ops::Deref;
 use std::rc::Rc;
