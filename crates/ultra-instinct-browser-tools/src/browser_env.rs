@@ -26,6 +26,7 @@ use std::time::Duration;
 use serde_json::{json, Map, Value};
 use ultra_instinct_cdp::{CdpEvent, DEFAULT_CDP_HTTP};
 
+use crate::args::{opt_bool, req_str};
 use crate::error::ToolError;
 use crate::host::{endpoint_of, keep, session_key, BrowserHost, Downloads, LiveSession};
 
@@ -195,26 +196,6 @@ pub(crate) fn call(
 
 fn bad(message: impl Into<String>) -> ToolError {
     ToolError::InvalidArguments(message.into())
-}
-
-fn opt_str<'a>(arguments: &'a Value, key: &str) -> Result<Option<&'a str>, ToolError> {
-    match arguments.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s.as_str())),
-        Some(other) => Err(bad(format!("`{key}` must be a string, got {other}"))),
-    }
-}
-
-fn req_str<'a>(arguments: &'a Value, key: &str) -> Result<&'a str, ToolError> {
-    opt_str(arguments, key)?.ok_or_else(|| bad(format!("missing required `{key}`")))
-}
-
-fn opt_bool(arguments: &Value, key: &str) -> Result<Option<bool>, ToolError> {
-    match arguments.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Bool(b)) => Ok(Some(*b)),
-        Some(other) => Err(bad(format!("`{key}` must be a boolean, got {other}"))),
-    }
 }
 
 fn opt_u64(arguments: &Value, key: &str) -> Result<Option<u64>, ToolError> {

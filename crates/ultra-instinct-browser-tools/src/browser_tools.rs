@@ -27,6 +27,7 @@ use ultra_instinct_guard::{
 };
 use ultra_instinct_protocol::GuardReason;
 
+use crate::args::{browser_err, opt_bool, opt_str, opt_usize, req_str};
 use crate::bound::{self, at_index};
 use crate::error::ToolError;
 use crate::host::{endpoint_of, keep, session_key, BrowserHost};
@@ -123,37 +124,6 @@ pub(crate) fn call(
     }
 }
 
-fn opt_str<'a>(arguments: &'a Value, key: &str) -> Result<Option<&'a str>, ToolError> {
-    match arguments.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s.as_str())),
-        Some(other) => Err(ToolError::InvalidArguments(format!(
-            "`{key}` must be a string, got {other}"
-        ))),
-    }
-}
-
-fn req_str<'a>(arguments: &'a Value, key: &str) -> Result<&'a str, ToolError> {
-    opt_str(arguments, key)?
-        .ok_or_else(|| ToolError::InvalidArguments(format!("missing required `{key}`")))
-}
-
-fn opt_usize(arguments: &Value, key: &str) -> Result<Option<usize>, ToolError> {
-    match arguments.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Number(n)) => n
-            .as_u64()
-            .map(|v| usize::try_from(v).unwrap_or(usize::MAX))
-            .map(Some)
-            .ok_or_else(|| {
-                ToolError::InvalidArguments(format!("`{key}` must be a non-negative integer"))
-            }),
-        Some(other) => Err(ToolError::InvalidArguments(format!(
-            "`{key}` must be a non-negative integer, got {other}"
-        ))),
-    }
-}
-
 /// A 1-based element index: `5`, `"5"`, or the `@e5` ref the text state prints.
 fn opt_index(arguments: &Value, key: &str) -> Result<Option<usize>, ToolError> {
     match arguments.get(key) {
@@ -181,20 +151,6 @@ fn opt_f64(arguments: &Value, key: &str) -> Result<Option<f64>, ToolError> {
             "`{key}` must be a number, got {other}"
         ))),
     }
-}
-
-fn opt_bool(arguments: &Value, key: &str) -> Result<Option<bool>, ToolError> {
-    match arguments.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Bool(b)) => Ok(Some(*b)),
-        Some(other) => Err(ToolError::InvalidArguments(format!(
-            "`{key}` must be a boolean, got {other}"
-        ))),
-    }
-}
-
-fn browser_err(err: impl ToString) -> ToolError {
-    ToolError::Browser(err.to_string())
 }
 
 /// Refuse a navigation the policy does not allow, before any CDP call.

@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+mod args;
 mod bound;
 mod browser_env;
 mod browser_extra;

@@ -35,6 +35,7 @@ use ultra_instinct_cdp::{CdpError, CdpEvent, DEFAULT_CDP_HTTP};
 use ultra_instinct_core::{Action, InteractionManifold, InteractionRegion, RegionId, Role};
 use ultra_instinct_guard::{consume_ticket_once_checked, gate, gate_check};
 
+use crate::args::{browser_err, opt_bool, opt_str, opt_usize};
 use crate::bound::{self, at_index};
 use crate::browser_tools::interactive_index;
 use crate::error::ToolError;
@@ -913,45 +914,6 @@ pub(crate) fn index_arg(arguments: &Value) -> Result<usize, ToolError> {
         Some(index) if index > 0 => Ok(index),
         _ => Err(bad(&arguments["index"])),
     }
-}
-
-fn opt_str<'a>(arguments: &'a Value, key: &str) -> Result<Option<&'a str>, ToolError> {
-    match arguments.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s.as_str())),
-        Some(other) => Err(ToolError::InvalidArguments(format!(
-            "`{key}` must be a string, got {other}"
-        ))),
-    }
-}
-
-fn opt_bool(arguments: &Value, key: &str) -> Result<Option<bool>, ToolError> {
-    match arguments.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Bool(b)) => Ok(Some(*b)),
-        Some(other) => Err(ToolError::InvalidArguments(format!(
-            "`{key}` must be a boolean, got {other}"
-        ))),
-    }
-}
-
-fn opt_usize(arguments: &Value, key: &str) -> Result<Option<usize>, ToolError> {
-    match arguments.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Number(n)) => n
-            .as_u64()
-            .map(|v| Some(usize::try_from(v).unwrap_or(usize::MAX)))
-            .ok_or_else(|| {
-                ToolError::InvalidArguments(format!("`{key}` must be a non-negative integer"))
-            }),
-        Some(other) => Err(ToolError::InvalidArguments(format!(
-            "`{key}` must be a non-negative integer, got {other}"
-        ))),
-    }
-}
-
-fn browser_err(err: impl ToString) -> ToolError {
-    ToolError::Browser(err.to_string())
 }
 
 /// Tool specs: this module's tools, and `max_chars` / `annotate` on the
