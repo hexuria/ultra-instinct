@@ -522,6 +522,9 @@ fn element_from(node: &Value, listener: bool, hidden: &BTreeSet<u32>) -> Option<
             aria,
             listener || attribute_click_hint(&attributes),
         )
+    } else if name.eq_ignore_ascii_case("TEXTAREA") {
+        // A text area's own text is its value: it never names the field.
+        aria.unwrap_or_default()
     } else {
         aria.unwrap_or_else(|| direct_text(node))
     };
@@ -1339,6 +1342,16 @@ mod pierce_tests {
         let doc = dom_document(json).unwrap();
         let kept: Vec<i64> = doc.elements.iter().map(|e| e.node_id).collect();
         assert_eq!(kept, [2, 5, 6], "the button's svg and path are not kept");
+    }
+
+    #[test]
+    fn a_text_area_is_never_named_by_its_own_text() {
+        let json = r##"{"root": {"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document",
+          "children": [{"nodeId": 2, "backendNodeId": 2, "nodeType": 1, "nodeName": "TEXTAREA", "attributes": [],
+            "children": [{"nodeId": 3, "backendNodeId": 3, "nodeType": 3, "nodeName": "#text", "nodeValue": "hunter2"}]}]}}"##;
+        let doc = dom_document(json).unwrap();
+        assert_eq!(doc.elements.len(), 1);
+        assert_eq!(doc.elements[0].label, "", "its value names nothing");
     }
 
     #[test]

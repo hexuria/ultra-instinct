@@ -327,6 +327,8 @@ pub struct Agent<B, P, T = DeterministicTextResolver> {
     guard_policy: Policy,
     /// The policy refusal that ended the run BLOCKED, with the target label.
     policy_refusal: Option<(GuardReason, String)>,
+    /// [`Agent::run`] stops here, checked between steps.
+    deadline: Option<std::time::Instant>,
 }
 
 /// Where and into what a successful TYPE_TEXT step typed.
@@ -347,6 +349,7 @@ pub struct AgentBuilder<B, P, T = DeterministicTextResolver> {
     max_wait_polls: u32,
     max_wait: std::time::Duration,
     guard_policy: Policy,
+    deadline: Option<std::time::Instant>,
 }
 
 impl<B, P> AgentBuilder<B, P, DeterministicTextResolver> {
@@ -362,6 +365,7 @@ impl<B, P> AgentBuilder<B, P, DeterministicTextResolver> {
             max_wait_polls: DEFAULT_WAIT_POLLS,
             max_wait: DEFAULT_MAX_WAIT,
             guard_policy: Policy::default(),
+            deadline: None,
         }
     }
 }
@@ -379,7 +383,16 @@ impl<B, P, T> AgentBuilder<B, P, T> {
             max_wait_polls: self.max_wait_polls,
             max_wait: self.max_wait,
             guard_policy: self.guard_policy,
+            deadline: self.deadline,
         }
+    }
+
+    /// [`Agent::run`] ends FAILED (`deadline exceeded`) once this instant
+    /// passes, checked between steps (a step under way finishes). Default:
+    /// none.
+    pub fn deadline(mut self, at: std::time::Instant) -> Self {
+        self.deadline = Some(at);
+        self
     }
 
     /// The user's policy: allowed domains and confirm-before-press. A
@@ -484,6 +497,7 @@ impl<B, P, T> AgentBuilder<B, P, T> {
             late_effect: false,
             guard_policy: self.guard_policy,
             policy_refusal: None,
+            deadline: self.deadline,
         };
         agent.journal.push(JournalEvent::Run {
             goal: goal_text,
@@ -1601,10 +1615,20 @@ where
         let started = std::time::Instant::now();
         let mut seen = self.history.len();
         loop {
-            if self.steps_taken >= self.max_steps {
+            let over = if self.steps_taken >= self.max_steps {
+                Some(AgentError::MaxSteps)
+            } else if self
+                .deadline
+                .is_some_and(|at| std::time::Instant::now() >= at)
+            {
+                Some(AgentError::DeadlineExceeded)
+            } else {
+                None
+            };
+            if let Some(error) = over {
                 let outcome = AgentOutcome::Failed {
                     steps: self.history.clone(),
-                    error: AgentError::MaxSteps.to_string(),
+                    error: error.to_string(),
                 };
                 self.finish_journal(outcome.clone(), started);
                 return outcome;

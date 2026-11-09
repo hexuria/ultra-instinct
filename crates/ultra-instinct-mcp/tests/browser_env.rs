@@ -448,6 +448,52 @@ fn download_presses_through_the_ticket_and_waits_for_completed() {
     let _ = std::fs::remove_dir_all(out_dir);
 }
 
+/// The download's press is a click: with an allow-list, `browser_download`
+/// also needs `browser_click`, else `tool_not_allowed` (naming the click)
+/// before any CDP call. With the click allowed too, it downloads.
+#[test]
+fn download_needs_the_click_on_the_allow_list() {
+    let out_dir = scratch("download-allow");
+    let dest = out_dir.join("report.pdf");
+    let (server, calls) = server_with(ScriptBuilder::new(), Box::new(|_, _| Vec::new()));
+    let mut server = server.with_tool_allowlist(["browser_get_state", "browser_download"]);
+    let err = server
+        .call_tool(
+            "browser_download",
+            &json!({"cdp": CDP, "index": 2, "path": dest.to_str().unwrap()}),
+        )
+        .unwrap_err();
+    assert_eq!(
+        err,
+        ToolError::ToolNotAllowed {
+            tool: "browser_click".into()
+        }
+    );
+    assert!(calls.borrow().is_empty(), "{:?}", methods(&calls));
+
+    let dir_seen = Rc::new(RefCell::new(None));
+    let (server, calls) = server_with(
+        ScriptBuilder::new()
+            .call("Browser.setDownloadBehavior", json!({}))
+            .observe_compact(&page())
+            .observe_compact(&page())
+            .dom_click(11)
+            .call("Browser.getVersion", json!({}))
+            .call("Browser.setDownloadBehavior", json!({})),
+        download_hook(1, Rc::clone(&dir_seen)),
+    );
+    let mut server =
+        server.with_tool_allowlist(["browser_get_state", "browser_download", "browser_click"]);
+    let out = call(
+        &mut server,
+        "browser_download",
+        json!({"cdp": CDP, "index": 2, "path": dest.to_str().unwrap()}),
+    );
+    assert_eq!(out["bytes"], 5, "{out}");
+    assert_eq!(presses(&calls), 1);
+    let _ = std::fs::remove_dir_all(out_dir);
+}
+
 #[test]
 fn download_times_out_cleanly_and_restores_behavior() {
     let out_dir = scratch("download-timeout");
@@ -501,7 +547,9 @@ fn download_on_a_drifted_page_refuses_without_pressing() {
             &json!({"cdp": CDP, "index": 2, "path": dest.to_str().unwrap()}),
         )
         .unwrap_err();
-    assert!(matches!(err, ToolError::TicketInvalid(_)), "{err:?}");
+    // A drifted page is a stale ref (sent as `TicketInvalid`, as before).
+    assert!(matches!(err, ToolError::StaleRef { .. }), "{err:?}");
+    assert_eq!(err.to_value()["variant"], "TicketInvalid");
     assert_eq!(presses(&calls), 0, "{:?}", methods(&calls));
     assert!(params_of(&calls, "Browser.getVersion").is_empty());
     assert_eq!(
@@ -824,4 +872,84 @@ fn env_tools_are_listed_with_schemas() {
             .unwrap()
             .is_empty());
     }
+}
+
+/// A [`Wire`] whose `n`-th `method` call times out (typed) instead.
+struct TimesOutOn {
+    wire: Wire,
+    method: &'static str,
+    n: usize,
+}
+
+impl CdpTransport for TimesOutOn {
+    fn call(&mut self, method: &str, params_json: &str) -> Result<String, CdpError> {
+        if method == self.method {
+            self.n -= 1;
+            if self.n == 0 {
+                return Err(CdpError::Timeout {
+                    method: method.to_owned(),
+                    after: std::time::Duration::from_secs(30),
+                });
+            }
+        }
+        self.wire.call(method, params_json)
+    }
+
+    fn drain_events(&mut self) -> Vec<CdpEvent> {
+        self.wire.drain_events()
+    }
+}
+
+/// The download fails on its own (canceled) and the best-effort restore
+/// after it times out: the call reports the download's own error, not the
+/// restore's typed timeout.
+#[test]
+fn a_failed_download_reports_its_own_error_when_the_restore_times_out() {
+    let out_dir = scratch("download-canceled");
+    let dest = out_dir.join("never.pdf");
+    let script = ScriptBuilder::new()
+        .call("Browser.setDownloadBehavior", json!({}))
+        .observe_compact(&page())
+        .observe_compact(&page())
+        .dom_click(11)
+        .call("Browser.getVersion", json!({}));
+    let hook: Hook = Box::new(|method, _| match method {
+        "Runtime.callFunctionOn" => vec![event(
+            "Browser.downloadWillBegin",
+            json!({"guid": "g-1", "url": "http://127.0.0.1/r.pdf", "suggestedFilename": "r.pdf"}),
+        )],
+        "Browser.getVersion" => vec![event(
+            "Browser.downloadProgress",
+            json!({"guid": "g-1", "state": "canceled"}),
+        )],
+        _ => Vec::new(),
+    });
+    let mut parts = Some((script, hook));
+    let mut server = Server::with_connector(move |_url| {
+        let (script, hook) = parts.take().ok_or_else(|| CdpError::Transport {
+            message: "one connect per test".into(),
+        })?;
+        Ok(Box::new(TimesOutOn {
+            wire: Wire {
+                inner: ReplayTransport::parse(&script.to_json())?,
+                calls: Rc::default(),
+                pending: Vec::new(),
+                hook,
+            },
+            method: "Browser.setDownloadBehavior",
+            n: 2,
+        }) as Box<dyn CdpTransport>)
+    });
+    let err = server
+        .call_tool(
+            "browser_download",
+            &json!({"cdp": CDP, "index": 2, "path": dest.to_str().unwrap(), "timeout_ms": 200}),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&err, ToolError::Browser(m) if m == "download was canceled"),
+        "{err:?}"
+    );
+    assert_eq!(err.code(), "browser");
+    let _ = std::fs::remove_dir_all(out_dir);
 }

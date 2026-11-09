@@ -1818,3 +1818,28 @@ fn domain_off_the_allowlist_ends_blocked() {
     }
     assert!(agent.browser_mut().input_log().is_empty());
 }
+
+/// A passed deadline ends the run FAILED before the next step, with nothing
+/// pressed; no deadline (the default) changes nothing.
+#[test]
+fn a_passed_deadline_ends_the_run_between_steps() {
+    let page = manifold(
+        r#"
+        viewport w=800 h=600
+        region id=go role=button label="Continue" x=10 y=10 w=80 h=24 actions=click sources=dom,accessibility
+        "#,
+    );
+    let mut agent = AgentBuilder::new(MockBrowser::new(page.clone()), InstinctPolicy::default())
+        .max_steps(5)
+        .deadline(std::time::Instant::now())
+        .build("Continue");
+    let outcome = agent.run();
+    assert_eq!(
+        outcome,
+        AgentOutcome::Failed {
+            steps: Vec::new(),
+            error: "deadline exceeded".into()
+        }
+    );
+    assert!(agent.browser().press_log().is_empty());
+}

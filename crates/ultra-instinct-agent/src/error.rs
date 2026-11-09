@@ -17,6 +17,8 @@ pub enum AgentError {
     Text(String),
     InvalidState(&'static str),
     MaxSteps,
+    /// The run's deadline passed (checked between steps).
+    DeadlineExceeded,
     MaxPolicyCalls,
     /// Consecutive stale discards hit the bound (page never settles).
     TooManyStale(u32),
@@ -41,6 +43,7 @@ impl fmt::Display for AgentError {
             Self::Text(m) => write!(f, "text: {m}"),
             Self::InvalidState(m) => write!(f, "invalid state: {m}"),
             Self::MaxSteps => f.write_str("max steps exceeded"),
+            Self::DeadlineExceeded => f.write_str("deadline exceeded"),
             Self::MaxPolicyCalls => f.write_str("max policy calls exceeded"),
             Self::TooManyStale(n) => write!(f, "{n} consecutive stale predictions"),
             Self::PolicyRefused { reason, label } => {

@@ -6,6 +6,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::rc::Rc;
 
 use serde_json::{json, Value};
 use ultra_instinct_browser::{
@@ -105,8 +106,12 @@ fn observe(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let (snapshot, raw, page) = observe_origin(server, &resolve_origin(arguments)?)?;
     // State as a person sees it: regions behind an open dialog read occluded.
     let manifold = with_front_layer(&raw);
+    // The host's element cap (`ToolLimits::max_elements`) bounds the list.
+    let max = Host(server).limits().max_elements;
+    let dropped = manifold.regions().count().saturating_sub(max);
     let regions: Vec<Value> = manifold
         .regions()
+        .take(max)
         .map(|region| {
             json!({
                 "id": region.id().as_str(),
@@ -133,6 +138,10 @@ fn observe(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     insert(&mut body, "focused", focused);
     insert(&mut body, "front_layer", front_layer);
     insert(&mut body, "snapshot", json!(snapshot.get()));
+    if dropped > 0 {
+        insert(&mut body, "truncated", json!(true));
+        insert(&mut body, "dropped_regions", json!(dropped));
+    }
     Ok(body)
 }
 
@@ -160,10 +169,21 @@ fn guard_tool(server: &mut Server, arguments: &Value) -> Result<Value, ToolError
     };
     // The observation the host decided on. Its world snapshot (focus, dialogs,
     // clickable ids, occluded set) is compared with the world observed now.
+    // Recorded by observe / guard on this origin, or by `browser_get_state`
+    // on the tab this endpoint drives.
+    let state_origin = match &origin {
+        Origin::Cdp(url) => Some(ultra_instinct_browser_tools::state_origin(
+            &Host(server),
+            url,
+        )),
+        Origin::Fixture(_) => None,
+    };
     let seen = match opt_snapshot(arguments, "seen_snapshot")? {
         Some(id) => {
             let seen = server.snapshot(id)?;
-            if seen.origin != origin_key(&origin) {
+            if seen.origin != origin_key(&origin)
+                && state_origin.as_deref() != Some(seen.origin.as_str())
+            {
                 return Err(ToolError::InvalidArguments(format!(
                     "seen_snapshot {id} was observed from {}, not {}",
                     seen.origin,
@@ -527,21 +547,36 @@ fn origin_key(origin: &Origin) -> String {
 fn observe_origin(
     server: &mut Server,
     origin: &Origin,
-) -> Result<(SnapshotId, InteractionManifold, PageState), ToolError> {
+) -> Result<(SnapshotId, Rc<InteractionManifold>, PageState), ToolError> {
     let (manifold, page) = match origin {
         Origin::Fixture(path) => load_observation(path)?,
         Origin::Cdp(url) => {
             let mut session = Host(server).take_session(url)?;
-            let manifold = session
-                .observe()
-                .cloned()
-                .map_err(|err| ToolError::Browser(err.to_string()))?;
+            let manifold = match session.observe().cloned() {
+                Ok(manifold) => manifold,
+                Err(err) => {
+                    // The session is dropped, but a dialog it saw still
+                    // names itself in the error (`fill_dialog`).
+                    let events = session.transport_mut().drain_events();
+                    if !events.is_empty() {
+                        Host(server).push_events(url, events);
+                    }
+                    return Err(ToolError::Browser(err.to_string()));
+                }
+            };
             let page = session.page().cloned().unwrap_or_else(PageState::blank);
             Host(server).keep_session(url, session);
             (manifold, page)
         }
     };
-    let id = Host(server).record(&origin_key(origin), manifold.clone(), page.clone());
+    let manifold = Rc::new(manifold);
+    // observe / guard / verify snapshots are not index-bound (`shown` is moot).
+    let id = Host(server).record(
+        &origin_key(origin),
+        Rc::clone(&manifold),
+        page.clone(),
+        usize::MAX,
+    );
     Ok((id, manifold, page))
 }
 

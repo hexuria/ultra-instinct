@@ -18,6 +18,7 @@ use ultra_instinct_browser::storage_state::{
 };
 use ultra_instinct_cdp::DEFAULT_CDP_HTTP;
 
+use crate::args::{opt_bool, opt_str, req_str};
 use crate::error::ToolError;
 use crate::host::{BrowserHost, LiveSession};
 
@@ -40,6 +41,12 @@ pub(crate) fn call(
 ) -> Option<Result<Value, ToolError>> {
     if !STATE_TOOLS.contains(&name) {
         return None;
+    }
+    // A state file path is the caller's, and absolute.
+    if matches!(name, "browser_state_save" | "browser_state_load") {
+        if let Err(err) = req_str(arguments, "path").and_then(crate::host::absolute_path) {
+            return Some(Err(err));
+        }
     }
     Some(with_session(server, arguments, |session| match name {
         "browser_state_save" => state_save(session, arguments),
@@ -67,26 +74,6 @@ fn with_session(
     }
     server.keep_session(&key, session);
     outcome
-}
-
-fn opt_str<'a>(arguments: &'a Value, key: &str) -> Result<Option<&'a str>, ToolError> {
-    match arguments.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s.as_str())),
-        Some(other) => Err(invalid(format!("`{key}` must be a string, got {other}"))),
-    }
-}
-
-fn req_str<'a>(arguments: &'a Value, key: &str) -> Result<&'a str, ToolError> {
-    opt_str(arguments, key)?.ok_or_else(|| invalid(format!("missing required `{key}`")))
-}
-
-fn opt_bool(arguments: &Value, key: &str) -> Result<Option<bool>, ToolError> {
-    match arguments.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Bool(b)) => Ok(Some(*b)),
-        Some(other) => Err(invalid(format!("`{key}` must be a boolean, got {other}"))),
-    }
 }
 
 fn invalid(message: String) -> ToolError {

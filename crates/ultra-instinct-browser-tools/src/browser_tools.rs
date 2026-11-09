@@ -15,25 +15,25 @@
 use serde_json::{json, Value};
 
 use ultra_instinct_agent::{
-    classify_delta, classify_value, execute_ticketed_with, BrowserRuntime, ExecError, Input,
+    classify_delta, classify_value, execute_ticketed_with, AgentError, BeforeDispatch,
+    BrowserRuntime, Input,
 };
 use ultra_instinct_browser::BrowserError;
-use ultra_instinct_cdp::{
-    activate_target, close_target, create_target, page_targets, DEFAULT_CDP_HTTP,
-};
+use ultra_instinct_cdp::DEFAULT_CDP_HTTP;
 use ultra_instinct_core::{
     Action, ActionSpace, InteractionManifold, InteractionRegion, RegionId, Role,
 };
 use ultra_instinct_guard::{
-    check_drop_target, consume_ticket_once_checked, gate, gate_drag, host_of, ConsumeError, Policy,
+    check_drop_target, consume_ticket_once_checked, gate, gate_check, gate_drag,
 };
 use ultra_instinct_protocol::GuardReason;
 
+use crate::args::{browser_err, opt_bool, opt_str, opt_usize, req_str};
+use crate::bound::{self, at_index};
 use crate::error::ToolError;
 use crate::host::{endpoint_of, keep, session_key, BrowserHost};
-
-/// Longest a `browser_wait` sleeps, whatever the argument says.
-const MAX_WAIT_SECS: u64 = 60;
+use crate::press::{consume_error, exec_error, press_policy, refusal_for, refused};
+use ultra_instinct_cdp::PageTab;
 
 /// All `browser_*` tool names this module serves.
 pub const BROWSER_TOOLS: [&str; 37] = [
@@ -114,7 +114,7 @@ pub(crate) fn call(
         "browser_search" => search(server, arguments),
         "browser_zoom" => zoom(server, arguments),
         "browser_find" => find(server, arguments),
-        "browser_list_tabs" => list_tabs(arguments),
+        "browser_list_tabs" => list_tabs(server, arguments),
         "browser_switch_tab" => switch_tab(server, arguments),
         "browser_close_tab" => close_tab(server, arguments),
         "browser_exec" | "browser_javascript_exec" => exec(server, arguments),
@@ -122,37 +122,6 @@ pub(crate) fn call(
         "browser_read_console" => read_console(server, arguments),
         "browser_read_network" => read_network(server, arguments),
         other => Err(ToolError::UnknownTool(other.to_owned())),
-    }
-}
-
-fn opt_str<'a>(arguments: &'a Value, key: &str) -> Result<Option<&'a str>, ToolError> {
-    match arguments.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) => Ok(Some(s.as_str())),
-        Some(other) => Err(ToolError::InvalidArguments(format!(
-            "`{key}` must be a string, got {other}"
-        ))),
-    }
-}
-
-fn req_str<'a>(arguments: &'a Value, key: &str) -> Result<&'a str, ToolError> {
-    opt_str(arguments, key)?
-        .ok_or_else(|| ToolError::InvalidArguments(format!("missing required `{key}`")))
-}
-
-fn opt_usize(arguments: &Value, key: &str) -> Result<Option<usize>, ToolError> {
-    match arguments.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Number(n)) => n
-            .as_u64()
-            .map(|v| usize::try_from(v).unwrap_or(usize::MAX))
-            .map(Some)
-            .ok_or_else(|| {
-                ToolError::InvalidArguments(format!("`{key}` must be a non-negative integer"))
-            }),
-        Some(other) => Err(ToolError::InvalidArguments(format!(
-            "`{key}` must be a non-negative integer, got {other}"
-        ))),
     }
 }
 
@@ -183,68 +152,6 @@ fn opt_f64(arguments: &Value, key: &str) -> Result<Option<f64>, ToolError> {
             "`{key}` must be a number, got {other}"
         ))),
     }
-}
-
-fn opt_bool(arguments: &Value, key: &str) -> Result<Option<bool>, ToolError> {
-    match arguments.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Bool(b)) => Ok(Some(*b)),
-        Some(other) => Err(ToolError::InvalidArguments(format!(
-            "`{key}` must be a boolean, got {other}"
-        ))),
-    }
-}
-
-fn browser_err(err: impl ToString) -> ToolError {
-    ToolError::Browser(err.to_string())
-}
-
-/// Executor failures: ticket/gate refusals are `TicketInvalid` (not stale,
-/// never silently retried); observe/dispatch/page-rejection are `Browser`.
-fn exec_error(err: ExecError) -> ToolError {
-    match err {
-        ExecError::Ticket(_) | ExecError::Gate(_) => ToolError::TicketInvalid(err.to_string()),
-        ExecError::Observe(_) | ExecError::Rejected(_) | ExecError::Dispatch(_) => browser_err(err),
-        other => browser_err(other),
-    }
-}
-
-/// Host-side consume failures: invalid lease → `TicketInvalid`, page-side
-/// press failure → `Browser` (the ticket is already consumed either way).
-fn consume_error(err: ConsumeError<BrowserError>) -> ToolError {
-    match err {
-        ConsumeError::Invalid(_) => ToolError::TicketInvalid(err.to_string()),
-        ConsumeError::Refused(reason) => refused(reason, ""),
-        ConsumeError::Press(e) => browser_err(e),
-        other => browser_err(other),
-    }
-}
-
-/// A policy refusal as the tool error a host matches on (not stale; a
-/// retry gets the same answer): `needs-confirm: "Pay $18"` (the label is a
-/// JSON string; pass it back as `confirm`) or `domain-not-allowed: <host>`.
-fn refused(reason: GuardReason, label_or_url: &str) -> ToolError {
-    let detail = match reason {
-        GuardReason::NeedsConfirm => Value::String(label_or_url.to_owned()).to_string(),
-        GuardReason::DomainNotAllowed => {
-            host_of(label_or_url).unwrap_or_else(|| label_or_url.to_owned())
-        }
-        _ => label_or_url.to_owned(),
-    };
-    if detail.is_empty() {
-        ToolError::TicketInvalid(reason.to_string())
-    } else {
-        ToolError::TicketInvalid(format!("{reason}: {detail}"))
-    }
-}
-
-/// The server's policy plus this call's `confirm` label, if any.
-fn press_policy(server: &dyn BrowserHost, arguments: &Value) -> Result<Policy, ToolError> {
-    let policy = server.policy()?.clone();
-    Ok(match opt_str(arguments, "confirm")? {
-        Some(label) => policy.with_confirmed(label),
-        None => policy,
-    })
 }
 
 /// Refuse a navigation the policy does not allow, before any CDP call.
@@ -287,11 +194,14 @@ fn new_tab(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, Too
 
 /// Create the target, point this endpoint's session at it, keep it.
 fn new_tab_at(server: &mut dyn BrowserHost, endpoint: &str, url: &str) -> Result<Value, ToolError> {
-    let target = create_target(endpoint, url, true).map_err(browser_err)?;
-    server.set_current_tab(endpoint, &target.ws_url);
-    let mut session = take(server, &target.ws_url)?;
+    let target = server
+        .backend()
+        .create_page(endpoint, url)
+        .map_err(|err| ToolError::cdp(&err))?;
+    server.set_current_tab(endpoint, &target.key);
+    let mut session = take(server, &target.key)?;
     let _ = session.ready_state();
-    keep(server, &target.ws_url, session);
+    keep(server, &target.key, session);
     Ok(json!({
         "tab_id": target.target_id,
         "url": url,
@@ -456,7 +366,8 @@ fn wait(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolEr
     let until = WaitFor::parse(arguments)?;
     let default = if until.is_some() { 10.0 } else { 3.0 };
     let seconds = opt_f64(arguments, "seconds")?.unwrap_or(default);
-    let seconds = seconds.clamp(0.0, MAX_WAIT_SECS as f64);
+    // Capped at the host's `max_wait` (default 60 s).
+    let seconds = seconds.clamp(0.0, server.limits().max_wait.as_secs_f64());
     let Some(until) = until else {
         std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
         return Ok(json!({"waited": seconds}));
@@ -517,14 +428,19 @@ pub(crate) fn interactive_index(manifold: &InteractionManifold) -> Vec<RegionId>
 
 fn element_json(index: usize, region: &InteractionRegion) -> Value {
     let rect = region.rect();
-    json!({
+    let mut element = json!({
         "index": index,
         "region": region.id().as_str(),
         "role": region.role().to_string(),
         "label": region.label(),
         "actions": region.actions().iter().map(|a| a.to_string()).collect::<Vec<_>>(),
         "rect": {"x": rect.x(), "y": rect.y(), "w": rect.width(), "h": rect.height()},
-    })
+        "sensitive": crate::secrets::sensitive(region),
+    });
+    if let Some(kind) = region.state().input_type.as_deref() {
+        element["input_type"] = json!(kind);
+    }
+    element
 }
 
 fn get_state(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
@@ -548,53 +464,111 @@ fn get_state(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, T
             .manifold()
             .cloned()
             .ok_or_else(|| browser_err(BrowserError::NotObserved))?;
-        Ok::<_, ToolError>((page, manifold))
+        Ok::<_, ToolError>((page, std::rc::Rc::new(manifold)))
     })();
     keep(server, &key, session);
     let (page, manifold) = observed?;
-    let order = interactive_index(&manifold);
-    if text {
-        let snapshot = server.record(
-            &format!("cdp:{endpoint}"),
-            manifold.clone(),
+    let mut order = interactive_index(&manifold);
+    let limits = server.limits();
+    let dropped = order.len().saturating_sub(limits.max_elements);
+    order.truncate(limits.max_elements);
+    // Recorded in both formats: index presses may pass this `snapshot` to
+    // act on what this call printed, or refuse.
+    let snapshot = server
+        .record(
+            &bound::origin(&key),
+            std::rc::Rc::clone(&manifold),
             page.clone()
                 .unwrap_or_else(ultra_instinct_browser::PageState::blank),
-        );
-        let body = crate::page_text::page_text(page.as_ref(), &manifold, &order, snapshot.get());
-        return Ok(json!({"format": "text", "text": body}));
+            order.len(),
+        )
+        .get();
+    if text {
+        let mut body = crate::page_text::page_text(page.as_ref(), &manifold, &order, snapshot);
+        if dropped > 0 {
+            body.push_str(&format!(
+                "\n… {dropped} more controls not shown (max_elements)"
+            ));
+        }
+        let cut = crate::browser_extra::truncate_output(&body, limits.max_state_chars);
+        let truncated = dropped > 0 || cut.len() != body.len();
+        let mut out = json!({"format": "text", "text": cut, "snapshot": snapshot});
+        if truncated {
+            out["truncated"] = json!(true);
+            out["dropped_elements"] = json!(dropped);
+        }
+        return Ok(out);
     }
     let elements: Vec<Value> = order
         .iter()
         .enumerate()
         .filter_map(|(i, id)| manifold.get(id).map(|r| element_json(i + 1, r)))
         .collect();
-    Ok(json!({
+    let mut out = json!({
         "url": page.as_ref().and_then(|p| p.url().map(str::to_owned)),
         "title": page.as_ref().and_then(|p| p.title().map(str::to_owned)),
         "interactive_elements": elements.len(),
         "elements": elements,
-    }))
+        "snapshot": snapshot,
+    });
+    if dropped > 0 {
+        out["truncated"] = json!(true);
+        out["dropped_elements"] = json!(dropped);
+    }
+    Ok(out)
 }
 
 fn get_html(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
+    // A copy without text inputs' `value` attributes (crate::secrets).
+    let max = server.limits().max_text_chars;
     let outcome = session
-        .outer_html()
-        .map(|html| json!({"html": html}))
+        .evaluate(&capped_js(crate::secrets::SAFE_HTML_JS, max))
+        .map(|html| capped_body("html", &html))
         .map_err(browser_err);
     keep(server, &key, session);
     outcome
+}
+
+/// `expression`'s text cut to `max` UTF-16 units in the page (never inside
+/// a surrogate pair), as `{t, cut}`: the cut text and how much was cut.
+/// The limit is the host's number, not caller text.
+fn capped_js(expression: &str, max: usize) -> String {
+    format!(
+        "(function(n){{var t=String({expression});if(t.length<=n)return {{t:t,cut:0}};var c=n;if(c>0){{var k=t.charCodeAt(c-1);if(k>=0xD800&&k<=0xDBFF)c--;}}return {{t:t.slice(0,c),cut:t.length-c}};}})({max})"
+    )
+}
+
+/// `{field: text}` from a [`capped_js`] value (or a plain string), with the
+/// truncation marker and `truncated: true` when the page cut it.
+fn capped_body(field: &str, value: &Value) -> Value {
+    let text = value
+        .get("t")
+        .or(Some(value))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match value.get("cut").and_then(Value::as_u64).filter(|&n| n > 0) {
+        Some(cut) => json!({
+            field: format!("{text}{}", crate::browser_extra::truncated_marker(cut as usize)),
+            "truncated": true,
+        }),
+        None => json!({ field: text }),
+    }
 }
 
 fn get_text(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
+    let max = server.limits().max_text_chars;
     let outcome = session
-        .page_text()
-        .map(|text| json!({"text": text}))
+        .evaluate(&capped_js(
+            "document.body ? document.body.innerText : ''",
+            max,
+        ))
+        .map(|text| capped_body("text", &text))
         .map_err(browser_err);
     keep(server, &key, session);
     outcome
@@ -602,19 +576,46 @@ fn get_text(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, To
 
 fn screenshot(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
+    let path = opt_str(arguments, "path")?
+        .map(crate::host::absolute_path)
+        .transpose()?;
+    let limit = server.limits().max_screenshot_bytes;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
-    let outcome = session
-        .screenshot_png()
-        .map(|png| json!({"format": "png", "base64": png}))
-        .map_err(browser_err);
+    // Over the byte cap: once more as a JPEG, then `output_too_large`.
+    // Sensitive field values are hidden around it (`capture_hidden`).
+    let outcome = crate::secrets::capture_hidden(server, &mut session, |session| {
+        let png = session.screenshot_png().map_err(browser_err)?;
+        if decoded_len(&png) <= limit {
+            return Ok(json!({"format": "png", "base64": png}));
+        }
+        let jpeg = session.screenshot_jpeg().map_err(browser_err)?;
+        match jpeg {
+            Some(jpeg) if decoded_len(&jpeg) <= limit => {
+                Ok(json!({"format": "jpeg", "base64": jpeg}))
+            }
+            other => Err(ToolError::OutputTooLarge {
+                limit,
+                bytes: decoded_len(other.as_deref().unwrap_or(&png)),
+            }),
+        }
+    });
     keep(server, &key, session);
-    save_artifact(outcome?, "base64", opt_str(arguments, "path")?)
+    save_artifact(outcome?, "base64", path)
+}
+
+/// Bytes a base64 string decodes to (padding aside).
+fn decoded_len(base64: &str) -> usize {
+    base64.len() / 4 * 3
 }
 
 /// With a `path`, writes the decoded base64 in `body[field]` there and
 /// records `path` and `bytes`. The body keeps the base64 either way.
-fn save_artifact(mut body: Value, field: &str, path: Option<&str>) -> Result<Value, ToolError> {
+fn save_artifact(
+    mut body: Value,
+    field: &str,
+    path: Option<&std::path::Path>,
+) -> Result<Value, ToolError> {
     use base64::Engine as _;
     let Some(path) = path else {
         return Ok(body);
@@ -624,7 +625,7 @@ fn save_artifact(mut body: Value, field: &str, path: Option<&str>) -> Result<Val
         .map_err(browser_err)?;
     std::fs::write(path, &bytes)
         .map_err(|err| ToolError::InvalidArguments(format!("`path` {path:?}: {err}")))?;
-    body["path"] = json!(path);
+    body["path"] = json!(path.display().to_string());
     body["bytes"] = json!(bytes.len());
     Ok(body)
 }
@@ -661,6 +662,7 @@ fn gated_input(
     let endpoint = endpoint_of(arguments)?;
     let index = opt_index(arguments, "index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".into()))?;
+    let snapshot = bound::required_snapshot(server, arguments)?;
     let input = match input_kind {
         // DOM-side click by default, so existing hosts see no change;
         // `mouse: true` presses like the agent loop does: a trusted pointer
@@ -681,16 +683,13 @@ fn gated_input(
         session.observe().map_err(browser_err)?;
         let focused = session.page().and_then(|p| p.focused().cloned());
         let url = session.page().and_then(|p| p.url().map(str::to_owned));
-        let manifold = session
+        let fresh = session
             .manifold()
             .ok_or_else(|| browser_err(BrowserError::NotObserved))?;
-        let order = interactive_index(manifold);
-        let region_id = order.get(index.wrapping_sub(1)).cloned().ok_or_else(|| {
-            ToolError::InvalidArguments(format!(
-                "no interactive element at index {index} ({} indexed)",
-                order.len()
-            ))
-        })?;
+        // The region the caller saw (with `snapshot`), else the one at
+        // `index` now; the ticket is minted on that observation.
+        let (seen, region_id) = bound::resolve(server, &key, snapshot, fresh, index)?;
+        let manifold = &seen;
         let ticket = match &input {
             // A KEY ticket binds its one key (KEY_NAMES) on a region that claims Key.
             Input::Key(name) => ultra_instinct_guard::gate_key(
@@ -709,25 +708,50 @@ fn gated_input(
             ),
         }
         .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
+        // Text for a sensitive field is masked in every output from now on
+        // (before dispatch, so a failed press does not leak it either): the
+        // field the caller saw, or the one on this observation, is
+        // sensitive. The executor's own observation is checked again at
+        // dispatch (`secrets::remember_at_dispatch`).
+        if let Input::Type(text) = &input {
+            let secret = [manifold.get(&region_id), fresh.get(&region_id)]
+                .into_iter()
+                .flatten()
+                .any(crate::secrets::sensitive);
+            if secret {
+                server.tool_state_mut().secrets.remember(text, true)?;
+            }
+        }
         // The user's policy after the gate, before the ticket is used; the
         // executor checks it again on its fresh observation.
         let label = ticket.target_label.clone();
-        if let Some(region) = manifold.get(&region_id) {
+        if let Some(region) = fresh.get(&region_id).or_else(|| manifold.get(&region_id)) {
             policy
                 .check(url.as_deref(), region, action)
                 .map_err(|reason| refusal_for(reason, &label, url.as_deref()))?;
         }
         let mut ledger = server.take_ledger(&key);
-        let executed = execute_ticketed_with(&mut session, &mut ledger, &ticket, &input, &policy);
+        // The executor's own observation decides again whether the text is
+        // a secret, just before dispatch.
+        let mut refused = None;
+        let secrets = &mut server.tool_state_mut().secrets;
+        let mut typing = BeforeDispatch {
+            inner: &mut session,
+            before: |fresh: Option<&InteractionManifold>, target: &RegionId, input: &Input| {
+                crate::secrets::remember_at_dispatch(secrets, fresh, target, input).map_err(|err| {
+                    refused = Some(err);
+                    AgentError::InputRejected("secrets_full".into())
+                })
+            },
+        };
+        let executed = execute_ticketed_with(&mut typing, &mut ledger, &ticket, &input, &policy);
         server.keep_ledger(&key, ledger);
-        let done = executed.map_err(|err| match err {
-            ExecError::Gate(
-                reason @ (GuardReason::DomainNotAllowed | GuardReason::NeedsConfirm),
-            ) => {
-                let fresh_url = session.page().and_then(|p| p.url().map(str::to_owned));
-                refusal_for(reason, &label, fresh_url.as_deref())
-            }
-            other => exec_error(other),
+        if let Some(full) = refused {
+            return Err(full);
+        }
+        let done = executed.map_err(|err| {
+            let fresh_url = session.page().and_then(|p| p.url().map(str::to_owned));
+            exec_error(err, &label, fresh_url.as_deref())
         })?;
         let mut body = json!({
             "acted": input_kind,
@@ -742,15 +766,6 @@ fn gated_input(
     })();
     keep(server, &key, session);
     outcome
-}
-
-/// [`refused`] with the right detail: the label for a confirm, the URL for
-/// a domain.
-fn refusal_for(reason: GuardReason, label: &str, url: Option<&str>) -> ToolError {
-    match reason {
-        GuardReason::NeedsConfirm => refused(reason, label),
-        _ => refused(reason, url.unwrap_or("")),
-    }
 }
 
 /// `verify: true`: settle, observe again, and name what the input did
@@ -806,6 +821,7 @@ fn gated_press_at(
     if index == 0 {
         return Err(ToolError::InvalidArguments("`index` is 1-based".into()));
     }
+    let snapshot = bound::required_snapshot(server, arguments)?;
     let policy = press_policy(server, arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
@@ -813,21 +829,22 @@ fn gated_press_at(
         let manifold = session.observe().map_err(browser_err)?.clone();
         let focused = session.page().and_then(|p| p.focused().cloned());
         let url = session.page().and_then(|p| p.url().map(str::to_owned));
-        let order = interactive_index(&manifold);
-        let region_id = order.get(index - 1).cloned().ok_or_else(|| {
-            ToolError::InvalidArguments(format!(
-                "no interactive element at index {index} ({} indexed)",
-                order.len()
-            ))
-        })?;
+        let (seen, region_id) = bound::resolve(server, &key, snapshot, &manifold, index)?;
         let ticket = gate(
-            &manifold,
+            &seen,
             &region_id,
             Action::Click,
             focused.clone(),
-            manifold.captured_at_ms(),
+            seen.captured_at_ms(),
         )
         .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
+        // A ticket minted on the snapshot must still hold on the page now,
+        // and the hard gate re-runs on the fresh region (executor order).
+        bound::still_seen(&ticket, &manifold, focused.clone())?;
+        if let Some(region) = manifold.get(&region_id) {
+            gate_check(&manifold, region, Action::Click)
+                .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
+        }
         let mut ledger = server.take_ledger(&key);
         let result = consume_ticket_once_checked(
             &mut ledger,
@@ -841,12 +858,7 @@ fn gated_press_at(
         server.keep_ledger(&key, ledger);
         result
             .map(|_| json!({"acted": true, "index": index, "ticket": ticket.ticket_id}))
-            .map_err(|err| match err {
-                ConsumeError::Refused(reason) => {
-                    refusal_for(reason, &ticket.target_label, url.as_deref())
-                }
-                other => consume_error(other),
-            })
+            .map_err(|err| consume_error(err, &ticket.target_label, url.as_deref()))
     })();
     keep(server, &key, session);
     outcome
@@ -872,17 +884,16 @@ fn hover(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolE
     if index == 0 {
         return Err(ToolError::InvalidArguments("`index` is 1-based".into()));
     }
+    let snapshot = bound::required_snapshot(server, arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
     let outcome = (|| {
         let manifold = session.observe().map_err(browser_err)?.clone();
-        let order = interactive_index(&manifold);
-        let region_id = order.get(index - 1).cloned().ok_or_else(|| {
-            ToolError::InvalidArguments(format!(
-                "no interactive element at index {index} ({} indexed)",
-                order.len()
-            ))
-        })?;
+        let focused = session.page().and_then(|p| p.focused().cloned());
+        let (seen, region_id) = bound::resolve(server, &key, snapshot, &manifold, index)?;
+        if snapshot.is_some() {
+            bound::same_region(&seen, &manifold, &region_id, focused)?;
+        }
         session
             .hover(&region_id)
             .map(|_| json!({"hovered": index}))
@@ -902,22 +913,15 @@ fn drag(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolEr
     if from == 0 || to == 0 {
         return Err(ToolError::InvalidArguments("indexes are 1-based".into()));
     }
+    let snapshot = bound::required_snapshot(server, arguments)?;
     let policy = press_policy(server, arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
     let outcome = (|| {
-        let manifold = session.observe().map_err(browser_err)?.clone();
-        let order = interactive_index(&manifold);
-        let resolve = |i: usize| -> Result<RegionId, ToolError> {
-            order.get(i - 1).cloned().ok_or_else(|| {
-                ToolError::InvalidArguments(format!(
-                    "no interactive element at index {i} ({} indexed)",
-                    order.len()
-                ))
-            })
-        };
-        let from_id = resolve(from)?;
-        let to_id = resolve(to)?;
+        let fresh = session.observe().map_err(browser_err)?.clone();
+        let (manifold, from_id) = bound::resolve(server, &key, snapshot, &fresh, from)?;
+        // The drop target reads the same shown prefix as the source.
+        let (_, to_id) = bound::resolve(server, &key, snapshot, &fresh, to)?;
         let focused = session.page().and_then(|p| p.focused().cloned());
         let url = session.page().and_then(|p| p.url().map(str::to_owned));
         // Drag is a mutation: the source goes through the same
@@ -954,11 +958,16 @@ fn drag(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolEr
             })
         }
         .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
+        // Both ends as the caller saw them, on the page now.
+        bound::still_seen(&ticket, &fresh, focused.clone())?;
+        if ticket.dest.is_none() {
+            bound::same_region(&manifold, &fresh, &to_id, None)?;
+        }
         let mut ledger = server.take_ledger(&key);
         let result = consume_ticket_once_checked(
             &mut ledger,
             &ticket,
-            &manifold,
+            &fresh,
             focused,
             &policy,
             url.as_deref(),
@@ -967,12 +976,7 @@ fn drag(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolEr
         server.keep_ledger(&key, ledger);
         result
             .map(|_| json!({"dragged": {"from": from, "to": to}}))
-            .map_err(|err| match err {
-                ConsumeError::Refused(reason) => {
-                    refusal_for(reason, &ticket.target_label, url.as_deref())
-                }
-                other => consume_error(other),
-            })
+            .map_err(|err| consume_error(err, &ticket.target_label, url.as_deref()))
     })();
     keep(server, &key, session);
     outcome
@@ -1044,14 +1048,19 @@ fn save_as_pdf(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value,
     let landscape = opt_bool(arguments, "landscape")?.unwrap_or(false);
     let print_background = opt_bool(arguments, "print_background")?.unwrap_or(false);
     let scale = opt_f64(arguments, "scale")?.unwrap_or(1.0);
+    let path = opt_str(arguments, "path")?
+        .map(crate::host::absolute_path)
+        .transpose()?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
-    let outcome = session
-        .save_pdf(landscape, print_background, scale)
-        .map(|data| json!({"data": data}))
-        .map_err(browser_err);
+    let outcome = crate::secrets::capture_hidden(server, &mut session, |session| {
+        session
+            .save_pdf(landscape, print_background, scale)
+            .map(|data| json!({"data": data}))
+            .map_err(browser_err)
+    });
     keep(server, &key, session);
-    save_artifact(outcome?, "data", opt_str(arguments, "path")?)
+    save_artifact(outcome?, "data", path)
 }
 
 fn get_dropdown_options(
@@ -1068,13 +1077,7 @@ fn get_dropdown_options(
     let mut session = take(server, &key)?;
     let outcome = (|| {
         let manifold = session.observe().map_err(browser_err)?.clone();
-        let order = interactive_index(&manifold);
-        let region_id = order.get(index - 1).cloned().ok_or_else(|| {
-            ToolError::InvalidArguments(format!(
-                "no interactive element at index {index} ({} indexed)",
-                order.len()
-            ))
-        })?;
+        let region_id = at_index(&interactive_index(&manifold), index)?;
         let region = manifold.get(&region_id).ok_or_else(|| {
             ToolError::InvalidArguments(format!("element {index} resolved to a stale region"))
         })?;
@@ -1137,10 +1140,9 @@ fn zoom(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolEr
     outcome
 }
 
-fn list_tabs(arguments: &Value) -> Result<Value, ToolError> {
+fn list_tabs(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
-    let tabs: Vec<Value> = page_targets(&endpoint)
-        .map_err(browser_err)?
+    let tabs: Vec<Value> = pages(server, &endpoint)?
         .iter()
         .map(|t| {
             json!({
@@ -1153,13 +1155,18 @@ fn list_tabs(arguments: &Value) -> Result<Value, ToolError> {
     Ok(json!({"tabs": tabs}))
 }
 
+/// The backend's page tabs for `endpoint`.
+fn pages(server: &mut dyn BrowserHost, endpoint: &str) -> Result<Vec<PageTab>, ToolError> {
+    server
+        .backend()
+        .list_pages(endpoint)
+        .map_err(|err| ToolError::cdp(&err))
+}
+
 /// Resolve `tab_id` to exactly one target: an exact id match, else a
 /// non-empty prefix that matches exactly one tab. `""` and ambiguous
 /// prefixes refuse rather than silently picking the first tab.
-fn find_tab<'a>(
-    targets: &'a [ultra_instinct_cdp::PageTarget],
-    tab_id: &str,
-) -> Result<&'a ultra_instinct_cdp::PageTarget, ToolError> {
+fn find_tab<'a>(targets: &'a [PageTab], tab_id: &str) -> Result<&'a PageTab, ToolError> {
     if let Some(t) = targets.iter().find(|t| t.target_id == tab_id) {
         return Ok(t);
     }
@@ -1179,28 +1186,34 @@ fn find_tab<'a>(
 fn switch_tab(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let tab_id = req_str(arguments, "tab_id")?;
-    let targets = page_targets(&endpoint).map_err(browser_err)?;
+    let targets = pages(server, &endpoint)?;
     let target = find_tab(&targets, tab_id)?;
-    activate_target(&endpoint, &target.target_id).map_err(browser_err)?;
-    server.set_current_tab(&endpoint, &target.ws_url);
+    server
+        .backend()
+        .activate_page(&endpoint, &target.target_id)
+        .map_err(|err| ToolError::cdp(&err))?;
+    server.set_current_tab(&endpoint, &target.key);
     Ok(json!({"active_tab": target.target_id, "url": target.url}))
 }
 
 fn close_tab(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let tab_id = req_str(arguments, "tab_id")?;
-    let targets = page_targets(&endpoint).map_err(browser_err)?;
+    let targets = pages(server, &endpoint)?;
     let target = find_tab(&targets, tab_id)?;
-    let closed = close_target(&endpoint, &target.target_id).map_err(browser_err)?;
-    // The closed tab's ws state is dead regardless of binding: drop its
-    // session, ledger, events, and domain bits.
-    server.drop_session(&target.ws_url);
+    let closed = server
+        .backend()
+        .close_page(&endpoint, &target.target_id)
+        .map_err(|err| ToolError::cdp(&err))?;
+    // The closed tab's session state is dead regardless of binding: drop
+    // its session, ledger, events, and domain bits.
+    server.drop_session(&target.key);
     // If the closed tab was bound, fall back to any remaining page target.
-    if server.current_tab(&endpoint) == Some(target.ws_url.as_str()) {
-        match page_targets(&endpoint)
-            .map_err(browser_err)?
-            .first()
-            .map(|t| t.ws_url.clone())
+    if server.current_tab(&endpoint) == Some(target.key.as_str()) {
+        match pages(server, &endpoint)?
+            .into_iter()
+            .find(|t| t.target_id != target.target_id)
+            .map(|t| t.key)
         {
             Some(next) => server.set_current_tab(&endpoint, &next),
             None => server.clear_current_tab(&endpoint),
@@ -1268,13 +1281,7 @@ fn scroll_to(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, T
     let mut session = take(server, &key)?;
     let outcome = (|| {
         let manifold = session.observe().map_err(browser_err)?;
-        let order = interactive_index(manifold);
-        let region_id = order.get(index - 1).cloned().ok_or_else(|| {
-            ToolError::InvalidArguments(format!(
-                "no interactive element at index {index} ({} indexed)",
-                order.len()
-            ))
-        })?;
+        let region_id = at_index(&interactive_index(manifold), index)?;
         session
             .scroll_into_view(&region_id)
             .map(|_| json!({"scrolled": true, "index": index}))

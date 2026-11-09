@@ -10,10 +10,13 @@
 //! no host can skip either.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::time::Duration;
 
 use serde_json::Value;
 use ultra_instinct_browser::{BrowserSession, CdpTransport, PageState};
-use ultra_instinct_cdp::{CdpEvent, DEFAULT_CDP_HTTP};
+use ultra_instinct_cdp::{CdpError, CdpEvent, TargetBackend, DEFAULT_CDP_HTTP};
 use ultra_instinct_core::InteractionManifold;
 use ultra_instinct_guard::{Policy, TicketLedger};
 use ultra_instinct_observe::history::SnapshotId;
@@ -25,6 +28,66 @@ use crate::error::ToolError;
 /// One live CDP session the host keeps between calls.
 pub type LiveSession = BrowserSession<Box<dyn CdpTransport>>;
 
+/// Output limits the `browser_*` tools apply ([`BrowserHost::limits`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ToolLimits {
+    /// Longest `browser_get_state` text, in chars; a longer one is cut with
+    /// `… [truncated N chars]` and `truncated: true`. Default 100 000.
+    pub max_state_chars: usize,
+    /// Most elements `browser_get_state` lists (text lines or JSON
+    /// `elements`); the rest are counted in `dropped_elements` with
+    /// `truncated: true`. Default 1 000.
+    pub max_elements: usize,
+    /// Largest decoded screenshot. A PNG over it is taken once more as a
+    /// JPEG (quality 70); still over: `output_too_large`. Default 16 MiB,
+    /// which fits a 32 MiB pipe frame as base64 with room to spare.
+    pub max_screenshot_bytes: usize,
+    /// Longest `browser_wait`, whatever the argument says. Default 60 s.
+    pub max_wait: Duration,
+    /// Longest `browser_get_text` / `browser_get_html` text, in UTF-16
+    /// units. Cut inside the page script, so the rest never crosses the
+    /// wire; the text ends `… [truncated N chars]` with `truncated: true`.
+    /// Default 1 000 000.
+    pub max_text_chars: usize,
+}
+
+impl Default for ToolLimits {
+    fn default() -> Self {
+        Self {
+            max_state_chars: 100_000,
+            max_elements: 1_000,
+            max_screenshot_bytes: 16 << 20,
+            max_wait: Duration::from_secs(60),
+            max_text_chars: 1_000_000,
+        }
+    }
+}
+
+/// Where `browser_download` may put files ([`BrowserHost::downloads`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Downloads {
+    /// Any absolute path the call names (the default).
+    #[default]
+    Anywhere,
+    /// `browser_download` refuses with `downloads_off`.
+    Off,
+    /// Only files directly in this folder; Chrome also writes there.
+    Dir(PathBuf),
+}
+
+/// `raw` as a path the caller chose: absolute, or `path_not_absolute`. No
+/// tool invents a default path or resolves a relative one.
+pub(crate) fn absolute_path(raw: &str) -> Result<&Path, ToolError> {
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Err(ToolError::PathNotAbsolute {
+            path: raw.to_owned(),
+        })
+    }
+}
+
 /// Per-session-key state the `browser_*` tools keep on their host.
 #[derive(Default)]
 pub struct ToolState {
@@ -32,6 +95,8 @@ pub struct ToolState {
     pub(crate) env: EnvState,
     /// Session key → the JavaScript dialog open on that tab (`browser_dialog`).
     pub(crate) dialogs: BTreeMap<String, Dialog>,
+    /// Text typed into sensitive fields, masked in every output (all tabs).
+    pub(crate) secrets: crate::secrets::Secrets,
 }
 
 impl ToolState {
@@ -101,16 +166,62 @@ pub trait BrowserHost {
     /// Mark a diagnostic domain bit as enabled for `key`.
     fn enable_domain(&mut self, key: &str, bit: u8);
 
-    /// Record an observation in the host's snapshot ring.
+    /// Record an observation in the host's snapshot ring. `shown`: how many
+    /// of its interactive elements the caller was shown (`browser_get_state`
+    /// lists at most `max_elements`); an index past it names nothing.
     fn record(
         &mut self,
         origin: &str,
-        manifold: InteractionManifold,
+        manifold: Rc<InteractionManifold>,
         page: PageState,
+        shown: usize,
     ) -> SnapshotId;
+
+    /// The origin, manifold and shown-element count of a snapshot the host
+    /// recorded.
+    fn snapshot(&self, id: u64) -> Result<(&str, &Rc<InteractionManifold>, usize), ToolError> {
+        Err(ToolError::UnknownSnapshot(id))
+    }
+
+    /// Whether index presses must name the `snapshot` they were read from
+    /// (an index-only press refuses with `snapshot_required`). Default: no.
+    fn require_snapshot(&self) -> bool {
+        false
+    }
 
     /// The policy navigation and presses run under.
     fn policy(&self) -> Result<&Policy, ToolError>;
+
+    /// Whether the host's tool allow-list lets `tool` run. A tool that runs
+    /// another inside it (`browser_download`'s press is `browser_click`,
+    /// `browser_search` is `browser_navigate`) needs that one allowed too,
+    /// checked before any CDP call ([`RUNS_INSIDE`]). Default: all.
+    fn allows(&self, _tool: &str) -> bool {
+        true
+    }
+
+    /// Where tabs come from (list / create / activate / close).
+    fn backend(&mut self) -> &mut dyn TargetBackend;
+
+    /// Output limits. Default [`ToolLimits::default`].
+    fn limits(&self) -> ToolLimits {
+        ToolLimits::default()
+    }
+
+    /// Where downloads may go. Default [`Downloads::Anywhere`].
+    fn downloads(&self) -> Downloads {
+        Downloads::Anywhere
+    }
+
+    /// Take the typed CDP failure (timeout, pipe closed, …) the host noted
+    /// during this call, which it puts in place of a generic `browser`
+    /// error ([`ToolError::or_cdp`]). Default: the host notes none.
+    fn take_cdp_failure(&mut self) -> Option<CdpError> {
+        None
+    }
+
+    /// Put back the note [`Self::take_cdp_failure`] took.
+    fn restore_cdp_failure(&mut self, _failure: Option<CdpError>) {}
 
     /// The tools' own state, stored on the host.
     fn tool_state(&self) -> &ToolState;
@@ -138,6 +249,38 @@ pub trait BrowserHost {
     fn push_events(&mut self, key: &str, events: Vec<CdpEvent>) {
         self.tool_state_mut().tee(key, &events);
         self.push_events_raw(key, events);
+    }
+}
+
+/// Run `f`, whose CDP errors the caller discards (a best-effort restore):
+/// a typed failure it hits is not what the call reports, so the host's note
+/// is left as it was before.
+pub(crate) fn best_effort<R>(
+    server: &mut dyn BrowserHost,
+    f: impl FnOnce(&mut dyn BrowserHost) -> R,
+) -> R {
+    let noted = server.take_cdp_failure();
+    let out = f(server);
+    server.restore_cdp_failure(noted);
+    out
+}
+
+/// Tools that run another tool inside them, and that tool: the press of
+/// `browser_download` is `browser_click`, `browser_search` is a
+/// `browser_navigate`. Each needs the inner one allowed too.
+pub const RUNS_INSIDE: [(&str, &str); 2] = [
+    ("browser_download", "browser_click"),
+    ("browser_search", "browser_navigate"),
+];
+
+/// The tool `name` runs inside it is allowed here (when it runs one), else
+/// `tool_not_allowed` naming that tool.
+pub(crate) fn inner_allowed(server: &dyn BrowserHost, name: &str) -> Result<(), ToolError> {
+    match RUNS_INSIDE.iter().find(|(outer, _)| *outer == name) {
+        Some((_, inner)) if !server.allows(inner) => Err(ToolError::ToolNotAllowed {
+            tool: (*inner).to_owned(),
+        }),
+        _ => Ok(()),
     }
 }
 

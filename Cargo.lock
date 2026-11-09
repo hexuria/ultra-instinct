@@ -1730,6 +1730,7 @@ dependencies = [
  "ultra-instinct-core",
  "ultra-instinct-guard",
  "ultra-instinct-observe",
+ "ultra-instinct-policy",
  "ultra-instinct-protocol",
 ]
 
@@ -1737,6 +1738,8 @@ dependencies = [
 name = "ultra-instinct-cdp"
 version = "0.1.0"
 dependencies = [
+ "proptest",
+ "rustix",
  "serde_json",
  "tungstenite",
 ]
@@ -1778,6 +1781,7 @@ dependencies = [
  "proptest",
  "serde_json",
  "tracing-subscriber",
+ "ultra-instinct-agent",
  "ultra-instinct-browser",
  "ultra-instinct-browser-tools",
  "ultra-instinct-cdp",
@@ -1785,6 +1789,7 @@ dependencies = [
  "ultra-instinct-geometry",
  "ultra-instinct-guard",
  "ultra-instinct-observe",
+ "ultra-instinct-policy",
  "ultra-instinct-protocol",
 ]
 

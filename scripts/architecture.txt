@@ -32,9 +32,9 @@ ultra-instinct-policy: ultra-instinct-core
     | tokio axum sqlx reqwest hyper typesafe-sdk
 ultra-instinct-agent: ultra-instinct-core ultra-instinct-browser ultra-instinct-guard ultra-instinct-observe ultra-instinct-policy ultra-instinct-protocol
     | tokio axum sqlx reqwest hyper typesafe-sdk
-ultra-instinct-browser-tools: ultra-instinct-protocol ultra-instinct-core ultra-instinct-browser ultra-instinct-guard ultra-instinct-observe ultra-instinct-agent ultra-instinct-cdp
+ultra-instinct-browser-tools: ultra-instinct-protocol ultra-instinct-core ultra-instinct-browser ultra-instinct-guard ultra-instinct-observe ultra-instinct-agent ultra-instinct-cdp ultra-instinct-policy
     | tokio axum sqlx reqwest hyper typesafe-sdk
-ultra-instinct-mcp: ultra-instinct-protocol ultra-instinct-core ultra-instinct-geometry ultra-instinct-browser ultra-instinct-guard ultra-instinct-observe ultra-instinct-cdp ultra-instinct-browser-tools
+ultra-instinct-mcp: ultra-instinct-protocol ultra-instinct-core ultra-instinct-geometry ultra-instinct-browser ultra-instinct-guard ultra-instinct-observe ultra-instinct-cdp ultra-instinct-browser-tools ultra-instinct-agent ultra-instinct-policy
     | tokio axum sqlx reqwest hyper typesafe-sdk
 ultra-instinct-remote: ultra-instinct-policy
     | axum sqlx
