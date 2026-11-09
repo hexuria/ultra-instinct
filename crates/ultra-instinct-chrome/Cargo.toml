@@ -1,0 +1,15 @@
+[package]
+name = "ultra-instinct-chrome"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "Find and start a local Chrome / Chromium with a DevTools port for ultra-instinct (std only)."
+
+[dependencies]
+
+[dev-dependencies]
+# The ignored live launch test lists the started Chrome's pages.
+ultra-instinct-cdp = { path = "../ultra-instinct-cdp", version = "0.1.0"}

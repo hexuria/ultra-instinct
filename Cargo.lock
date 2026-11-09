@@ -1713,6 +1713,7 @@ dependencies = [
  "serde_json",
  "serde_stacker",
  "ultra-instinct-cdp",
+ "ultra-instinct-chrome",
  "ultra-instinct-core",
  "ultra-instinct-geometry",
  "ultra-instinct-observe",
@@ -1742,6 +1743,13 @@ dependencies = [
  "rustix",
  "serde_json",
  "tungstenite",
+]
+
+[[package]]
+name = "ultra-instinct-chrome"
+version = "0.1.0"
+dependencies = [
+ "ultra-instinct-cdp",
 ]
 
 [[package]]

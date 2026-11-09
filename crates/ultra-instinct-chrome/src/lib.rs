@@ -5,6 +5,10 @@
 //! usual macOS / Linux / Windows install paths, then `PATH` names.
 //! [`launch`] starts it on `--remote-debugging-port=0` and reads the port
 //! Chrome writes to `<user-data-dir>/DevToolsActivePort`.
+//!
+//! Re-exported as `ultra_instinct_browser::launch`.
+
+#![forbid(unsafe_code)]
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};

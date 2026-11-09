@@ -5,6 +5,7 @@ members = [
     "crates/ultra-instinct-geometry",
     "crates/ultra-instinct-observe",
     "crates/ultra-instinct-cdp",
+    "crates/ultra-instinct-chrome",
     "crates/ultra-instinct-browser",
     "crates/ultra-instinct-protocol",
     "crates/ultra-instinct-guard",

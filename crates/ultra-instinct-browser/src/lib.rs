@@ -17,7 +17,6 @@ mod error;
 mod extract;
 mod fusion;
 mod identity;
-pub mod launch;
 mod page;
 mod session;
 mod stacking;
@@ -34,6 +33,8 @@ pub use session::{
 pub use ultra_instinct_cdp::{
     open_tab, script, CdpError, CdpTransport, ReplayTransport, WebSocketTransport, DEFAULT_CDP_HTTP,
 };
+/// Local Chrome launch, from `ultra-instinct-chrome`.
+pub use ultra_instinct_chrome as launch;
 pub use verify::{verify, verify_delta, Expectation, VerifyError};
 
 #[cfg(feature = "fuzz-support")]
