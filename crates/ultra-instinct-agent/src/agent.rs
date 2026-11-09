@@ -1197,13 +1197,19 @@ where
             .get(&target)
             .ok_or_else(|| AgentError::Guard("refuse: missing-target".into()))?;
         let url = self.browser.page().and_then(|page| page.url());
+        // A confirm names the press it is for: the target, or (Enter in a
+        // field) the button its form submits with.
+        let refusal_label = self
+            .guard_policy
+            .press_label(region, action, key)
+            .unwrap_or(region.label())
+            .to_owned();
         self.guard_policy
-            .check(url, region, action)
+            .check(url, region, action, key)
             .map_err(|reason| AgentError::PolicyRefused {
                 reason,
-                label: region.label().to_owned(),
+                label: refusal_label.clone(),
             })?;
-        let target_label = region.label().to_owned();
 
         let input = match kind {
             // A pointer click on this same label just showed no visible
@@ -1288,7 +1294,7 @@ where
             )) => {
                 return Err(AgentError::PolicyRefused {
                     reason,
-                    label: target_label,
+                    label: refusal_label,
                 })
             }
             Err(ExecError::Gate(reason)) => {

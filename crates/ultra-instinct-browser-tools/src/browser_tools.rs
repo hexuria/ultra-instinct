@@ -755,10 +755,17 @@ fn gated_input(
         }
         // The user's policy after the gate, before the ticket is used; the
         // executor checks it again on its fresh observation.
-        let label = ticket.target_label.clone();
-        if let Some(region) = fresh.get(&region_id).or_else(|| manifold.get(&region_id)) {
+        // A confirm names the press: the target, or (Enter in a field) the
+        // button its form submits with.
+        let pressed_key = ticket.key.as_deref();
+        let region = fresh.get(&region_id).or_else(|| manifold.get(&region_id));
+        let label = region
+            .and_then(|r| policy.press_label(r, action, pressed_key))
+            .unwrap_or(&ticket.target_label)
+            .to_owned();
+        if let Some(region) = region {
             policy
-                .check(url.as_deref(), region, action)
+                .check(url.as_deref(), region, action, pressed_key)
                 .map_err(|reason| refusal_for(reason, &label, url.as_deref()))?;
         }
         let mut ledger = server.take_ledger(&key);
@@ -1028,7 +1035,7 @@ fn send_key(
     let policy = press_policy(server, arguments)?;
     if !policy.is_empty() {
         let now = crate::press::focus_now(server, &key, true)?;
-        crate::press::check_focused(&policy, &now, crate::press::presses_focus(&key_name))?;
+        crate::press::check_focused(&policy, &now, Some(&key_name))?;
     }
     let mut session = take(server, &key)?;
     let outcome = session

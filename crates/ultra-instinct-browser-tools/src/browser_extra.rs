@@ -543,7 +543,11 @@ fn keyboard(
         ));
     }
     let now = crate::press::focus_now(server, key, !policy.is_empty())?;
-    crate::press::check_focused(&policy, &now, text.contains(['\n', ' ']))?;
+    let pressed = [('\n', "Enter"), (' ', " ")]
+        .into_iter()
+        .find(|(ch, _)| text.contains(*ch))
+        .map(|(_, key)| key);
+    crate::press::check_focused(&policy, &now, pressed)?;
     // Fail closed: unless a current observation shows a focused field that
     // is not sensitive, this text is masked in every later output. One taken
     // before a press is stale (the press may have moved the focus): observe

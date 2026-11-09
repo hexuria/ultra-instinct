@@ -1843,3 +1843,78 @@ fn a_passed_deadline_ends_the_run_between_steps() {
     );
     assert!(agent.browser().press_log().is_empty());
 }
+
+/// Presses the first offered KEY once, then DONE.
+struct PressesKey;
+
+impl BrowserPolicy for PressesKey {
+    fn decide(
+        &mut self,
+        space: &ActionSpace,
+        _goal: &AgentGoal,
+        history: &[HistoryEntry],
+    ) -> Result<PolicyOutcome, PolicyError> {
+        let action = if history.is_empty() {
+            space.targets_of(ActionKind::Key).next()
+        } else {
+            space.get_str(ActionKind::Done.as_str())
+        }
+        .expect("offered");
+        Ok(PolicyOutcome::Choice(PolicyDecision {
+            action_id: action.id().clone(),
+            kind: action.kind(),
+            target_label: action.label().to_owned(),
+            confidence_millis: 1_000,
+            operation_ranked: Vec::new(),
+            target_ranked: Vec::new(),
+        }))
+    }
+}
+
+/// Enter in a field submits its form, which presses the form's submit
+/// button: under a confirm pattern for that button's label the run ends
+/// BLOCKED naming it, and nothing is dispatched (guard policy, ADR 0013).
+#[test]
+fn enter_in_a_field_whose_form_submits_with_a_confirm_label_blocks_unpressed() {
+    let page = |form: Option<ultra_instinct_core::FormSubmit>| {
+        let mut m = manifold(
+            r#"
+            viewport w=800 h=600
+            region id=code role=text_field label="Promo code" x=10 y=10 w=200 h=24 actions=click,type,key sources=dom,accessibility
+            "#,
+        );
+        let region = m.get_str("code").unwrap().clone().with_state(ElementState {
+            form,
+            ..ElementState::default()
+        });
+        m.replace(region);
+        m
+    };
+    let policy = ultra_instinct_guard::Policy::from_lists("", "Pay*").unwrap();
+    let pay = Some(ultra_instinct_core::FormSubmit::Button("Pay $18".into()));
+    let mut agent = AgentBuilder::new(MockBrowser::new(page(pay)), PressesKey)
+        .max_steps(3)
+        .guard_policy(policy.clone())
+        .build("press Enter in Promo code");
+    let outcome = agent.run();
+    assert!(
+        matches!(outcome, AgentOutcome::Blocked { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        agent.policy_refusal(),
+        Some((ultra_instinct_guard::GuardReason::NeedsConfirm, "Pay $18"))
+    );
+    assert!(agent.browser().input_log().is_empty());
+    assert!(agent.browser().press_log().is_empty());
+
+    // A form that submits with another button: Enter goes through.
+    let search = Some(ultra_instinct_core::FormSubmit::Button("Search".into()));
+    let mut agent = AgentBuilder::new(MockBrowser::new(page(search)), PressesKey)
+        .max_steps(3)
+        .guard_policy(policy)
+        .build("press Enter in Promo code");
+    let outcome = agent.run();
+    assert!(agent.policy_refusal().is_none(), "{outcome:?}");
+    assert_eq!(agent.browser().input_log().len(), 1, "{outcome:?}");
+}

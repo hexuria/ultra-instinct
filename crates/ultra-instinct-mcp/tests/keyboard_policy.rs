@@ -219,3 +219,54 @@ fn a_press_after_a_tab_must_be_its_own_call_under_confirm_patterns() {
     // Only the Page domain every browser_* call enables: no observe, no input.
     assert_eq!(*log.borrow(), ["Page.enable"]);
 }
+
+/// A ticketed KEY (`browser_send_key` with an index) runs the guard's same
+/// press rule: Enter on a button-like control that takes keys (a slider
+/// handle labelled "Pay $18"), or Enter in a field whose form submits with
+/// "Pay $18", refuses `needs_confirm` naming that label with zero `Input.*`
+/// calls; with `confirm` it is sent.
+#[test]
+fn a_ticketed_enter_that_presses_a_confirm_label_needs_confirm() {
+    let handle = Control::button(11, 101, "Pay $18", (20.0, 80.0, 120.0, 28.0));
+    let field = Control::text_field(10, 100, "Promo code", (20.0, 20.0, 300.0, 28.0));
+    // @e1 the field (in a form that submits with Pay), @e2 the handle.
+    let mut page = PageSpec::of(&[field, handle], "http://127.0.0.1/pay", "Pay");
+    page.dom[0] = page.dom[0]
+        .clone()
+        .with_compact_state(json!({"it": "text", "fm": "Pay $18"}));
+    page.dom[1] = page.dom[1].clone().with_attr("class", "ui-slider-handle");
+    for (index, node) in [(1, 10), (2, 11)] {
+        let script = ScriptBuilder::new()
+            .observe_compact(&page)
+            .observe_compact(&page)
+            .observe_compact(&page)
+            .observe_compact(&page)
+            .dom_input(node)
+            .call("Input.dispatchKeyEvent", json!({}))
+            .call("Input.dispatchKeyEvent", json!({}));
+        let (mut server, log) = host(script, policy("", "pay*"));
+        let state = server
+            .call_tool("browser_get_state", &json!({"cdp": CDP}))
+            .unwrap();
+        let snapshot = state["snapshot"].clone();
+        let press = json!({"cdp": CDP, "index": index, "key": "Enter", "snapshot": snapshot});
+        let err = server
+            .call_tool("browser_send_key", &press)
+            .expect_err("confirm");
+        assert_eq!(
+            err,
+            ToolError::NeedsConfirm {
+                label: "Pay $18".into()
+            },
+            "@e{index}"
+        );
+        assert_eq!(inputs(&log), 0, "@e{index}: {:?}", log.borrow());
+        let mut confirmed = press.clone();
+        confirmed["confirm"] = json!("Pay $18");
+        let out = server
+            .call_tool("browser_send_key", &confirmed)
+            .unwrap_or_else(|err| panic!("@e{index}: {err:?} {:?}", log.borrow()));
+        assert_eq!(out["acted"], "key", "{out}");
+        assert_eq!(inputs(&log), 2, "@e{index}");
+    }
+}

@@ -85,11 +85,6 @@ pub(crate) fn consume_error(
     }
 }
 
-/// Keys that press the focused control: Enter, or Space.
-pub(crate) fn presses_focus(key: &str) -> bool {
-    matches!(key, "Enter" | "Return" | " " | "Space" | "Spacebar")
-}
-
 /// The page's URL and focused region for input with no target, from an
 /// observation taken now when `now` (or when a press ran since the last
 /// one), else the last. A failed observation knows neither.
@@ -119,38 +114,40 @@ pub(crate) fn focus_now(
 /// Input with no target (`browser_keyboard`, `browser_send_key` /
 /// `browser_hold_key` without an index) under the policy, before any of it
 /// is sent: the page host as a press checks it (off the list, or an
-/// unreadable URL while the list is set, is `domain_not_allowed`), and when
-/// the input `presses` (Enter / Space) a focused button-like control whose
-/// label needs a confirm is that press: `needs_confirm` unless this call's
-/// `confirm` names it. A field (it takes text) is not pressed. An unknown
-/// focus with a confirm list refuses.
+/// unreadable URL while the list is set, is `domain_not_allowed`), and
+/// `key` on the focused region is checked by the guard's press rule
+/// ([`Policy::press_label`]: Enter / Space on a button-like control, Enter
+/// in a form control that submits a form). An unknown focus with a confirm
+/// list refuses an activating key.
 pub(crate) fn check_focused(
     policy: &Policy,
     (url, focused, known): &(Option<String>, Option<InteractionRegion>, bool),
-    presses: bool,
+    key: Option<&str>,
 ) -> Result<(), ToolError> {
-    let label = focused.as_ref().map_or("", |region| region.label());
-    let refuse = |reason| refusal_for(reason, label, url.as_deref());
+    let refuse = |reason, label: &str| refusal_for(reason, label, url.as_deref());
     match url {
-        Some(url) => policy.check_url(url).map_err(refuse)?,
+        Some(url) => policy.check_url(url).map_err(|r| refuse(r, ""))?,
         None if !policy.allow_domains.is_empty() => {
-            return Err(refuse(GuardReason::DomainNotAllowed))
+            return Err(refuse(GuardReason::DomainNotAllowed, ""))
         }
         None => {}
     }
-    if !presses || policy.confirm_press.is_empty() {
+    let Some(key) = key.filter(|_| !policy.confirm_press.is_empty()) else {
         return Ok(());
+    };
+    match focused {
+        Some(region) => {
+            let label = policy
+                .press_label(region, Action::Key, Some(key))
+                .unwrap_or(region.label());
+            policy
+                .check(url.as_deref(), region, Action::Key, Some(key))
+                .map_err(|reason| refuse(reason, label))
+        }
+        // No observation: whether this key presses anything is not known.
+        None if !known && matches!(key, "Enter" | "Return" | " " | "Space" | "Spacebar") => {
+            Err(refuse(GuardReason::NeedsConfirm, ""))
+        }
+        None => Ok(()),
     }
-    let pressed = focused.as_ref().is_some_and(|region| {
-        let acts = region.actions();
-        acts.iter()
-            .any(|a| matches!(a, Action::Click | Action::Toggle | Action::Point))
-            && !acts
-                .iter()
-                .any(|a| matches!(a, Action::Type | Action::Select))
-    });
-    if !known || (pressed && policy.confirm_pattern(label).is_some()) {
-        return Err(refuse(GuardReason::NeedsConfirm));
-    }
-    Ok(())
 }
