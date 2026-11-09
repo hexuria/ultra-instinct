@@ -13,17 +13,17 @@ use tungstenite::{Message, WebSocket};
 use crate::{CdpError, CdpEvent, CdpTransport};
 
 /// Buffered unsolicited events kept per transport; oldest drop past this.
-const MAX_BUFFERED_EVENTS: usize = 1024;
+pub(crate) const MAX_BUFFERED_EVENTS: usize = 1024;
 
 /// Documented default. Pass `--cdp` with no value to use it. A live Chrome
 /// must already be listening; ultra-instinct does not launch a browser.
 pub const DEFAULT_CDP_HTTP: &str = "http://127.0.0.1:9222";
 
 /// The event that ends a call's wait early: see [`CdpError::DialogOpened`].
-const DIALOG_OPENING: &str = "Page.javascriptDialogOpening";
+pub(crate) const DIALOG_OPENING: &str = "Page.javascriptDialogOpening";
 
 /// Maximum time to wait for a CDP response after sending a call.
-const CALL_DEADLINE: Duration = Duration::from_secs(30);
+pub(crate) const CALL_DEADLINE: Duration = Duration::from_secs(30);
 
 /// TCP connect deadline and per-read/write timeout. The ws handshake runs on
 /// a socket that already carries these, so a silent peer fails fast.
@@ -289,23 +289,7 @@ impl CdpTransport for WebSocketTransport {
                 }
                 continue;
             }
-            if let Some(raw) = frame.get("error") {
-                let error: Value =
-                    serde_json::from_str(raw.get()).map_err(|err| CdpError::BadJson {
-                        message: err.to_string(),
-                    })?;
-                let message = error
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("CDP error")
-                    .to_owned();
-                return Err(CdpError::Protocol { message });
-            }
-            let result = frame
-                .get("result")
-                .map(|raw| raw.get().to_owned())
-                .unwrap_or_else(|| "null".to_owned());
-            return Ok(result);
+            return response_result(&frame);
         }
     }
 
@@ -325,7 +309,9 @@ impl CdpTransport for WebSocketTransport {
 /// `Ok(None)` is a valid JSON frame that is not an object — not a CDP
 /// message, ignored like any foreign frame. `Err(BadJson)` is malformed
 /// JSON, same mapping `Value` parsing had.
-fn frame_fields(text: &str) -> Result<Option<BTreeMap<String, Box<RawValue>>>, CdpError> {
+pub(crate) fn frame_fields(
+    text: &str,
+) -> Result<Option<BTreeMap<String, Box<RawValue>>>, CdpError> {
     match serde_json::from_str(text) {
         Ok(fields) => Ok(Some(fields)),
         Err(err) if err.is_data() => Ok(None),
@@ -336,26 +322,52 @@ fn frame_fields(text: &str) -> Result<Option<BTreeMap<String, Box<RawValue>>>, C
 }
 
 /// A frame field's text when it is a JSON string, `None` otherwise.
-fn raw_string(raw: &RawValue) -> Option<String> {
+pub(crate) fn raw_string(raw: &RawValue) -> Option<String> {
     serde_json::from_str(raw.get()).ok()
 }
 
 /// An event frame's `params`, `Null` when the field is absent. A frame
 /// whose params overflow `Value`'s depth cap is undeliverable: the event is
 /// dropped rather than failing the in-flight call it rode in with.
-fn event_params(frame: &BTreeMap<String, Box<RawValue>>) -> Option<Value> {
+pub(crate) fn event_params(frame: &BTreeMap<String, Box<RawValue>>) -> Option<Value> {
     match frame.get("params") {
         Some(raw) => serde_json::from_str(raw.get()).ok(),
         None => Some(Value::Null),
     }
 }
 
+/// A response frame's `result` text (`null` when absent), or its `error`
+/// object as [`CdpError::Protocol`].
+pub(crate) fn response_result(frame: &BTreeMap<String, Box<RawValue>>) -> Result<String, CdpError> {
+    if let Some(raw) = frame.get("error") {
+        let error: Value = serde_json::from_str(raw.get()).map_err(|err| CdpError::BadJson {
+            message: err.to_string(),
+        })?;
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("CDP error")
+            .to_owned();
+        return Err(CdpError::Protocol { message });
+    }
+    Ok(frame
+        .get("result")
+        .map(|raw| raw.get().to_owned())
+        .unwrap_or_else(|| "null".to_owned()))
+}
+
 fn call_deadline_error(method: &str) -> CdpError {
+    deadline_error(method, CALL_DEADLINE)
+}
+
+/// The timeout a call reports when `deadline` passed without its result.
+pub(crate) fn deadline_error(method: &str, deadline: Duration) -> CdpError {
+    let within = match deadline.subsec_millis() {
+        0 => format!("{} s", deadline.as_secs()),
+        _ => format!("{} ms", deadline.as_millis()),
+    };
     CdpError::Transport {
-        message: format!(
-            "no CDP result for `{method}` within {} s",
-            CALL_DEADLINE.as_secs()
-        ),
+        message: format!("no CDP result for `{method}` within {within}"),
     }
 }
 
@@ -474,7 +486,7 @@ fn version_websocket_url(body: &str) -> Result<String, CdpError> {
         })
 }
 
-fn created_target_id(body: &str) -> Result<String, CdpError> {
+pub(crate) fn created_target_id(body: &str) -> Result<String, CdpError> {
     let value: Value = serde_json::from_str(body).map_err(|err| CdpError::BadJson {
         message: err.to_string(),
     })?;

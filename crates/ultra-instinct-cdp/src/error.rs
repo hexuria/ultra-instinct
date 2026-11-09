@@ -34,6 +34,22 @@ pub enum CdpError {
     DialogOpened {
         method: String,
     },
+    /// A pipe frame grew past the connection's `max_frame_bytes` before its
+    /// NUL terminator. The pipe is closed for good after this: framing can
+    /// no longer be trusted.
+    FrameTooLarge {
+        limit: usize,
+    },
+    /// The CDP pipe hit EOF, a broken pipe, or a read / write error. Every
+    /// later call on the browser and its pages returns this again.
+    PipeClosed {
+        message: String,
+    },
+    /// The page's target detached (`Target.detachedFromTarget`) or was
+    /// destroyed (`Target.targetDestroyed`); its session takes no calls.
+    TargetGone {
+        target_id: String,
+    },
 }
 
 impl fmt::Display for CdpError {
@@ -53,6 +69,13 @@ impl fmt::Display for CdpError {
                 f,
                 "a JavaScript dialog opened while `{method}` ran; the call was sent and the page waits on the dialog"
             ),
+            Self::FrameTooLarge { limit } => {
+                write!(f, "CDP pipe frame exceeds {limit} bytes; pipe closed")
+            }
+            Self::PipeClosed { message } => write!(f, "CDP pipe closed: {message}"),
+            Self::TargetGone { target_id } => {
+                write!(f, "CDP target {target_id} detached or was destroyed")
+            }
         }
     }
 }
