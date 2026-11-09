@@ -108,7 +108,10 @@ browser should live.
 double / triple click, file upload, hover, drag, download). The index is
 read in that snapshot and the ticket binds the element it showed (role,
 label, box, and its neighbourhood). If that element moved, changed, or left
-the page, the press refuses `stale_ref` and nothing is pressed. Focus is
+the page, the press refuses `stale_ref` and nothing is pressed. Only the
+elements `browser_get_state` showed are indexed in its snapshot: an index
+past `max_elements` refuses `unknown_ref` (`indexed` is the shown count),
+even though the page has an element there. Focus is
 taken from the page now (your own typing moves it). With
 `require_snapshot(true)` a bare index refuses `snapshot_required`.
 
@@ -188,7 +191,7 @@ codes are only ever appended.
 | `needs_confirm` | `label` | the policy needs a confirm for this press; repeat with `confirm: label` (that call only) |
 | `domain_not_allowed` | `host` | the page or URL is off the policy's allow-list |
 | `stale_ref` | `reason` (`world-changed`, `target-changed`, `target-gone`, `other-tab`) | the element the ref named is not what the caller saw; nothing pressed |
-| `unknown_ref` | `index`, `indexed` | no element at that index (in the snapshot given, or on the page) |
+| `unknown_ref` | `index`, `indexed` | no element at that index (among those the given snapshot showed, or on the page) |
 | `snapshot_required` | | the server requires `snapshot` with an index press |
 | `target_gone` | `target_id` | the tab detached or was closed |
 | `dialog_open` | `type`, `message` (the dialog's), `detail` | a JavaScript dialog is open; handle it with `browser_dialog` |

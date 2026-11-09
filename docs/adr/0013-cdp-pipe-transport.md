@@ -100,7 +100,8 @@ surface.
   download readers work unchanged.
 - **Snapshot-bound presses.** `browser_get_state` records what it printed
   (both formats) and returns `snapshot`. An index press given `snapshot`
-  resolves the index in that snapshot and mints its ticket there; the
+  resolves the index among the elements that snapshot showed (an index
+  past `max_elements` is `unknown_ref`) and mints its ticket there; the
   existing boundary then refuses on the fresh observation
   (`execute_ticketed`'s observe + `revalidate`, or `revalidate` + the hard
   gate before `consume_ticket_once`), as `stale_ref`, with nothing pressed.
