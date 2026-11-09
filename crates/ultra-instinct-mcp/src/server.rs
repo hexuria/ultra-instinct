@@ -15,7 +15,7 @@
 //! Chrome. [`Server::with_pipe`] drives a caller-owned `--remote-debugging-pipe`
 //! instead (`crate::PipeBackend`, ADR 0013): no HTTP endpoint at all.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -63,6 +63,8 @@ pub struct Server {
     /// The last typed CDP failure (pipe closed, timeout, target gone, …) a
     /// session transport hit during the current call.
     cdp_failure: Rc<RefCell<Option<CdpError>>>,
+    /// While [`Server::run_goal`] runs: session calls refuse past this.
+    call_deadline: Rc<Cell<Option<std::time::Instant>>>,
     sessions: BTreeMap<String, LiveSession>,
     session_order: Vec<String>,
     history: SnapshotRing<Snapshot>,
@@ -141,6 +143,7 @@ impl Server {
         Self {
             backend: Box::new(backend),
             cdp_failure: Rc::new(RefCell::new(None)),
+            call_deadline: Rc::new(Cell::new(None)),
             sessions: BTreeMap::new(),
             session_order: Vec::new(),
             history: SnapshotRing::default(),
@@ -190,6 +193,43 @@ impl Server {
     {
         self.allowlist = Some(names.into_iter().map(Into::into).collect());
         self
+    }
+
+    /// [`crate::run_goal`] on the current tab (the bound pipe tab, or the
+    /// default endpoint's), under this server's policy. The session stays
+    /// open for the next tool call, with the run's last observation. Not a
+    /// tool: the allow-list does not apply.
+    pub fn run_goal(&mut self, goal: &str, limits: crate::RunLimits) -> crate::RunReport {
+        let failed = |error: String| crate::RunReport {
+            steps: Vec::new(),
+            outcome: crate::RunOutcome::Failed { error },
+        };
+        let policy = match &self.policy {
+            Ok(policy) => policy.clone(),
+            Err(err) => return failed(err.clone()),
+        };
+        let endpoint = self
+            .backend
+            .endpoint()
+            .unwrap_or(ultra_instinct_cdp::DEFAULT_CDP_HTTP)
+            .to_owned();
+        // Binds the first pipe tab when none is bound yet.
+        let _ = self.fixed_arguments("browser_get_state", &Value::Null);
+        let key = self.tab_binding.get(&endpoint).cloned().unwrap_or(endpoint);
+        let session = match Host(self).take_session(&key) {
+            Ok(session) => session,
+            Err(err) => return failed(err.to_string()),
+        };
+        self.call_deadline.set(limits.deadline);
+        let (report, mut session) = crate::run::run_goal_on(session, goal, policy, limits);
+        self.call_deadline.set(None);
+        let events = session.transport_mut().drain_events();
+        let mut host = Host(self);
+        if !events.is_empty() {
+            host.push_events(&key, events);
+        }
+        host.keep_session(&key, session);
+        report
     }
 
     /// Whether `name` may run here (the allow-list, when one is set).
@@ -357,8 +397,12 @@ impl BrowserHost for Host<'_> {
             .connect(url)
             .map_err(|err| ToolError::cdp(&err))?;
         Ok(BrowserSession::new(Box::new(Recorded {
-            inner: transport,
+            inner: crate::run::Deadlined {
+                inner: transport,
+                deadline: None,
+            },
             seen: Rc::clone(&server.cdp_failure),
+            deadline: Rc::clone(&server.call_deadline),
         })))
     }
 
@@ -487,12 +531,15 @@ impl BrowserHost for Host<'_> {
 /// whose error reached the tool as text (the agent path reports executor
 /// failures as strings) still answers with the typed code.
 struct Recorded {
-    inner: Box<dyn CdpTransport>,
+    inner: crate::run::Deadlined<Box<dyn CdpTransport>>,
     seen: Rc<RefCell<Option<CdpError>>>,
+    /// The server's run deadline (set only while `run_goal` runs).
+    deadline: Rc<Cell<Option<std::time::Instant>>>,
 }
 
 impl CdpTransport for Recorded {
     fn call(&mut self, method: &str, params_json: &str) -> Result<String, CdpError> {
+        self.inner.deadline = self.deadline.get();
         let result = self.inner.call(method, params_json);
         if let Err(err) = &result {
             if ToolError::from_cdp(err).is_some() {

@@ -1781,6 +1781,7 @@ dependencies = [
  "proptest",
  "serde_json",
  "tracing-subscriber",
+ "ultra-instinct-agent",
  "ultra-instinct-browser",
  "ultra-instinct-browser-tools",
  "ultra-instinct-cdp",
@@ -1788,6 +1789,7 @@ dependencies = [
  "ultra-instinct-geometry",
  "ultra-instinct-guard",
  "ultra-instinct-observe",
+ "ultra-instinct-policy",
  "ultra-instinct-protocol",
 ]
 
