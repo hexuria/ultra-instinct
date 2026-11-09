@@ -137,10 +137,14 @@ mod tests {
             .chain(ENV_TOOLS)
             .chain(STATE_TOOLS)
             .collect();
+        let mut distinct = browser.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), browser.len(), "a browser tool listed twice");
         assert_eq!(TOOLS[..3], PRODUCT_TOOLS);
         assert_eq!(TOOLS.len(), PRODUCT_TOOLS.len() + browser.len());
-        for name in &TOOLS[3..] {
-            assert_eq!(browser.iter().filter(|n| *n == name).count(), 1, "{name}");
+        for name in &browser {
+            assert_eq!(TOOLS.iter().filter(|n| *n == name).count(), 1, "{name}");
         }
     }
 
