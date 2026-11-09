@@ -8,6 +8,7 @@
 
 mod backend;
 mod error;
+pub mod har;
 #[cfg(unix)]
 mod pipe;
 #[cfg(unix)]
