@@ -14,3 +14,7 @@
 /bench/runs/
 bench/.env
 proptest-regressions/
+# private stow companion repo (hexuria/ultra-instinct-stow)
+/.stow/
+/history/
+/.stow-README.md
