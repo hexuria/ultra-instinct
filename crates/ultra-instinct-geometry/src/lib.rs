@@ -4,7 +4,7 @@
 //! and then classified into symbolic atoms. Screen space uses a top-left origin
 //! with `y` increasing downward, so [`Relation::Above`] means a smaller `y`.
 //!
-//! Thresholds (version 1):
+//! Thresholds:
 //! - left / right split at `1/3` and `2/3` of the viewport
 //! - center is the closed middle third on both axes
 //! - small area `< 0.01`, medium `< 0.08`, otherwise large (normalized area)

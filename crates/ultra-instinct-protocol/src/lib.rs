@@ -1,11 +1,10 @@
 //! Loop messages for ultra-instinct.
 //!
-//! Product operations are observe, guard, verify. Ultra-Instinct does not click and
-//! does not plan navigation. Locate / inspect / diff remain internal helpers.
+//! Host operations are observe, guard, verify. Locate / inspect / diff remain
+//! internal helpers.
 //!
-//! [`GuardDecision`] plus [`ActionTicket`] are the guard contract; the owned
-//! agent loop lives in `ultra-instinct-agent`. Legacy JEV task/result types and the
-//! unused `Request` enum were removed (ADR 0003).
+//! [`GuardDecision`] plus [`ActionTicket`] are the guard contract; the agent
+//! loop lives in `ultra-instinct-agent`.
 
 #![forbid(unsafe_code)]
 

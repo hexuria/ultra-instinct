@@ -1,9 +1,8 @@
-//! Guard and verify messages for the action-firewall product.
+//! Guard and verify messages for the host (MCP / CLI) surface.
 //!
-//! Ultra-Instinct does not click. A host proposes a target; the runtime returns a
-//! [`GuardDecision`]-shaped payload. After the host acts, verify reports the
-//! postcondition. The owned agent loop (`ultra-instinct-agent`) uses the hard gate
-//! and tickets directly.
+//! A host proposes a target; the runtime returns a [`GuardDecision`]-shaped
+//! payload. After the host acts, verify reports the postcondition. The agent
+//! loop (`ultra-instinct-agent`) uses the hard gate and tickets directly.
 
 use std::fmt;
 
@@ -92,11 +91,11 @@ pub struct GuardEvidence {
     pub role: Role,
 }
 
-/// Firewall decision. Never implies Ultra-Instinct clicked.
+/// Guard decision. Guard itself never presses.
 ///
 /// [`GuardDecision::Allow`] carries an [`crate::ActionTicket`]. The host must
-/// revalidate that ticket against a fresh observation before clicking the
-/// exact target. Ultra-Instinct itself never presses.
+/// revalidate that ticket against a fresh observation before pressing the
+/// exact target.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum GuardDecision {

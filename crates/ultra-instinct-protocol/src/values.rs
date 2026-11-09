@@ -1,11 +1,7 @@
 //! Wire value types shared by the guard, the agent, and the MCP adapter.
 //!
-//! The legacy JEV-facing `ComputerTask` / `ComputerResult` / `Intent` /
-//! `Constraints` / `ExpectedOutcome` / `FallbackReason` / `ReportedExecutor`
-//! types were deleted in the Phase 8 cleanup (ADR 0003): nothing in the
-//! workspace, MCP, CLI, or bench constructed them. The agent loop
-//! (`ultra-instinct-agent`) and [`crate::GuardDecision`] / [`crate::ActionTicket`]
-//! are the contracts.
+//! The agent loop (`ultra-instinct-agent`) and [`crate::GuardDecision`] /
+//! [`crate::ActionTicket`] are the contracts.
 
 use std::fmt;
 
@@ -64,7 +60,7 @@ impl MatcherConfidence {
 /// Id-level change between two observations. Not a second diff algorithm:
 /// a host fills this from `ultra-instinct-observe::diff`. Page flags are separate
 /// and use `url_changed`, never a navigate field. `new` leaves those flags
-/// unset so existing callers compile; set them with the `with_*` builders.
+/// unset; set them with the `with_*` builders.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateDelta {
     added: Vec<RegionId>,
