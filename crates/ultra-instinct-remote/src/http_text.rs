@@ -135,6 +135,14 @@ impl TextApi {
     }
 }
 
+/// A failed [`HttpTextModel::chat_json_image`] call; `status` is the HTTP
+/// status when the endpoint answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatFailure {
+    pub status: Option<u16>,
+    pub message: String,
+}
+
 /// `TextModel` over the OpenAI-compatible, Anthropic, or Gemini HTTP API,
 /// configured by jev-ultrafast's `TEXT_MODEL_*` environment plus
 /// `TEXT_MODEL_API`.
@@ -327,45 +335,20 @@ impl HttpTextModel {
     /// retry as [`TextModel::complete`]. `effort` (`low` / `medium` / `high`)
     /// replaces the configured reasoning effort unless reasoning is off.
     pub fn chat_json(&self, system: &str, user: &str, effort: &str) -> Result<String, String> {
-        let mut reasoning = self.reasoning.clone();
-        // openai: {"reasoning": {"effort"}}; anthropic: {"effort"}.
-        if reasoning.pointer("/reasoning/effort").is_some() {
-            reasoning["reasoning"]["effort"] = json!(effort);
-        } else if reasoning.get("effort").is_some() {
-            reasoning["effort"] = json!(effort);
-        }
-        let body = match self.api {
-            TextApi::OpenAi => {
-                let mut body = json!({
-                    "model": self.model,
-                    "max_tokens": 1024,
-                    "response_format": {"type": "json_object"},
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                });
-                merge(&mut body, &reasoning);
-                body
-            }
-            TextApi::Anthropic => {
-                let mut body = json!({
-                    "model": self.model,
-                    "max_tokens": 1024,
-                    "system": system,
-                    "messages": [{"role": "user", "content": user}],
-                });
-                if reasoning.as_object().is_some_and(|m| !m.is_empty()) {
-                    body["output_config"] = reasoning;
-                }
-                body
-            }
-            TextApi::Gemini => json!({
-                "systemInstruction": {"parts": [{"text": system}]},
-                "contents": [{"role": "user", "parts": [{"text": user}]}],
-                "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 4096},
-            }),
-        };
+        self.chat_json_image(system, user, effort, None)
+            .map_err(|failure| failure.message)
+    }
+
+    /// [`Self::chat_json`] with an optional JPEG (base64) beside the user turn.
+    pub fn chat_json_image(
+        &self,
+        system: &str,
+        user: &str,
+        effort: &str,
+        jpeg_base64: Option<&str>,
+    ) -> Result<String, ChatFailure> {
+        let body = self.chat_body(system, user, effort, jpeg_base64);
+        let failure = |status: Option<u16>, message: String| ChatFailure { status, message };
         let mut result = self.send_once(&body);
         let retryable = match &result {
             Ok(r) => retryable_status(r.status()),
@@ -374,16 +357,22 @@ impl HttpTextModel {
         if retryable {
             result = self.send_once(&body);
         }
-        let response: Value = result
-            .and_then(|r| r.error_for_status())
-            .map_err(|err| format!("text model http: {err}"))?
+        let response = result.map_err(|err| failure(None, format!("text model http: {err}")))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(failure(
+                Some(status.as_u16()),
+                format!("text model http: status {status}"),
+            ));
+        }
+        let response: Value = response
             .json()
-            .map_err(|err| format!("text model response not JSON: {err}"))?;
+            .map_err(|err| failure(None, format!("text model response not JSON: {err}")))?;
         match self.api {
             TextApi::OpenAi => response["choices"][0]["message"]["content"]
                 .as_str()
                 .map(str::to_owned)
-                .ok_or_else(|| "text model: no assistant content".to_owned()),
+                .ok_or_else(|| failure(None, "text model: no assistant content".to_owned())),
             TextApi::Anthropic => Ok(response["content"]
                 .as_array()
                 .into_iter()
@@ -391,7 +380,80 @@ impl HttpTextModel {
                 .filter(|block| block["type"] == "text")
                 .filter_map(|block| block["text"].as_str())
                 .collect()),
-            TextApi::Gemini => gemini_content(&response).map_err(|err| err.to_string()),
+            TextApi::Gemini => {
+                gemini_content(&response).map_err(|err| failure(None, err.to_string()))
+            }
+        }
+    }
+
+    /// The request body for [`Self::chat_json_image`], in this API's shape.
+    fn chat_body(
+        &self,
+        system: &str,
+        user: &str,
+        effort: &str,
+        jpeg_base64: Option<&str>,
+    ) -> Value {
+        let mut reasoning = self.reasoning.clone();
+        // openai: {"reasoning": {"effort"}}; anthropic: {"effort"}.
+        if reasoning.pointer("/reasoning/effort").is_some() {
+            reasoning["reasoning"]["effort"] = json!(effort);
+        } else if reasoning.get("effort").is_some() {
+            reasoning["effort"] = json!(effort);
+        }
+        match self.api {
+            TextApi::OpenAi => {
+                let content = match jpeg_base64 {
+                    Some(data) => json!([
+                        {"type": "text", "text": user},
+                        {"type": "image_url",
+                         "image_url": {"url": format!("data:image/jpeg;base64,{data}")}},
+                    ]),
+                    None => json!(user),
+                };
+                let mut body = json!({
+                    "model": self.model,
+                    "max_tokens": 1024,
+                    "response_format": {"type": "json_object"},
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": content},
+                    ],
+                });
+                merge(&mut body, &reasoning);
+                body
+            }
+            TextApi::Anthropic => {
+                let content = match jpeg_base64 {
+                    Some(data) => json!([
+                        {"type": "image",
+                         "source": {"type": "base64", "media_type": "image/jpeg", "data": data}},
+                        {"type": "text", "text": user},
+                    ]),
+                    None => json!(user),
+                };
+                let mut body = json!({
+                    "model": self.model,
+                    "max_tokens": 1024,
+                    "system": system,
+                    "messages": [{"role": "user", "content": content}],
+                });
+                if reasoning.as_object().is_some_and(|m| !m.is_empty()) {
+                    body["output_config"] = reasoning;
+                }
+                body
+            }
+            TextApi::Gemini => {
+                let mut parts = vec![json!({"text": user})];
+                if let Some(data) = jpeg_base64 {
+                    parts.push(json!({"inline_data": {"mime_type": "image/jpeg", "data": data}}));
+                }
+                json!({
+                    "systemInstruction": {"parts": [{"text": system}]},
+                    "contents": [{"role": "user", "parts": parts}],
+                    "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 4096},
+                })
+            }
         }
     }
 }
@@ -575,5 +637,38 @@ mod tests {
             body("https://api.deepseek.com/v1", true)["reasoning"],
             json!({"enabled": false})
         );
+    }
+
+    /// A JPEG rides beside the user turn in each API's own image shape.
+    #[test]
+    fn a_screenshot_goes_in_each_apis_image_shape() {
+        let model = |api| {
+            HttpTextModel::new(
+                api,
+                Some("https://gw.example/v1"),
+                Some("m"),
+                "k".into(),
+                false,
+            )
+            .expect("model")
+        };
+        let openai = model(TextApi::OpenAi).chat_body("s", "u", "medium", Some("QQ=="));
+        assert_eq!(
+            openai["messages"][1]["content"],
+            json!([{"type": "text", "text": "u"},
+                   {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,QQ=="}}])
+        );
+        let anthropic = model(TextApi::Anthropic).chat_body("s", "u", "medium", Some("QQ=="));
+        assert_eq!(
+            anthropic["messages"][0]["content"][0]["source"],
+            json!({"type": "base64", "media_type": "image/jpeg", "data": "QQ=="})
+        );
+        let gemini = model(TextApi::Gemini).chat_body("s", "u", "medium", Some("QQ=="));
+        assert_eq!(
+            gemini["contents"][0]["parts"][1],
+            json!({"inline_data": {"mime_type": "image/jpeg", "data": "QQ=="}})
+        );
+        let plain = model(TextApi::OpenAi).chat_body("s", "u", "medium", None);
+        assert_eq!(plain["messages"][1]["content"], "u");
     }
 }

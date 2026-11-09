@@ -5,13 +5,14 @@
 //! ultra-instinct run --goal <text> --fixture <replay.cdp.json>   # full loop over a CDP replay
 //! ultra-instinct run --goal <text> --fixture <page.manifold>     # predict only (dry run)
 //! ultra-instinct run ... --text-model-cmd <program>   # feature `model-text`: model TYPE/SELECT payloads
-//! ultra-instinct run ... --policy jev                 # feature `jev`: JEV decides every step (default)
-//! ultra-instinct run ... --policy jev --no-screenshot # JEV without the viewport screenshot
-//! ultra-instinct run ... --policy jev --no-page-text  # JEV / Clef without the page's text
+//! ultra-instinct run ... --decision jev                 # feature `jev`: JEV decides every step (default)
+//! ultra-instinct run ... --decision jev --no-screenshot # JEV without the viewport screenshot
+//! ultra-instinct run ... --decision jev --no-page-text  # JEV / Clef without the page's text
 //! ultra-instinct run ... --no-derived-text            # feature `model-text`: never type values read off the page
-//! ultra-instinct run ... --policy clef                # feature `clef`: Cloudflare Clef (27B) decides
-//! ultra-instinct run ... --policy clef-flash          # feature `clef`: Cloudflare Clef-Flash (9B) decides
-//! ultra-instinct run ... --policy instinct            # offline; `pua` is a deprecated alias
+//! ultra-instinct run ... --decision clef                # feature `clef`: Cloudflare Clef (27B) decides
+//! ultra-instinct run ... --decision clef-flash          # feature `clef`: Cloudflare Clef-Flash (9B) decides
+//! ultra-instinct run ... --decision instinct            # offline; `pua` is a deprecated alias
+//! ultra-instinct run ... --decision model               # feature `model-text`: the TEXT_MODEL_* model decides every step
 //! ultra-instinct run ... --live-steps                 # print each `step` line as it happens
 //! ultra-instinct run ... --load-state <path>          # reuse a saved login before the first observe
 //! ultra-instinct run ... --save-state <path>          # save cookies + storage when the run ends
@@ -30,18 +31,23 @@
 //! ends, after the output records the page's `final_url`. Without `--url`, it drives the first existing Chrome page. The loop is
 //! observe → policy → gate → ticket → executor (revalidate + consume) → input →
 //! observe → verify, until DONE, BLOCKED, abstain, or a bound. With the `jev`
-//! feature the default policy is JEV (System One). `--policy instinct` is the
+//! feature the default policy is JEV (System One). `--decision instinct` is the
 //! offline policy: no LLM and no MCP are involved; Instinct abstains rather than
-//! guessing. `--policy pua` remains a deprecated alias for `--policy instinct`.
+//! guessing. `--decision pua` remains a deprecated alias for `--decision instinct`.
 //!
-//! `--policy jev` (feature `jev`) decides through JEV (System One); see
+//! `--decision jev` (feature `jev`) decides through JEV (System One); see
 //! `typesafe` for the wire. JEV can only pick an offered id, never a selector
 //! or script, and the ticket / gate / revalidate chain still runs. Live runs
 //! send each decision's viewport screenshot unless `--no-screenshot`. Reads
 //! `TYPESAFE_API_KEY` (required), `TYPESAFE_MODEL`, `TYPESAFE_BASE_URL`; JEV
 //! itself does not read `TEXT_MODEL_*`.
 //!
-//! `--policy clef` / `--policy clef-flash` (feature `clef`) decide through
+//! `--decision model` (feature `model-text`) decides every step through the
+//! `TEXT_MODEL_*` model (any OpenAI-compatible, Anthropic, or Gemini endpoint;
+//! see `decide`), with the screenshot and page text unless `--no-screenshot` /
+//! `--no-page-text`. `--policy` is an alias of `--decision`.
+//!
+//! `--decision clef` / `--decision clef-flash` (feature `clef`) decide through
 //! Cloudflare Workers AI Clef models over the same closed wire; see `clef`
 //! for the environment.
 //!
@@ -122,6 +128,8 @@ enum PolicyKind {
     Jev,
     Clef,
     ClefFlash,
+    /// The `TEXT_MODEL_*` model decides every step (feature `model-text`).
+    Model,
     /// Instinct first; learned-move replay next; remote last. Writes
     /// verified remote wins back into the --lessons store.
     Dojo,
@@ -174,21 +182,22 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
                 "--text-model-cmd",
                 value("--text-model-cmd")?,
             )?,
-            "--policy" => {
-                let raw = value("--policy")?;
+            "--decision" | "--policy" => {
+                let raw = value("--decision")?;
                 let kind = match raw.as_str() {
                     "instinct" | "pua" => PolicyKind::Instinct,
                     "jev" => PolicyKind::Jev,
                     "clef" => PolicyKind::Clef,
                     "clef-flash" => PolicyKind::ClefFlash,
                     "dojo" => PolicyKind::Dojo,
+                    "model" => PolicyKind::Model,
                     _ => {
                         return Err(CliError::UnknownFlag(format!(
-                            "unknown policy `{raw}` (instinct|jev|clef|clef-flash|dojo)"
+                            "unknown decision `{raw}` (instinct|jev|clef|clef-flash|dojo|model)"
                         )))
                     }
                 };
-                set(&mut policy, "--policy", kind)?;
+                set(&mut policy, "--decision", kind)?;
             }
             "--lessons" => set(&mut lessons, "--lessons", value("--lessons")?)?,
             "--load-state" => set(&mut load_state, "--load-state", value("--load-state")?)?,
@@ -388,6 +397,7 @@ pub(crate) fn run_command(args: &[String]) -> Result<String, CliError> {
         PolicyKind::Clef => predict_clef(manifold, &args, "clef"),
         PolicyKind::ClefFlash => predict_clef(manifold, &args, "clef-flash"),
         PolicyKind::Dojo => predict_dojo(manifold, &args),
+        PolicyKind::Model => predict_model(manifold, &args),
     }
 }
 
@@ -491,7 +501,7 @@ fn predict_jev(
     _args: &RunArgs,
 ) -> Result<String, CliError> {
     Err(CliError::UnknownFlag(
-        "--policy jev requires building with --features jev".into(),
+        "--decision jev requires building with --features jev".into(),
     ))
 }
 
@@ -522,7 +532,7 @@ fn predict_clef(
     _model: &str,
 ) -> Result<String, CliError> {
     Err(CliError::UnknownFlag(
-        "--policy clef requires building with --features clef".into(),
+        "--decision clef requires building with --features clef".into(),
     ))
 }
 
@@ -533,6 +543,7 @@ fn drive<T: CdpTransport>(session: BrowserSession<T>, args: &RunArgs) -> Result<
         PolicyKind::Clef => drive_clef(session, args, "clef"),
         PolicyKind::ClefFlash => drive_clef(session, args, "clef-flash"),
         PolicyKind::Dojo => drive_dojo(session, args),
+        PolicyKind::Model => drive_model(session, args),
     }
 }
 
@@ -699,7 +710,7 @@ fn drive_jev<T: CdpTransport>(
     _args: &RunArgs,
 ) -> Result<String, CliError> {
     Err(CliError::UnknownFlag(
-        "--policy jev requires building with --features jev".into(),
+        "--decision jev requires building with --features jev".into(),
     ))
 }
 
@@ -731,7 +742,69 @@ fn drive_clef<T: CdpTransport>(
     _model: &str,
 ) -> Result<String, CliError> {
     Err(CliError::UnknownFlag(
-        "--policy clef requires building with --features clef".into(),
+        "--decision clef requires building with --features clef".into(),
+    ))
+}
+
+/// `--decision model`: the text model decides every step.
+#[cfg(feature = "model-text")]
+fn model_decider(
+    args: &RunArgs,
+    live: bool,
+) -> Result<crate::decide::ModelDecider<crate::http_text::HttpTextModel>, CliError> {
+    if args.second_opinion {
+        return Err(CliError::Config(
+            "--second-opinion is for --decision jev".into(),
+        ));
+    }
+    // A manifold fixture has no pixels or page text to send.
+    crate::decide::ModelDecider::from_env(live && !args.no_screenshot, live && !args.no_page_text)
+        .map_err(CliError::Config)
+}
+
+#[cfg(feature = "model-text")]
+fn drive_model<T: CdpTransport>(
+    session: BrowserSession<T>,
+    args: &RunArgs,
+) -> Result<String, CliError> {
+    let transport = model_decider(args, true)?;
+    drive_with(
+        session,
+        ultra_instinct_policy::RemotePolicy::named("model", transport),
+        args,
+    )
+}
+
+#[cfg(feature = "model-text")]
+fn predict_model(
+    manifold: ultra_instinct_core::InteractionManifold,
+    args: &RunArgs,
+) -> Result<String, CliError> {
+    let transport = model_decider(args, false)?;
+    predict_once(
+        MockBrowser::new(manifold),
+        ultra_instinct_policy::RemotePolicy::named("model", transport),
+        args,
+    )
+}
+
+#[cfg(not(feature = "model-text"))]
+fn drive_model<T: CdpTransport>(
+    _session: BrowserSession<T>,
+    _args: &RunArgs,
+) -> Result<String, CliError> {
+    Err(CliError::UnknownFlag(
+        "--decision model requires building with --features model-text".into(),
+    ))
+}
+
+#[cfg(not(feature = "model-text"))]
+fn predict_model(
+    _manifold: ultra_instinct_core::InteractionManifold,
+    _args: &RunArgs,
+) -> Result<String, CliError> {
+    Err(CliError::UnknownFlag(
+        "--decision model requires building with --features model-text".into(),
     ))
 }
 
@@ -1030,6 +1103,53 @@ mod tests {
             let parsed = parse(&a(&["--goal", "Go", "--fixture", "x", "--policy", alias])).unwrap();
             assert_eq!(parsed.policy, PolicyKind::Instinct);
         }
+    }
+
+    /// `--decision` names the chooser; `--policy` is its alias, and both at once is a duplicate.
+    #[test]
+    fn decision_names_the_chooser_and_policy_is_its_alias() {
+        for flag in ["--decision", "--policy", "--decision=model"] {
+            let mut args = vec!["--goal", "Go", "--fixture", "x", flag];
+            if !flag.contains('=') {
+                args.push("model");
+            }
+            assert_eq!(
+                parse(&a(&args)).unwrap().policy,
+                PolicyKind::Model,
+                "{flag}"
+            );
+        }
+        let both = [
+            "--goal",
+            "Go",
+            "--fixture",
+            "x",
+            "--decision",
+            "model",
+            "--policy",
+            "jev",
+        ];
+        assert!(parse(&a(&both)).is_err());
+    }
+
+    /// Without a text model configured, `--decision model` says what to set.
+    #[test]
+    #[cfg(feature = "model-text")]
+    fn decision_model_needs_a_text_model() {
+        if std::env::var_os("TEXT_MODEL_API_KEY").is_some() {
+            return;
+        }
+        let args = parse(&a(&[
+            "--goal",
+            "Go",
+            "--fixture",
+            "x",
+            "--decision",
+            "model",
+        ]))
+        .unwrap();
+        let err = model_decider(&args, false).err().expect("no text model");
+        assert!(err.to_string().contains("TEXT_MODEL_API_KEY"), "{err}");
     }
 
     #[test]

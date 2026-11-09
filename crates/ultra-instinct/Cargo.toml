@@ -47,7 +47,7 @@ clef = ["jev", "ultra-instinct-remote/clef"]
 # Model-backed TYPE_TEXT / SELECT payloads via `run --text-model-cmd <program>`;
 # without the flag, jev-ultrafast's TEXT_MODEL_* env drives an HTTP model (OpenAI-compatible,
 # Anthropic, or Gemini wire; TEXT_MODEL_API or the base URL host picks it).
-model-text = ["ultra-instinct-agent/model-text", "ultra-instinct-policy/model-text", "dep:ultra-instinct-remote", "ultra-instinct-remote/model-text"]
+model-text = ["ultra-instinct-agent/model-text", "ultra-instinct-policy/model-text", "ultra-instinct-policy/remote", "dep:ultra-instinct-remote", "ultra-instinct-remote/model-text"]
 
 [dependencies.serde_json]
 version = "1"
