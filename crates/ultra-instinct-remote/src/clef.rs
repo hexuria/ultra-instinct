@@ -20,7 +20,7 @@
 //! token needs Workers AI read). `CLEF_MODEL` overrides the model slug set by
 //! `--policy clef` / `--policy clef-flash`. `CLEF_BASE_URL` replaces the
 //! Workers AI prefix `https://api.cloudflare.com/client/v4`; a value ending
-//! in `/accounts` (the form this variable used to take) still works, since
+//! in `/accounts` also works, since
 //! `/accounts/{id}/ai/run/@cf/cloudflare/{model}` is appended either way.
 //!
 //! Timeout bounds: one 60 s attempt per call, no retry. The call only asks
