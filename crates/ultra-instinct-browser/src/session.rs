@@ -290,6 +290,9 @@ impl<T: CdpTransport> BrowserSession<T> {
             };
             if let Some(rect) = rect {
                 let mut raw = RawNode::from_dom(element, rect);
+                if let Some(target) = raw.labels.as_mut() {
+                    target.sight = control_sight(target.control, &dom, compact.as_ref());
+                }
                 // Script-made click targets (a span with a click handler and
                 // a pointer cursor) are offered like links.
                 if node.is_some_and(|n| n.click_hint) {
@@ -1424,6 +1427,45 @@ fn owns_hit(hit: i64, target: i64, parent_of: &BTreeMap<i64, i64>) -> bool {
             Some(&parent) => current = parent,
             None => return false,
         }
+    }
+}
+
+/// How the pointer meets a labelled control, from the compact walk alone
+/// (no extra calls). No compact record, `display: none`, or a hit test
+/// that was not collected or found nothing (an offscreen center) is no
+/// evidence.
+fn control_sight(
+    control: i64,
+    dom: &extract::DomDocument,
+    compact: Option<&compact::CompactSnapshot>,
+) -> fusion::Sight {
+    use fusion::Sight;
+    let Some(node) = dom
+        .hu_k_of_backend
+        .get(&control)
+        .and_then(|k| compact.and_then(|c| c.node(*k)))
+    else {
+        return Sight::Unknown;
+    };
+    if node.unrendered {
+        return Sight::Unknown;
+    }
+    if node.rect.is_none() {
+        return Sight::Faint;
+    }
+    let transparent = node.style.iter().flatten().any(|(name, value)| {
+        name == "opacity" && value.trim().parse::<f64>().is_ok_and(|o| o <= 0.0)
+    });
+    if transparent {
+        return Sight::Faint;
+    }
+    match node.hit {
+        compact::Hit::Key(k) => match dom.backend_of_hu_k.get(&k) {
+            Some(hit) if owns_hit(*hit, control, &dom.parent_of) => Sight::Visible,
+            Some(_) => Sight::Faint,
+            None => Sight::Unknown,
+        },
+        compact::Hit::Nothing | compact::Hit::NotCollected => Sight::Unknown,
     }
 }
 

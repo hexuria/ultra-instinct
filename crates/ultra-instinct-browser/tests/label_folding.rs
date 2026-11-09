@@ -1,0 +1,107 @@
+//! Label folding (ADR 0014): a label and the control it names are one
+//! region, observed through the real session over a compact replay.
+
+use ultra_instinct_browser::script::{PageSpec, ScriptBuilder};
+use ultra_instinct_browser::{BrowserSession, ReplayTransport};
+use ultra_instinct_core::{Action, ActionKind, ActionSpace, InteractionManifold, Role};
+
+fn observe(pages: &[PageSpec]) -> Vec<InteractionManifold> {
+    let script = pages.iter().fold(ScriptBuilder::new(), |script, page| {
+        script.observe_compact(page)
+    });
+    let mut session = BrowserSession::new(ReplayTransport::parse(&script.to_json()).unwrap());
+    pages
+        .iter()
+        .map(|_| session.observe().unwrap().clone())
+        .collect()
+}
+
+fn ids(manifold: &InteractionManifold) -> Vec<&str> {
+    manifold.ids().map(|id| id.as_str()).collect()
+}
+
+#[test]
+fn each_label_form_folds_into_the_control_it_names() {
+    let manifold = observe(&[PageSpec::labelled_form(false)]).remove(0);
+    // Gone: `for` labels (100, 102), the wrapping label (104), the label
+    // holding a link (106), the aria-labelledby text (109), and the native
+    // input with no box inside its styled label (112).
+    assert_eq!(
+        ids(&manifold),
+        ["n101", "n103", "n105", "n107", "n108", "n110", "n111", "n113", "n114", "n115", "n116"]
+    );
+    let field = |id: &str| manifold.get_str(id).unwrap();
+    assert_eq!(
+        (field("n101").role(), field("n101").label()),
+        (Role::TextField, "Email")
+    );
+    assert_eq!(field("n110").label(), "Nickname");
+    // The link inside a folded label stays its own target.
+    assert_eq!(field("n107").role(), Role::Link);
+    assert_eq!(field("n108").label(), "I agree to the terms");
+    // A label for a disabled field and a label for nothing stay as they were.
+    assert_eq!(field("n113").role(), Role::Generic);
+    assert!(field("n114").flags().disabled());
+    assert_eq!(field("n115").label(), "Orphan label");
+}
+
+#[test]
+fn a_custom_checkbox_is_its_label_box_with_the_checkbox_role_and_state() {
+    let [before, after] = observe(&[
+        PageSpec::labelled_form(false),
+        PageSpec::labelled_form(true),
+    ])
+    .try_into()
+    .unwrap();
+    let news = before.get_str("n111").unwrap();
+    assert_eq!(
+        (news.role(), news.label()),
+        (Role::Checkbox, "Send me news")
+    );
+    assert_eq!(
+        news.rect().width(),
+        120.0,
+        "the label's box is the click target"
+    );
+    assert!(news.actions().contains(&Action::Toggle));
+    assert_eq!(news.state().checked, Some(false));
+    assert_eq!(after.get_str("n111").unwrap().state().checked, Some(true));
+    // One CLICK each for the custom checkbox and the plain one, none for a label.
+    let space = ActionSpace::from_manifold(&before);
+    let clicks: Vec<&str> = space
+        .targets_of(ActionKind::Click)
+        .map(|a| a.target().unwrap().as_str())
+        .collect();
+    assert_eq!(
+        clicks,
+        ["n101", "n103", "n105", "n107", "n108", "n110", "n111", "n116"]
+    );
+    // Region identity is stable across observations.
+    assert_eq!(ids(&before), ids(&after));
+}
+
+#[test]
+fn a_transparent_or_covered_checkbox_folds_into_its_label() {
+    // opacity: 0 on the plain wrapped checkbox, then the label painted over it.
+    let transparent = PageSpec::labelled_form(false).style(55, vec![("opacity", "0")]);
+    let covered = PageSpec::labelled_form(false).cover(105, 104);
+    for page in [transparent, covered] {
+        let manifold = observe(&[page]).remove(0);
+        assert!(manifold.get_str("n105").is_none(), "{:?}", ids(&manifold));
+        let remember = manifold.get_str("n104").unwrap();
+        assert_eq!(
+            (remember.role(), remember.label()),
+            (Role::Checkbox, "Remember me")
+        );
+        assert_eq!(remember.rect().width(), 120.0);
+    }
+}
+
+#[test]
+fn a_covered_text_field_keeps_its_label() {
+    // Only a checkbox or radio folds the other way; a covered text field
+    // keeps its label and is marked occluded on its own.
+    let manifold = observe(&[PageSpec::labelled_form(false).cover(101, 116)]).remove(0);
+    assert!(manifold.get_str("n100").is_some());
+    assert!(manifold.get_str("n101").is_some());
+}

@@ -590,3 +590,49 @@ fn autocomplete_stops_when_document_options_change_over_cdp() {
     assert_eq!(transport.remaining(), 0, "every scripted call consumed");
     assert_eq!(autocomplete_poll_calls(transport.logged_calls()).len(), 3);
 }
+
+/// Label folding (ADR 0014): the label is not a second target, so "check
+/// Remember me" clicks the checkbox itself, and a custom checkbox (native
+/// input with no box) is clicked on its label's box. Both verify by the
+/// checkbox state the page reports.
+#[test]
+fn check_goals_click_the_control_a_label_names() {
+    for (goal, target, center) in [
+        ("check Remember me", "n105", (28.5, 110.5)),
+        ("check Send me news", "n111", (80.0, 230.0)),
+    ] {
+        let unchecked = PageSpec::labelled_form(false);
+        let checked = PageSpec::labelled_form(true);
+        let script = ScriptBuilder::new()
+            .observe_compact(&unchecked) // predict
+            .observe_compact(&unchecked) // executor revalidate
+            .pointer_click()
+            .ready_state("complete")
+            .observe_compact(&checked) // after CLICK: state-changed
+            .observe_compact(&checked); // clause done
+        let mut agent = AgentBuilder::new(session(script), InstinctPolicy::default())
+            .max_steps(3)
+            .build(goal);
+        let outcome = agent.run();
+        assert!(
+            matches!(outcome, AgentOutcome::Done { .. }),
+            "{goal}: {outcome:?}"
+        );
+        let steps = outcome.steps();
+        assert_eq!(steps.len(), 1, "{goal}: {steps:?}");
+        assert_eq!(steps[0].kind, ActionKind::Click);
+        assert_eq!(steps[0].action_id.as_str(), format!("CLICK:{target}"));
+        assert_eq!(steps[0].verification, VerificationKind::StateChanged);
+        let transport = agent.browser_mut().transport();
+        let press = &calls_of(transport.logged_calls(), "Input.dispatchMouseEvent")[1];
+        assert_eq!(
+            (press["x"].as_f64(), press["y"].as_f64()),
+            (Some(center.0), Some(center.1))
+        );
+        assert_eq!(
+            transport.remaining(),
+            0,
+            "{goal}: every scripted call consumed"
+        );
+    }
+}
