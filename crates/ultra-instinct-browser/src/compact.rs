@@ -61,20 +61,42 @@ var PROPS=['z-index','position','opacity','transform','filter','isolation','mix-
 var nodes={};
 var next=0;
 // A form's implicit-submission button (its first submit button in tree
-// order), as its label; 1: the form has none. Once per form.
+// order), as its accessible name (aria-labelledby, aria-label, then its
+// text / value / alt / title, as the AX tree names it); with no submit
+// button, 2 when Enter still submits it (at most one field blocks implicit
+// submission), 1 when it does not. Once per form.
 var FORMS=new Map();
+var BLOCKS={text:1,search:1,url:1,tel:1,email:1,password:1,date:1,month:1,week:1,time:1,'datetime-local':1,number:1};
+function fold(t){return String(t||'').replace(/\s+/g,' ').trim();}
+function accName(b){
+  var ids=fold(b.getAttribute('aria-labelledby'));
+  if(ids){
+    var root=b.getRootNode?b.getRootNode():b.ownerDocument;
+    var parts=ids.split(' ').map(function(id){
+      var t=root.getElementById?root.getElementById(id):b.ownerDocument.getElementById(id);
+      return t?fold(t.innerText||t.textContent):'';
+    }).filter(function(t){return t;});
+    if(parts.length)return parts.join(' ');
+  }
+  var label=fold(b.getAttribute('aria-label'));
+  if(label)return label;
+  if(b.nodeName==='INPUT'){
+    var type=String(b.type).toLowerCase();
+    return fold(type==='image'?(b.getAttribute('alt')||b.value):b.value)||fold(b.getAttribute('title'))||(type==='image'?'':'Submit');
+  }
+  return fold(b.innerText||b.textContent)||fold(b.getAttribute('title'));
+}
 function formSubmit(f){
   if(FORMS.has(f))return FORMS.get(f);
-  var b=null,els=f.elements||[];
-  for(var i=0;i<els.length;i++){var e=els[i];if((e.nodeName==='BUTTON'||e.nodeName==='INPUT')&&String(e.type).toLowerCase()==='submit'){b=e;break;}}
+  var b=null,blocking=0,els=f.elements||[];
+  for(var i=0;i<els.length;i++){
+    var e=els[i],type=String(e.type).toLowerCase();
+    if(!b&&(e.nodeName==='BUTTON'||e.nodeName==='INPUT')&&type==='submit')b=e;
+    if(e.nodeName==='INPUT'&&BLOCKS[type])blocking++;
+  }
   var img=f.querySelector('input[type=image]');
   if(img&&(!b||(img.compareDocumentPosition(b)&4)))b=img;
-  var out=1;
-  if(b){
-    var l=(b.getAttribute('aria-label')||b.innerText||b.textContent||b.value||b.getAttribute('alt')||b.getAttribute('title')||'').replace(/\s+/g,' ').trim();
-    if(!l&&b.nodeName==='INPUT'&&String(b.type).toLowerCase()==='submit')l='Submit';
-    out=Array.from(l).slice(0,200).join('');
-  }
+  var out=b?Array.from(accName(b)).slice(0,200).join(''):(blocking<=1?2:1);
   FORMS.set(f,out);
   return out;
 }
@@ -485,6 +507,7 @@ fn parse_element_state(record: &Value) -> ElementState {
         form: match record.get("fm") {
             Some(Value::Number(n)) if n.as_u64() == Some(0) => Some(FormSubmit::NotInForm),
             Some(Value::Number(n)) if n.as_u64() == Some(1) => Some(FormSubmit::NoSubmitButton),
+            Some(Value::Number(n)) if n.as_u64() == Some(2) => Some(FormSubmit::Implicit),
             Some(Value::String(label)) => Some(FormSubmit::Button(truncate_chars(label, 200))),
             _ => None,
         },
@@ -541,11 +564,13 @@ mod tests {
                 form: Some(FormSubmit::Button("Pay $18".to_owned())),
             }
         );
-        // 0: in no form; 1: a form with no submit button; else unread.
+        // 0: in no form; 1 / 2: a form with no submit button that Enter
+        // does not / does submit; else unread.
         let form = |fm: Value| parse_state(json!({ "fm": fm })).unwrap().form;
         assert_eq!(form(json!(0)), Some(FormSubmit::NotInForm));
         assert_eq!(form(json!(1)), Some(FormSubmit::NoSubmitButton));
-        assert_eq!(form(json!(2)), None);
+        assert_eq!(form(json!(2)), Some(FormSubmit::Implicit));
+        assert_eq!(form(json!(3)), None);
         assert_eq!(form(json!(true)), None);
     }
 

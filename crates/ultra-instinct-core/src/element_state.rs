@@ -31,8 +31,12 @@ pub enum FormSubmit {
     /// Enter here submits no form: the control is in none, or it is a
     /// text area or a select.
     NotInForm,
-    /// In a form with no submit button.
+    /// In a form with no submit button that Enter does not submit (two or
+    /// more of its fields block implicit submission).
     NoSubmitButton,
+    /// In a form with no submit button that Enter still submits (at most
+    /// one field blocks implicit submission): no button names it.
+    Implicit,
     /// That button's label (aria-label, else text, else value / alt / title).
     Button(String),
 }

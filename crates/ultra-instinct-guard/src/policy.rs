@@ -214,9 +214,10 @@ impl Policy {
     ///   no text or select): the target's label;
     /// - Enter / NumpadEnter in any other form control: the label of the
     ///   button its form's implicit submission presses (observe evidence,
-    ///   [`FormSubmit`]); none when it is in no form or the form has no
-    ///   submit button; [`FORM_SUBMIT_UNKNOWN`] when observe could not read
-    ///   it (then any confirm pattern refuses).
+    ///   [`FormSubmit`]); none when it is in no form or its form does not
+    ///   submit on Enter; [`FORM_SUBMIT_UNKNOWN`] when the form submits with
+    ///   no button or observe could not read it (then any confirm pattern
+    ///   refuses).
     ///
     /// Space in a field is text; other keys press nothing.
     pub fn press_label<'a>(
@@ -231,26 +232,24 @@ impl Policy {
         if action != Action::Key {
             return None;
         }
-        let key = key.map_or("Enter", |k| match k.rsplit_once('+') {
-            Some((_, base)) if !base.is_empty() => base,
-            _ => k,
-        });
-        let enter = matches!(key, "Enter" | "Return" | "NumpadEnter");
-        let space = matches!(key, " " | "Space" | "Spacebar");
+        let key = key.unwrap_or("Enter");
+        if !is_activating_key(key) {
+            return None;
+        }
         let acts = region.actions();
         let takes_text = acts
             .iter()
             .any(|a| matches!(a, Action::Type | Action::Select));
-        if (enter || space) && !takes_text && acts.iter().any(|a| is_press(*a)) {
+        if !takes_text && acts.iter().any(|a| is_press(*a)) {
             return Some(region.label());
         }
-        if !enter {
+        if !is_enter_key(key) {
             return None;
         }
         match &region.state().form {
             Some(FormSubmit::Button(label)) => Some(label.as_str()),
             Some(FormSubmit::NotInForm | FormSubmit::NoSubmitButton) => None,
-            None => Some(FORM_SUBMIT_UNKNOWN),
+            Some(FormSubmit::Implicit) | None => Some(FORM_SUBMIT_UNKNOWN),
         }
     }
 
@@ -268,20 +267,45 @@ impl Policy {
     }
 
     /// `label` needs a confirm: it matches a pattern, or it is
-    /// [`FORM_SUBMIT_UNKNOWN`] while any pattern is set; and it was not
-    /// confirmed.
+    /// [`FORM_SUBMIT_UNKNOWN`] / [`UNOBSERVED_FOCUS`] while any pattern is
+    /// set; and it was not confirmed.
     pub fn needs_confirm(&self, label: &str) -> bool {
-        if label == FORM_SUBMIT_UNKNOWN {
+        if label == FORM_SUBMIT_UNKNOWN || label == UNOBSERVED_FOCUS {
             return !self.confirm_press.is_empty() && !self.is_confirmed(label);
         }
         self.confirm_pattern(label).is_some()
     }
 }
 
-/// The label of a form submission observe could not read (Enter in a
-/// field whose form membership is unknown): with any confirm pattern set it
-/// needs a confirm of exactly this label.
+/// The label of a form submission whose button is not known: Enter in a
+/// field whose form submits with no submit button, or whose form evidence
+/// observe could not read. With any confirm pattern set it needs a confirm
+/// of exactly this label.
 pub const FORM_SUBMIT_UNKNOWN: &str = "(form submit)";
+
+/// The label of an activating key sent to a focus no observation names (a
+/// cross-origin frame, say): with any confirm pattern set it needs a
+/// confirm of exactly this label.
+pub const UNOBSERVED_FOCUS: &str = "(unobserved focus)";
+
+/// The key, with any modifiers (`Control+Enter`), presses what it lands
+/// on: Enter, NumpadEnter or Space.
+pub fn is_activating_key(key: &str) -> bool {
+    is_enter_key(key) || matches!(base_key(key), " " | "Space" | "Spacebar")
+}
+
+/// Enter or NumpadEnter, with any modifiers: it submits a field's form.
+fn is_enter_key(key: &str) -> bool {
+    matches!(base_key(key), "Enter" | "Return" | "NumpadEnter")
+}
+
+/// `Control+Enter` → `Enter`; `+` keeps its `+`.
+fn base_key(key: &str) -> &str {
+    match key.rsplit_once('+') {
+        Some((_, base)) if !base.is_empty() => base,
+        _ => key,
+    }
+}
 
 /// The CLICK family: the presses a confirm applies to.
 fn is_press(action: Action) -> bool {
@@ -532,6 +556,22 @@ mod tests {
         // form, in a form with no submit button, or one that submits elsewhere.
         assert_eq!(p.check(url, &in_pay_form, Action::Key, Some(" ")), Ok(()));
         assert_eq!(p.check(url, &in_pay_form, Action::Key, Some("Tab")), Ok(()));
+        // A form with no submit button that Enter still submits (at most
+        // one field blocks implicit submission) names no button.
+        let implicit = field(Some(FormSubmit::Implicit));
+        assert_eq!(p.check(url, &implicit, Action::Key, Some("Enter")), needs);
+        assert_eq!(
+            p.press_label(&implicit, Action::Key, Some("Enter")),
+            Some(FORM_SUBMIT_UNKNOWN)
+        );
+        assert!(is_activating_key("Shift+ ") && is_activating_key("NumpadEnter"));
+        assert!(!is_activating_key("Tab") && !is_activating_key("+"));
+        assert!(p.needs_confirm(UNOBSERVED_FOCUS));
+        assert!(!p
+            .clone()
+            .with_confirmed(UNOBSERVED_FOCUS)
+            .needs_confirm(UNOBSERVED_FOCUS));
+        assert!(!policy("", "").needs_confirm(UNOBSERVED_FOCUS));
         for form in [
             FormSubmit::NotInForm,
             FormSubmit::NoSubmitButton,

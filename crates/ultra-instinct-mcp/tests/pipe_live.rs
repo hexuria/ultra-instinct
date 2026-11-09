@@ -331,3 +331,52 @@ fn enter_in_a_form_that_submits_with_pay_needs_confirm() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&profile);
 }
+
+/// The submit label is the button's accessible name (`aria-labelledby`
+/// first, as the click check reads it), and a form with no submit button
+/// still submits on Enter when at most one field blocks implicit
+/// submission; with two such fields Enter submits nothing.
+#[test]
+#[ignore = "needs a local Chrome"]
+fn implicit_submission_and_labelledby_submit_buttons_need_confirm() {
+    let (mut child, profile, browser) = launch();
+    let mut server = Server::with_pipe(browser)
+        .with_policy(ultra_instinct_mcp::Policy::from_lists("", "Pay*").unwrap());
+    call(
+        &mut server,
+        "browser_navigate",
+        json!({"url": "data:text/html,<title>forms</title>\
+<form onsubmit=\"document.title='sent';return false\"><label>Coupon <input></label>\
+<button aria-labelledby=x>Continue</button><span id=x>Pay $18</span></form>\
+<form onsubmit=\"document.title='sent';return false\"><label>Gift card <input></label></form>\
+<form onsubmit=\"document.title='sent';return false\"><label>First <input></label><label>Last <input></label></form>"}),
+    );
+    let state = call(&mut server, "browser_get_state", json!({"format": "json"}));
+    let enter = |label: &str| json!({"index": index_of(&state, label), "key": "Enter", "snapshot": state["snapshot"]});
+    // The click check would name the same button by the same label.
+    let pay = &state["elements"][index_of(&state, "Pay $18") as usize - 1];
+    assert_eq!(pay["role"], "button", "{state}");
+    for (field, label) in [("Coupon", "Pay $18"), ("Gift card", "(form submit)")] {
+        let err = server
+            .call_tool("browser_send_key", &enter(field))
+            .expect_err(field);
+        assert_eq!(
+            err,
+            ToolError::NeedsConfirm {
+                label: label.into()
+            },
+            "{field}"
+        );
+    }
+    call(&mut server, "browser_send_key", enter("First"));
+    let title = call(
+        &mut server,
+        "browser_exec",
+        json!({"expression": "document.title"}),
+    );
+    assert_eq!(title["result"], "forms", "nothing submitted: {title}");
+    println!("pipe live: labelledby submit and implicit submission need confirm");
+    drop(server);
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&profile);
+}

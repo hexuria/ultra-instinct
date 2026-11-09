@@ -6,7 +6,7 @@ use serde_json::Value;
 use ultra_instinct_agent::ExecError;
 use ultra_instinct_browser::BrowserError;
 use ultra_instinct_core::{Action, InteractionRegion};
-use ultra_instinct_guard::{host_of, ConsumeError, Policy};
+use ultra_instinct_guard::{host_of, is_activating_key, ConsumeError, Policy, UNOBSERVED_FOCUS};
 use ultra_instinct_protocol::GuardReason;
 
 use crate::bound::ticket_error;
@@ -92,23 +92,22 @@ pub(crate) fn focus_now(
     server: &mut dyn BrowserHost,
     key: &str,
     now: bool,
-) -> Result<(Option<String>, Option<InteractionRegion>, bool), ToolError> {
+) -> Result<(Option<String>, Option<InteractionRegion>), ToolError> {
     let mut session = server.take_session(key)?;
     let observed = if now || session.is_stale() {
         best_effort(server, |_| session.observe().is_ok())
     } else {
         true
     };
-    let (url, focused, known) = match (observed, session.fresh_manifold(), session.page()) {
+    let now = match (observed, session.fresh_manifold(), session.page()) {
         (true, Some(manifold), Some(page)) => (
             page.url().map(str::to_owned),
             page.focused().and_then(|id| manifold.get(id)).cloned(),
-            true,
         ),
-        _ => (None, None, false),
+        _ => (None, None),
     };
     keep(server, key, session);
-    Ok((url, focused, known))
+    Ok(now)
 }
 
 /// Input with no target (`browser_keyboard`, `browser_send_key` /
@@ -117,11 +116,12 @@ pub(crate) fn focus_now(
 /// unreadable URL while the list is set, is `domain_not_allowed`), and
 /// `key` on the focused region is checked by the guard's press rule
 /// ([`Policy::press_label`]: Enter / Space on a button-like control, Enter
-/// in a form control that submits a form). An unknown focus with a confirm
-/// list refuses an activating key.
+/// in a form control that submits a form). With a confirm list, an
+/// activating key to a focus no observation names refuses
+/// [`UNOBSERVED_FOCUS`].
 pub(crate) fn check_focused(
     policy: &Policy,
-    (url, focused, known): &(Option<String>, Option<InteractionRegion>, bool),
+    (url, focused): &(Option<String>, Option<InteractionRegion>),
     key: Option<&str>,
 ) -> Result<(), ToolError> {
     let refuse = |reason, label: &str| refusal_for(reason, label, url.as_deref());
@@ -144,9 +144,11 @@ pub(crate) fn check_focused(
                 .check(url.as_deref(), region, Action::Key, Some(key))
                 .map_err(|reason| refuse(reason, label))
         }
-        // No observation: whether this key presses anything is not known.
-        None if !known && matches!(key, "Enter" | "Return" | " " | "Space" | "Spacebar") => {
-            Err(refuse(GuardReason::NeedsConfirm, ""))
+        // No observed focus (no observation, or focus the observation does
+        // not name, as in a cross-origin frame): what this key presses is
+        // not known. Lifted only by confirming that placeholder label.
+        None if is_activating_key(key) && policy.needs_confirm(UNOBSERVED_FOCUS) => {
+            Err(refuse(GuardReason::NeedsConfirm, UNOBSERVED_FOCUS))
         }
         None => Ok(()),
     }

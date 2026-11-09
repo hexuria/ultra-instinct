@@ -270,3 +270,51 @@ fn a_ticketed_enter_that_presses_a_confirm_label_needs_confirm() {
         assert_eq!(inputs(&log), 2, "@e{index}");
     }
 }
+
+/// Splitting a Tab and an Enter across two calls does not get around the
+/// same-call refusal: when the observation names no focused control (focus
+/// in a cross-origin frame, say), an activating key refuses `needs_confirm`
+/// naming `(unobserved focus)`, with no `Input.*` call, until that exact
+/// label is confirmed.
+#[test]
+fn an_activating_key_with_no_observed_focus_needs_confirm() {
+    let unfocused = PageSpec::of(
+        &[Control::button(
+            11,
+            101,
+            "Pay $18",
+            (20.0, 80.0, 120.0, 28.0),
+        )],
+        "http://127.0.0.1/form",
+        "Checkout",
+    );
+    let script = keys(ScriptBuilder::new().observe_compact(&unfocused), 2)
+        .observe_compact(&unfocused)
+        .observe_compact(&unfocused);
+    let script = keys(script, 2);
+    let (mut server, log) = host(script, policy("", "pay*"));
+    server
+        .call_tool("browser_send_key", &json!({"cdp": CDP, "key": "Tab"}))
+        .expect("tab presses nothing");
+    assert_eq!(inputs(&log), 2);
+    let enter = json!({"cdp": CDP, "key": "Enter"});
+    let err = server
+        .call_tool("browser_send_key", &enter)
+        .expect_err("enter");
+    assert_eq!(
+        err,
+        ToolError::NeedsConfirm {
+            label: "(unobserved focus)".into()
+        }
+    );
+    assert_eq!(
+        inputs(&log),
+        2,
+        "no input for the Enter: {:?}",
+        log.borrow()
+    );
+    let mut confirmed = enter.clone();
+    confirmed["confirm"] = json!("(unobserved focus)");
+    server.call_tool("browser_send_key", &confirmed).unwrap();
+    assert_eq!(inputs(&log), 4);
+}
