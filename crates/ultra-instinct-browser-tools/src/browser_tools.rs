@@ -15,7 +15,7 @@
 use serde_json::{json, Value};
 
 use ultra_instinct_agent::{
-    classify_delta, classify_value, execute_ticketed_with, BrowserRuntime, ExecError, Input,
+    classify_delta, classify_value, execute_ticketed_with, BrowserRuntime, Input,
 };
 use ultra_instinct_browser::BrowserError;
 use ultra_instinct_cdp::DEFAULT_CDP_HTTP;
@@ -23,14 +23,14 @@ use ultra_instinct_core::{
     Action, ActionSpace, InteractionManifold, InteractionRegion, RegionId, Role,
 };
 use ultra_instinct_guard::{
-    check_drop_target, consume_ticket_once_checked, gate, gate_check, gate_drag, host_of,
-    ConsumeError, Policy,
+    check_drop_target, consume_ticket_once_checked, gate, gate_check, gate_drag,
 };
 use ultra_instinct_protocol::GuardReason;
 
-use crate::bound::{self, at_index, ticket_error};
+use crate::bound::{self, at_index};
 use crate::error::ToolError;
 use crate::host::{endpoint_of, keep, session_key, BrowserHost};
+use crate::press::{consume_error, exec_error, press_policy, refusal_for, refused};
 use ultra_instinct_cdp::PageTab;
 
 /// All `browser_*` tool names this module serves.
@@ -195,53 +195,6 @@ fn opt_bool(arguments: &Value, key: &str) -> Result<Option<bool>, ToolError> {
 
 fn browser_err(err: impl ToString) -> ToolError {
     ToolError::Browser(err.to_string())
-}
-
-/// Executor failures: ticket/gate refusals are `TicketInvalid` (not stale,
-/// never silently retried); observe/dispatch/page-rejection are `Browser`.
-fn exec_error(err: ExecError) -> ToolError {
-    match err {
-        ExecError::Ticket(invalid) => ticket_error(invalid, err.to_string()),
-        ExecError::Gate(_) => ToolError::TicketInvalid(err.to_string()),
-        ExecError::Observe(_) | ExecError::Rejected(_) | ExecError::Dispatch(_) => browser_err(err),
-        other => browser_err(other),
-    }
-}
-
-/// Host-side consume failures: invalid lease → `TicketInvalid`, page-side
-/// press failure → `Browser` (the ticket is already consumed either way).
-fn consume_error(err: ConsumeError<BrowserError>) -> ToolError {
-    match err {
-        ConsumeError::Invalid(invalid) => ticket_error(invalid, err.to_string()),
-        ConsumeError::Refused(reason) => refused(reason, ""),
-        ConsumeError::Press(e) => browser_err(e),
-        other => browser_err(other),
-    }
-}
-
-/// A policy refusal as the tool error a host matches on (not stale; a
-/// retry gets the same answer): `needs-confirm: "Pay $18"` (the label is a
-/// JSON string; pass it back as `confirm`) or `domain-not-allowed: <host>`.
-pub(crate) fn refused(reason: GuardReason, label_or_url: &str) -> ToolError {
-    match reason {
-        GuardReason::NeedsConfirm if !label_or_url.is_empty() => ToolError::NeedsConfirm {
-            label: label_or_url.to_owned(),
-        },
-        GuardReason::DomainNotAllowed if !label_or_url.is_empty() => ToolError::DomainNotAllowed {
-            host: host_of(label_or_url).unwrap_or_else(|| label_or_url.to_owned()),
-        },
-        _ if label_or_url.is_empty() => ToolError::TicketInvalid(reason.to_string()),
-        _ => ToolError::TicketInvalid(format!("{reason}: {label_or_url}")),
-    }
-}
-
-/// The server's policy plus this call's `confirm` label, if any.
-fn press_policy(server: &dyn BrowserHost, arguments: &Value) -> Result<Policy, ToolError> {
-    let policy = server.policy()?.clone();
-    Ok(match opt_str(arguments, "confirm")? {
-        Some(label) => policy.with_confirmed(label),
-        None => policy,
-    })
 }
 
 /// Refuse a navigation the policy does not allow, before any CDP call.
@@ -832,14 +785,9 @@ fn gated_input(
         if let Some(full) = refused {
             return Err(full);
         }
-        let done = executed.map_err(|err| match err {
-            ExecError::Gate(
-                reason @ (GuardReason::DomainNotAllowed | GuardReason::NeedsConfirm),
-            ) => {
-                let fresh_url = session.page().and_then(|p| p.url().map(str::to_owned));
-                refusal_for(reason, &label, fresh_url.as_deref())
-            }
-            other => exec_error(other),
+        let done = executed.map_err(|err| {
+            let fresh_url = session.page().and_then(|p| p.url().map(str::to_owned));
+            exec_error(err, &label, fresh_url.as_deref())
         })?;
         let mut body = json!({
             "acted": input_kind,
@@ -854,15 +802,6 @@ fn gated_input(
     })();
     keep(server, &key, session);
     outcome
-}
-
-/// [`refused`] with the right detail: the label for a confirm, the URL for
-/// a domain.
-pub(crate) fn refusal_for(reason: GuardReason, label: &str, url: Option<&str>) -> ToolError {
-    match reason {
-        GuardReason::NeedsConfirm => refused(reason, label),
-        _ => refused(reason, url.unwrap_or("")),
-    }
 }
 
 /// `verify: true`: settle, observe again, and name what the input did
@@ -955,12 +894,7 @@ fn gated_press_at(
         server.keep_ledger(&key, ledger);
         result
             .map(|_| json!({"acted": true, "index": index, "ticket": ticket.ticket_id}))
-            .map_err(|err| match err {
-                ConsumeError::Refused(reason) => {
-                    refusal_for(reason, &ticket.target_label, url.as_deref())
-                }
-                other => consume_error(other),
-            })
+            .map_err(|err| consume_error(err, &ticket.target_label, url.as_deref()))
     })();
     keep(server, &key, session);
     outcome
@@ -1078,12 +1012,7 @@ fn drag(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolEr
         server.keep_ledger(&key, ledger);
         result
             .map(|_| json!({"dragged": {"from": from, "to": to}}))
-            .map_err(|err| match err {
-                ConsumeError::Refused(reason) => {
-                    refusal_for(reason, &ticket.target_label, url.as_deref())
-                }
-                other => consume_error(other),
-            })
+            .map_err(|err| consume_error(err, &ticket.target_label, url.as_deref()))
     })();
     keep(server, &key, session);
     outcome

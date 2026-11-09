@@ -18,6 +18,7 @@ mod browser_tools;
 mod error;
 mod host;
 mod page_text;
+mod press;
 mod secrets;
 
 pub use browser_env::ENV_TOOLS;

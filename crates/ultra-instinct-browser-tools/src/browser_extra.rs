@@ -29,16 +29,17 @@ use std::rc::Rc;
 
 use serde_json::{json, Map, Value};
 
-use ultra_instinct_agent::{execute_ticketed_with, ExecError, Input};
+use ultra_instinct_agent::{execute_ticketed_with, Input};
 use ultra_instinct_browser::BrowserError;
 use ultra_instinct_cdp::{CdpError, CdpEvent, DEFAULT_CDP_HTTP};
 use ultra_instinct_core::{Action, InteractionManifold, InteractionRegion, RegionId, Role};
-use ultra_instinct_guard::{consume_ticket_once_checked, gate, gate_check, ConsumeError, Policy};
+use ultra_instinct_guard::{consume_ticket_once_checked, gate, gate_check};
 
-use crate::bound::{self, at_index, ticket_error};
-use crate::browser_tools::{interactive_index, refusal_for};
+use crate::bound::{self, at_index};
+use crate::browser_tools::interactive_index;
 use crate::error::ToolError;
 use crate::host::{endpoint_of, keep, session_key, BrowserHost, LiveSession};
+use crate::press::{consume_error, exec_error, press_policy};
 
 /// The tools this module serves itself.
 pub const EXTRA_TOOLS: [&str; 9] = [
@@ -444,12 +445,9 @@ fn check(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
         let mut ledger = server.take_ledger(key);
         let executed = execute_ticketed_with(&mut session, &mut ledger, &ticket, &input, &policy);
         server.keep_ledger(key, ledger);
-        executed.map_err(|err| match err {
-            ExecError::Gate(reason) if is_policy(reason) => {
-                let url = session.page().and_then(|p| p.url().map(str::to_owned));
-                refusal_for(reason, &ticket.target_label, url.as_deref())
-            }
-            other => exec_error(other),
+        executed.map_err(|err| {
+            let url = session.page().and_then(|p| p.url().map(str::to_owned));
+            exec_error(err, &ticket.target_label, url.as_deref())
         })?;
         let after = session.observe().map_err(browser_err)?;
         let read = after.get(&id).and_then(|r| r.state().checked);
@@ -509,12 +507,7 @@ fn focus(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
             },
         );
         server.keep_ledger(key, ledger);
-        result.map_err(|err| match err {
-            ConsumeError::Refused(reason) => {
-                refusal_for(reason, &ticket.target_label, url.as_deref())
-            }
-            other => consume_error(other),
-        })?;
+        result.map_err(|err| consume_error(err, &ticket.target_label, url.as_deref()))?;
         Ok(json!({"focused": index, "region": id.as_str()}))
     })();
     keep(server, key, session);
@@ -959,40 +952,6 @@ fn opt_usize(arguments: &Value, key: &str) -> Result<Option<usize>, ToolError> {
 
 fn browser_err(err: impl ToString) -> ToolError {
     ToolError::Browser(err.to_string())
-}
-
-/// Ticket / gate refusals are `TicketInvalid` or a stale ref (never
-/// retried); the rest `Browser`.
-fn exec_error(err: ExecError) -> ToolError {
-    match err {
-        ExecError::Ticket(invalid) => ticket_error(invalid, err.to_string()),
-        ExecError::Gate(_) => ToolError::TicketInvalid(err.to_string()),
-        other => browser_err(other),
-    }
-}
-
-fn consume_error(err: ConsumeError<BrowserError>) -> ToolError {
-    match err {
-        ConsumeError::Invalid(invalid) => ticket_error(invalid, err.to_string()),
-        other => browser_err(other),
-    }
-}
-
-/// The server's policy plus this call's `confirm` label (this call only).
-fn press_policy(server: &dyn BrowserHost, arguments: &Value) -> Result<Policy, ToolError> {
-    let policy = server.policy()?.clone();
-    Ok(match opt_str(arguments, "confirm")? {
-        Some(label) => policy.with_confirmed(label),
-        None => policy,
-    })
-}
-
-fn is_policy(reason: ultra_instinct_protocol::GuardReason) -> bool {
-    use ultra_instinct_protocol::GuardReason;
-    matches!(
-        reason,
-        GuardReason::NeedsConfirm | GuardReason::DomainNotAllowed
-    )
 }
 
 /// Tool specs: this module's tools, and `max_chars` / `annotate` on the
