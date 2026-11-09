@@ -38,19 +38,37 @@ fine. Every transport we had (`WebSocketTransport`, `open_tab`) needs a port.
 - **Deadlines without threads.** The wait is `rustix::event::poll` (safe) on
   the read end, bounded by the call deadline. `forbid(unsafe_code)` stays.
   A timeout leaves the pipe usable.
+- **Writes interleave reads.** The write end is set `O_NONBLOCK`
+  (`rustix::fs::fcntl_setfl`, safe; on a socket dup shared with the read
+  end the flag is shared, so reads take `WouldBlock` too). A request is
+  written in pieces while one `poll` watches both ends; frames Chrome
+  writes meanwhile are read and routed. So a Chrome blocked writing events
+  to us while we write a large request to it cannot deadlock the pair. The
+  write is bounded by the call deadline (`Timeout`); a request cut off part
+  way leaves the stream unframed, so the pipe is then closed for later
+  calls (`PipeClosed`). A timeout before any byte left keeps it usable.
 - **Same early exits as the websocket.** `Page.javascriptDialogOpening` for
   the calling session ends the wait with `DialogOpened` (the event stays
   queued). `Target.detachedFromTarget` / `Target.targetDestroyed` make the
   page's calls return `TargetGone`, including one already waiting. Dropping
   a live page sends `Target.detachFromTarget` without waiting.
-- **Fail closed.** A frame over the cap (`FrameTooLarge`), EOF or a read /
-  write error (`PipeClosed`) kills the pipe; every later call on the browser
-  and its pages returns that error.
+- **One bad frame costs one frame** (revised; the first draft failed
+  closed). JSON never holds a raw NUL, so the stream re-syncs at the next
+  one. A frame over the cap is skipped without being buffered past the cap;
+  if its first bytes name the waiting call's id (`{"id":N,`, which Chrome
+  writes first) that call gets `FrameTooLarge { limit }`, else (an event,
+  an abandoned call's reply, no readable id) it is dropped and counted
+  (`PipeBrowser::dropped_frames`). The same holds for a frame that is not
+  JSON: it answers the waiting call (`BadJson`) only when its leading id is
+  that call's. The pipe and every other tab stay usable; one huge reply no
+  longer kills them all. EOF or a read / write error (`PipeClosed`) still
+  kills the pipe; every later call on the browser and its pages returns
+  that error.
 
 Limits (`PipeLimits`): `max_frame_bytes` 64 MiB (the websocket's message
-cap; screenshots fit), `call_deadline` 30 s (the websocket's). Buffering is
-bounded by the frame cap plus one 64 KiB read. Writes are plain blocking
-writes; the deadline covers the wait for the answer.
+cap; screenshots fit), `call_deadline` 30 s (the websocket's; it covers
+the write and the wait for the answer). Buffering is bounded by the frame
+cap plus one 64 KiB read, oversize frames included.
 
 Owners: `crates/ultra-instinct-cdp/tests/pipe.rs` (fake Chrome on
 `std::io::pipe()`, chunking proptests), the `pipe_frame` fuzz target, and the

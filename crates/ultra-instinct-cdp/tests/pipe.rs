@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use proptest::prelude::*;
 use serde_json::{json, Value};
 use ultra_instinct_cdp::{
-    CdpError, CdpTransport, FrameSplitter, PipeBrowser, PipeLimits, PipeTarget,
+    CdpError, CdpTransport, Frame, FrameSplitter, PipeBrowser, PipeLimits, PipeTarget,
 };
 
 /// Chrome's side of the pipe: reads NUL-terminated requests, writes frames.
@@ -299,8 +299,12 @@ fn browser_level_events_queue_on_the_browser_and_survive_page_calls() {
     fake.join().unwrap();
 }
 
+/// One frame over the cap costs that frame only (it used to close the pipe
+/// for every tab): the call it answers gets `FrameTooLarge`, an oversize
+/// event or an abandoned call's oversize reply is dropped and counted, and
+/// the next call works.
 #[test]
-fn an_oversize_frame_is_refused_and_the_pipe_stays_closed() {
+fn an_oversize_reply_answers_its_call_and_the_pipe_stays_usable() {
     let limits = PipeLimits {
         max_frame_bytes: 1024,
         ..PipeLimits::default()
@@ -308,25 +312,138 @@ fn an_oversize_frame_is_refused_and_the_pipe_stays_closed() {
     let (browser, fake) = fake_with(limits, |fake| {
         fake.attach("S1");
         let request = fake.expect("Page.captureScreenshot");
-        let big = format!(
-            "{}\0",
-            json!({"id": request["id"], "result": {"data": "x".repeat(4096)}})
-        );
-        fake.raw(big.as_bytes());
-        // Nothing else is ever sent: the next request read is EOF.
-        assert!(fake.recv().is_none());
+        let big = "x".repeat(4096);
+        fake.send(json!({"method": "Big.event", "sessionId": "S1", "params": {"x": big}}));
+        fake.send(json!({"id": request["id"], "sessionId": "S1", "result": {"data": big}}));
+        let request = fake.expect("Runtime.evaluate");
+        fake.send(json!({"id": 999, "result": {"data": big}}));
+        fake.send(json!({"method": "Small.event", "sessionId": "S1", "params": {}}));
+        fake.send(json!({"id": request["id"], "sessionId": "S1", "result": {"value": 1}}));
+        let _ = fake.recv();
     });
     let mut page = browser.page("T1").expect("page");
-    let refused = CdpError::FrameTooLarge { limit: 1024 };
     assert_eq!(
         page.call("Page.captureScreenshot", "{}"),
-        Err(refused.clone())
+        Err(CdpError::FrameTooLarge { limit: 1024 })
     );
-    assert_eq!(page.call("Runtime.evaluate", "{}"), Err(refused.clone()));
-    assert_eq!(browser.call("Browser.getVersion", "{}"), Err(refused));
+    assert_eq!(browser.dropped_frames(), 1, "the oversize event");
+    assert_eq!(
+        page.call("Runtime.evaluate", "{}"),
+        Ok(r#"{"value":1}"#.into())
+    );
+    assert_eq!(browser.dropped_frames(), 2, "and the abandoned id's reply");
+    let events: Vec<_> = page.drain_events().into_iter().map(|e| e.method).collect();
+    assert_eq!(events, ["Small.event"]);
     drop(page);
     drop(browser);
     fake.join().unwrap();
+}
+
+/// A frame that is not JSON answers only the call its id names: one for
+/// another id, an event, or no readable id is dropped and counted.
+#[test]
+fn a_malformed_frame_for_another_call_never_answers_this_one() {
+    let (browser, fake) = fake(|fake| {
+        let request = fake.expect("A.call");
+        fake.raw(b"{\"id\":99,\"result\":{nope\0");
+        fake.raw(b"{\"method\":\"E.broken\",\"params\":\0");
+        fake.raw(b"garbage\0\xff\xfe\0");
+        fake.reply(&request, json!({"real": true}));
+        let request = fake.expect("B.call");
+        let id = request["id"].as_i64().unwrap();
+        fake.raw(format!("{{\"id\":{id},\"result\":{{bad\0").as_bytes());
+        let request = fake.expect("C.call");
+        fake.reply(&request, json!({"after": true}));
+    });
+    assert_eq!(browser.call("A.call", "{}"), Ok(r#"{"real":true}"#.into()));
+    assert_eq!(browser.dropped_frames(), 4);
+    assert!(matches!(
+        browser.call("B.call", "{}"),
+        Err(CdpError::BadJson { .. })
+    ));
+    assert_eq!(browser.call("C.call", "{}"), Ok(r#"{"after":true}"#.into()));
+    assert!(browser.drain_events().is_empty());
+    fake.join().unwrap();
+}
+
+/// Run `client` on its own thread (the browser is `!Send`, so it is made
+/// there); `None` when it has not finished within `limit` (a hang).
+fn within<T: Send + 'static>(
+    limit: Duration,
+    client: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    let (done, result) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = done.send(client());
+    });
+    result.recv_timeout(limit).ok()
+}
+
+/// Chrome blocked writing events to us while we write a large request to
+/// it (it reads only once its own write is done): the write interleaves
+/// reads, so neither side waits on the other and the call completes.
+#[test]
+fn a_peer_that_writes_before_it_reads_cannot_deadlock_a_large_request() {
+    let outcome = within(Duration::from_secs(20), || {
+        let (requests, browser_out) = pipe().expect("pipe");
+        let (browser_in, out) = pipe().expect("pipe");
+        let chrome = thread::spawn(move || {
+            let mut fake = Fake {
+                requests: BufReader::new(requests),
+                out,
+            };
+            // 4 MiB of events, far past any pipe buffer, before reading.
+            let blob = "e".repeat(64 << 10);
+            for n in 0..64 {
+                fake.send(json!({"method": "Burst.event", "params": {"n": n, "blob": blob}}));
+            }
+            let request = fake.expect("Big.request");
+            assert_eq!(
+                request["params"]["blob"].as_str().map(str::len),
+                Some(4 << 20)
+            );
+            fake.reply(&request, json!({"ok": true}));
+        });
+        let browser = PipeBrowser::new(browser_in, browser_out);
+        let params = json!({"blob": "r".repeat(4 << 20)}).to_string();
+        let answer = browser.call("Big.request", &params);
+        let events = browser.drain_events().len();
+        chrome.join().expect("fake");
+        (answer, events)
+    });
+    let (answer, events) = outcome.expect("the call deadlocked");
+    assert_eq!(answer, Ok(r#"{"ok":true}"#.into()));
+    assert_eq!(events, 64);
+}
+
+/// A peer that never drains its end: the write honours the call deadline
+/// (typed `Timeout`), and since half a request is on the wire the pipe is
+/// closed for later calls. (1 MiB is far past a pipe buffer; the deadline
+/// leaves room to build the request on a loaded debug run.)
+#[test]
+fn a_write_the_peer_never_drains_times_out_and_closes_the_pipe() {
+    let outcome = within(Duration::from_secs(20), || {
+        let (requests, browser_out) = pipe().expect("pipe");
+        let (browser_in, _out) = pipe().expect("pipe");
+        let browser = PipeBrowser::with_limits(browser_in, browser_out, short_deadline(1000));
+        let started = Instant::now();
+        let params = json!({"blob": "r".repeat(1 << 20)}).to_string();
+        let first = browser.call("Big.request", &params);
+        let waited = started.elapsed();
+        let next = browser.call("Next.call", "{}");
+        drop(requests);
+        (first, waited, next)
+    });
+    let (first, waited, next) = outcome.expect("the write hung past its deadline");
+    assert_eq!(
+        first,
+        Err(CdpError::Timeout {
+            method: "Big.request".into(),
+            after: Duration::from_millis(1000),
+        })
+    );
+    assert!(waited < Duration::from_secs(5), "{waited:?}");
+    assert!(matches!(next, Err(CdpError::PipeClosed { .. })), "{next:?}");
 }
 
 #[test]
@@ -592,7 +709,10 @@ proptest! {
         let mut got = Vec::new();
         for chunk in chunked(&frames, &cuts) {
             splitter.push(&chunk);
-            while let Some(frame) = splitter.next_frame().expect("within the cap") {
+            while let Some(frame) = splitter.next_frame() {
+                let Frame::Message(frame) = frame else {
+                    panic!("within the cap: {frame:?}");
+                };
                 got.push(frame);
             }
         }
@@ -601,27 +721,25 @@ proptest! {
     }
 
     #[test]
-    fn a_frame_over_the_cap_fails_closed_under_any_chunking(
+    fn a_frame_over_the_cap_is_skipped_and_the_next_survives_any_chunking(
         len in 9usize..64,
         cuts in prop::collection::vec(any::<usize>(), 0..8),
     ) {
         let mut splitter = FrameSplitter::new(8);
-        let mut failed = false;
+        let mut got = Vec::new();
         for chunk in chunked(&[vec![b'a'; len], b"ok".to_vec()], &cuts) {
+            let pushed = chunk.len();
             splitter.push(&chunk);
-            loop {
-                match splitter.next_frame() {
-                    Ok(Some(frame)) => prop_assert!(false, "frame {:?} leaked", frame),
-                    Ok(None) => break,
-                    Err(err) => {
-                        prop_assert_eq!(err, CdpError::FrameTooLarge { limit: 8 });
-                        failed = true;
-                        break;
-                    }
-                }
+            while let Some(frame) = splitter.next_frame() {
+                got.push(frame);
             }
+            // Never more than the cap plus the chunk just pushed.
+            prop_assert!(splitter.buffered() <= 8 + pushed);
         }
-        prop_assert!(failed);
-        prop_assert!(splitter.next_frame().is_err());
+        prop_assert_eq!(
+            got,
+            vec![Frame::Oversize { id: None }, Frame::Message(b"ok".to_vec())]
+        );
+        prop_assert_eq!(splitter.buffered(), 0);
     }
 }

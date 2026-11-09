@@ -12,9 +12,10 @@ description = "CDP wire for ultra-instinct: transport trait, blocking websocket,
 serde_json = { version = "1", features = ["raw_value"] }
 tungstenite = { version = "0.26", default-features = false, features = ["handshake"] }
 
-# Pipe transport (ADR 0013): safe poll(2) on the read end for call deadlines.
+# Pipe transport (ADR 0013): safe poll(2) on both ends for call deadlines, and
+# fcntl(2) to make the write end non-blocking.
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1", default-features = false, features = ["event", "std"] }
+rustix = { version = "1.1", default-features = false, features = ["event", "fs", "std"] }
 
 [dev-dependencies]
 proptest = "1.11"

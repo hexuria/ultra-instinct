@@ -93,8 +93,13 @@ browser should live.
   `closeTarget`. `Target.setDiscoverTargets` is turned on, so a tab that
   goes away answers `target_gone` instead of a timeout.
 - Set `PipeLimits::max_frame_bytes` to at least 32 MiB: a base64 full-page
-  screenshot gets big, and a frame over the cap closes the pipe
-  (`frame_too_large`, then `pipe_closed` for good).
+  screenshot gets big. A frame over the cap costs that call only: it
+  answers `frame_too_large` and the pipe stays usable for the next call and
+  every other tab (an oversize event, or a reply to a call that already
+  gave up, is dropped and counted in `PipeBrowser::dropped_frames`).
+- Writes never block reads: a large request is written while Chrome's
+  events keep being read, within the call deadline (`timeout`). A request
+  cut off by its deadline part way closes the pipe (`pipe_closed`).
 
 ## Presses bound to what the caller saw
 
@@ -184,7 +189,7 @@ codes are only ever appended.
 | `dialog_open` | `type`, `message` (the dialog's), `detail` | a JavaScript dialog is open; handle it with `browser_dialog` |
 | `timeout` | `method`, `after_ms` | a CDP call got no answer in time |
 | `pipe_closed` | `message` | the pipe is closed (Chromium exited); every later call fails the same way |
-| `frame_too_large` | `limit` | a frame went past `max_frame_bytes`; the pipe is closed |
+| `frame_too_large` | `limit` | this call's reply went past `max_frame_bytes`; it was skipped and the pipe stays usable |
 | `tool_not_allowed` | `tool` | not on the allow-list |
 | `path_not_absolute` | `path` | file paths must be absolute |
 | `path_not_allowed` | `path`, `dir` | `Downloads::Dir` forces another folder |

@@ -16,13 +16,25 @@
 //! dropped. Waiting uses `poll(2)` on the read end (through `rustix`), which
 //! is why this module is `cfg(unix)` only.
 //!
-//! **Failing closed.** A frame over [`PipeLimits::max_frame_bytes`], EOF, or a
-//! read / write error marks the pipe dead; every later call on the browser
-//! and its pages returns the same error. A call that only timed out leaves
-//! the pipe usable.
+//! **One bad frame is one bad frame.** JSON never holds a raw NUL, so the
+//! stream re-syncs at the next one. A frame over
+//! [`PipeLimits::max_frame_bytes`] is skipped without being buffered past
+//! the cap: when its first bytes name the waiting call's id (Chrome writes
+//! `{"id":N,` first) that call gets [`CdpError::FrameTooLarge`], else the
+//! frame is dropped and counted ([`PipeBrowser::dropped_frames`]). A frame
+//! that is not JSON answers the waiting call only when its id is that
+//! call's; otherwise it too is dropped and counted. EOF or a read / write
+//! error marks the pipe dead: every later call on the browser and its pages
+//! returns that error. A call that only timed out leaves the pipe usable.
 //!
-//! Writes are plain blocking writes; the call deadline covers the wait for
-//! the answer, not a peer that stops draining its end.
+//! **Writes never block the reader.** The write end is made non-blocking
+//! (`O_NONBLOCK` through `fcntl`; for a socket dup shared with the read end
+//! the flag is shared too). A request is written in pieces while `poll(2)`
+//! watches both ends: frames Chrome writes meanwhile are read and routed, so
+//! a peer that will not read until its own write completes cannot deadlock
+//! us. The write is bounded by the call deadline (typed
+//! [`CdpError::Timeout`]); a request cut off part way leaves the stream
+//! unframed, so the pipe is then dead for later calls.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -33,6 +45,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
+use rustix::fs::{fcntl_getfl, fcntl_setfl, OFlags};
 use serde_json::{json, Value};
 
 use crate::ws::{
@@ -70,19 +83,33 @@ impl Default for PipeLimits {
     }
 }
 
-/// Splits a NUL-delimited byte stream into frames, refusing any frame over
-/// a byte cap. Push each chunk read, then take frames until `Ok(None)`;
-/// buffering stays within the cap plus one chunk.
-///
-/// After [`CdpError::FrameTooLarge`] the splitter is spent: it drops what it
-/// held and every later [`FrameSplitter::next_frame`] returns that error.
+/// Bytes kept from the start of an oversize frame to read its `"id"`.
+const ID_PREFIX_BYTES: usize = 64;
+
+/// What [`FrameSplitter::next_frame`] cut from the stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Frame {
+    /// One complete frame, its NUL removed.
+    Message(Vec<u8>),
+    /// A frame over the cap, skipped up to and including its NUL. `id` is
+    /// the `"id"` its first bytes name (`{"id":N,`), when they do.
+    Oversize { id: Option<i64> },
+}
+
+/// Splits a NUL-delimited byte stream into frames, skipping any frame over
+/// a byte cap. Push each chunk read, then take frames until `None`;
+/// buffering stays within the cap plus one chunk. An oversize frame is
+/// reported once ([`Frame::Oversize`]) and its bytes are dropped as they
+/// arrive, never held past the cap; the next frame starts after its NUL.
 #[derive(Debug)]
 pub struct FrameSplitter {
     buf: Vec<u8>,
     /// Bytes of `buf` already known to hold no NUL.
     scanned: usize,
     max_frame_bytes: usize,
-    failed: bool,
+    /// Inside an oversize frame: dropping bytes up to its NUL. Holds the id
+    /// its first bytes named.
+    skipping: Option<Option<i64>>,
 }
 
 impl FrameSplitter {
@@ -91,40 +118,54 @@ impl FrameSplitter {
             buf: Vec::new(),
             scanned: 0,
             max_frame_bytes,
-            failed: false,
+            skipping: None,
         }
     }
 
-    /// Append bytes read from the stream (ignored once the splitter failed).
+    /// Append bytes read from the stream.
     pub fn push(&mut self, bytes: &[u8]) {
-        if !self.failed {
-            self.buf.extend_from_slice(bytes);
-        }
+        self.buf.extend_from_slice(bytes);
     }
 
-    /// The next complete frame without its NUL, `Ok(None)` when more bytes
-    /// are needed.
-    pub fn next_frame(&mut self) -> Result<Option<Vec<u8>>, CdpError> {
-        if self.failed {
-            return Err(self.too_large());
+    /// The next complete frame, an oversize frame skipped whole, or `None`
+    /// when more bytes are needed.
+    pub fn next_frame(&mut self) -> Option<Frame> {
+        let nul = self.buf[self.scanned..].iter().position(|&b| b == 0);
+        if let Some(id) = self.skipping {
+            let Some(offset) = nul else {
+                self.buf.clear();
+                self.scanned = 0;
+                return None;
+            };
+            self.buf.drain(..=self.scanned + offset);
+            self.scanned = 0;
+            self.skipping = None;
+            return Some(Frame::Oversize { id });
         }
-        match self.buf[self.scanned..].iter().position(|&b| b == 0) {
+        match nul {
             Some(offset) => {
                 let end = self.scanned + offset;
-                if end > self.max_frame_bytes {
-                    return Err(self.fail());
-                }
-                let frame = self.buf[..end].to_vec();
+                let frame = if end > self.max_frame_bytes {
+                    Frame::Oversize {
+                        id: leading_id(&self.buf[..end]),
+                    }
+                } else {
+                    Frame::Message(self.buf[..end].to_vec())
+                };
                 self.buf.drain(..=end);
                 self.scanned = 0;
-                Ok(Some(frame))
+                Some(frame)
+            }
+            None if self.buf.len() > self.max_frame_bytes => {
+                // Over the cap with no end in sight: keep only its id.
+                self.skipping = Some(leading_id(&self.buf));
+                self.buf.clear();
+                self.scanned = 0;
+                None
             }
             None => {
                 self.scanned = self.buf.len();
-                if self.buf.len() > self.max_frame_bytes {
-                    return Err(self.fail());
-                }
-                Ok(None)
+                None
             }
         }
     }
@@ -133,19 +174,26 @@ impl FrameSplitter {
     pub fn buffered(&self) -> usize {
         self.buf.len()
     }
+}
 
-    fn fail(&mut self) -> CdpError {
-        self.failed = true;
-        self.buf = Vec::new();
-        self.scanned = 0;
-        self.too_large()
+/// The id a frame's first bytes name: `{"id":N` with optional whitespace,
+/// as Chrome writes every response. `None` for anything else.
+pub fn leading_id(frame: &[u8]) -> Option<i64> {
+    let head = &frame[..frame.len().min(ID_PREFIX_BYTES)];
+    let text = std::str::from_utf8(head)
+        .unwrap_or_else(|err| std::str::from_utf8(&head[..err.valid_up_to()]).unwrap_or_default());
+    let rest = text.trim_start().strip_prefix('{')?.trim_start();
+    let rest = rest.strip_prefix("\"id\"")?.trim_start();
+    let rest = rest.strip_prefix(':')?.trim_start();
+    let digits = rest
+        .char_indices()
+        .find(|&(i, c)| !(c.is_ascii_digit() || (i == 0 && c == '-')))
+        .map_or(rest.len(), |(i, _)| i);
+    // The number must end inside the prefix, else it may be cut short.
+    if digits == rest.len() && head.len() < frame.len() {
+        return None;
     }
-
-    fn too_large(&self) -> CdpError {
-        CdpError::FrameTooLarge {
-            limit: self.max_frame_bytes,
-        }
-    }
+    rest[..digits].parse().ok()
 }
 
 /// One `type == "page"` entry from `Target.getTargets`.
@@ -173,6 +221,8 @@ struct Wire {
     limits: PipeLimits,
     next_id: i64,
     dead: Option<CdpError>,
+    /// Frames dropped unread: oversize or malformed, for no waiting call.
+    dropped_frames: u64,
     browser_events: VecDeque<CdpEvent>,
     sessions: HashMap<String, Session>,
 }
@@ -199,25 +249,29 @@ impl Wire {
         let params: Value = serde_json::from_str(params_json).map_err(|err| CdpError::BadJson {
             message: err.to_string(),
         })?;
-        let id = self.send(session, method, params)?;
         let deadline = Instant::now() + self.limits.call_deadline;
+        let (id, early) = self.send(session, method, params, deadline)?;
+        if let Some(answer) = early {
+            return answer;
+        }
         loop {
-            while let Some(frame) = self.next_frame()? {
-                if let Routed::Answer(answer) = self.route(&frame, id, session, method) {
-                    return answer;
-                }
+            if let Some(answer) = self.route_buffered(id, session, method) {
+                return answer;
             }
-            self.fill(deadline, method)?;
+            self.wait(deadline, method, None)?;
         }
     }
 
-    /// Write one request frame; returns its id.
+    /// Write one request frame, reading and routing what arrives meanwhile.
+    /// Returns its id, and the answer a frame read during the write already
+    /// gave the call (a dialog, a gone target).
     fn send(
         &mut self,
         session: Option<&str>,
         method: &str,
         params: Value,
-    ) -> Result<i64, CdpError> {
+        deadline: Instant,
+    ) -> Result<(i64, Option<Result<String, CdpError>>), CdpError> {
         if let Some(err) = &self.dead {
             return Err(err.clone());
         }
@@ -229,24 +283,67 @@ impl Wire {
         }
         let mut bytes = envelope.to_string().into_bytes();
         bytes.push(0);
-        if let Err(err) = self
-            .writer
-            .write_all(&bytes)
-            .and_then(|()| self.writer.flush())
-        {
-            return Err(self.die(CdpError::PipeClosed {
-                message: format!("write: {err}"),
-            }));
+        let mut written = 0;
+        let mut early = None;
+        while written < bytes.len() {
+            // Route what came in (events queue; a second answer is moot).
+            while let Some(answer) = self.route_buffered(id, session, method) {
+                early.get_or_insert(answer);
+            }
+            let ready = match self.wait(deadline, method, Some(&bytes[written..])) {
+                Ok(ready) => ready,
+                Err(err @ CdpError::Timeout { .. }) if written > 0 => {
+                    // Half a request on the wire: nothing after it parses.
+                    self.die(CdpError::PipeClosed {
+                        message: format!("`{method}` was cut off mid-write by its deadline"),
+                    });
+                    return Err(err);
+                }
+                Err(err) => return Err(err),
+            };
+            written += ready;
         }
-        Ok(id)
+        Ok((id, early))
     }
 
-    fn next_frame(&mut self) -> Result<Option<Vec<u8>>, CdpError> {
-        self.splitter.next_frame().map_err(|err| self.die(err))
+    /// Route every complete frame buffered; the waiting call's answer, if
+    /// one came.
+    fn route_buffered(
+        &mut self,
+        id: i64,
+        session: Option<&str>,
+        method: &str,
+    ) -> Option<Result<String, CdpError>> {
+        while let Some(frame) = self.splitter.next_frame() {
+            let routed = match frame {
+                Frame::Message(frame) => self.route(&frame, id, session, method),
+                Frame::Oversize { id: Some(frame_id) } if frame_id == id => {
+                    Routed::Answer(Err(CdpError::FrameTooLarge {
+                        limit: self.limits.max_frame_bytes,
+                    }))
+                }
+                Frame::Oversize { .. } => {
+                    self.dropped_frames += 1;
+                    Routed::Continue
+                }
+            };
+            if let Routed::Answer(answer) = routed {
+                return Some(answer);
+            }
+        }
+        None
     }
 
-    /// Wait (bounded by `deadline`) for readable bytes and push them.
-    fn fill(&mut self, deadline: Instant, method: &str) -> Result<(), CdpError> {
+    /// Wait (bounded by `deadline`) until the read end has bytes, then push
+    /// one chunk; with `pending`, also until the write end takes some of
+    /// them. Returns how many bytes of `pending` were written (0 when it
+    /// read instead).
+    fn wait(
+        &mut self,
+        deadline: Instant,
+        method: &str,
+        pending: Option<&[u8]>,
+    ) -> Result<usize, CdpError> {
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
@@ -258,52 +355,79 @@ impl Wire {
                 tv_sec: slice.as_secs().try_into().unwrap_or(3600),
                 tv_nsec: slice.subsec_nanos().into(),
             };
-            let mut fds = [PollFd::new(&self.reader, PollFlags::IN)];
-            match poll(&mut fds, Some(&timeout)) {
-                Ok(0) => continue,
-                Ok(_) => {}
-                Err(rustix::io::Errno::INTR) => continue,
-                Err(err) => {
-                    return Err(self.die(CdpError::PipeClosed {
-                        message: format!("poll: {err}"),
-                    }));
+            let (readable, writable) = {
+                let mut fds = [
+                    PollFd::new(&self.reader, PollFlags::IN),
+                    PollFd::new(&self.writer, PollFlags::OUT),
+                ];
+                let watched = if pending.is_some() { 2 } else { 1 };
+                match poll(&mut fds[..watched], Some(&timeout)) {
+                    Ok(0) | Err(rustix::io::Errno::INTR) => continue,
+                    Ok(_) => {}
+                    Err(err) => {
+                        return Err(self.die(CdpError::PipeClosed {
+                            message: format!("poll: {err}"),
+                        }));
+                    }
+                }
+                (
+                    !fds[0].revents().is_empty(),
+                    watched == 2 && !fds[1].revents().is_empty(),
+                )
+            };
+            if readable {
+                match self.reader.read(&mut self.chunk) {
+                    Ok(0) => {
+                        return Err(self.die(CdpError::PipeClosed {
+                            message: "end of stream".into(),
+                        }));
+                    }
+                    Ok(n) => {
+                        self.splitter.push(&self.chunk[..n]);
+                        return Ok(0);
+                    }
+                    Err(err)
+                        if matches!(err.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) => {
+                    }
+                    Err(err) => {
+                        return Err(self.die(CdpError::PipeClosed {
+                            message: format!("read: {err}"),
+                        }));
+                    }
                 }
             }
-            match self.reader.read(&mut self.chunk) {
-                Ok(0) => {
-                    return Err(self.die(CdpError::PipeClosed {
-                        message: "end of stream".into(),
-                    }));
-                }
-                Ok(n) => {
-                    self.splitter.push(&self.chunk[..n]);
-                    return Ok(());
-                }
-                Err(err)
-                    if matches!(err.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) =>
-                {
-                    continue;
-                }
-                Err(err) => {
-                    return Err(self.die(CdpError::PipeClosed {
-                        message: format!("read: {err}"),
-                    }));
+            if let (true, Some(bytes)) = (writable, pending) {
+                match self.writer.write(bytes) {
+                    Ok(n) => return Ok(n),
+                    Err(err)
+                        if matches!(err.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) => {
+                    }
+                    Err(err) => {
+                        return Err(self.die(CdpError::PipeClosed {
+                            message: format!("write: {err}"),
+                        }));
+                    }
                 }
             }
         }
     }
 
     fn route(&mut self, frame: &[u8], id: i64, session: Option<&str>, method: &str) -> Routed {
-        let fields = match std::str::from_utf8(frame) {
-            Ok(text) => match frame_fields(text) {
-                Ok(Some(fields)) => fields,
-                Ok(None) => return Routed::Continue,
-                Err(err) => return Routed::Answer(Err(err)),
-            },
-            Err(err) => {
-                return Routed::Answer(Err(CdpError::BadJson {
-                    message: format!("pipe frame is not UTF-8: {err}"),
-                }));
+        let parsed = match std::str::from_utf8(frame) {
+            Ok(text) => frame_fields(text),
+            Err(err) => Err(CdpError::BadJson {
+                message: format!("pipe frame is not UTF-8: {err}"),
+            }),
+        };
+        let fields = match parsed {
+            Ok(Some(fields)) => fields,
+            Ok(None) => return Routed::Continue,
+            // A broken frame answers only the call it names; one for an
+            // abandoned call, an event, or no id at all is dropped.
+            Err(err) if leading_id(frame) == Some(id) => return Routed::Answer(Err(err)),
+            Err(_) => {
+                self.dropped_frames += 1;
+                return Routed::Continue;
             }
         };
         if let Some(frame_id) = fields.get("id") {
@@ -395,7 +519,9 @@ impl PipeBrowser {
     /// [`PipeLimits`]. `reader` is the end Chrome writes (its fd 4), `writer`
     /// the end Chrome reads (its fd 3). Anything that converts into an
     /// [`OwnedFd`] works: `File`, `OwnedFd`, `std::io::PipeReader` /
-    /// `PipeWriter`, `ChildStdout` / `ChildStdin`. No I/O happens here.
+    /// `PipeWriter`, `ChildStdout` / `ChildStdin`. No I/O happens here; the
+    /// write end is set `O_NONBLOCK` (shared with any dup of it, such as the
+    /// read end when both are one socket).
     pub fn new(reader: impl Into<OwnedFd>, writer: impl Into<OwnedFd>) -> Self {
         Self::with_limits(reader, writer, PipeLimits::default())
     }
@@ -405,14 +531,24 @@ impl PipeBrowser {
         writer: impl Into<OwnedFd>,
         limits: PipeLimits,
     ) -> Self {
+        let writer = File::from(writer.into());
+        // Writes interleave with reads (`Wire::send`), so the write end must
+        // never block; a failure here fails every call instead.
+        let dead = fcntl_getfl(&writer)
+            .and_then(|flags| fcntl_setfl(&writer, flags | OFlags::NONBLOCK))
+            .err()
+            .map(|err| CdpError::PipeClosed {
+                message: format!("cannot make the write end non-blocking: {err}"),
+            });
         let wire = Wire {
             reader: File::from(reader.into()),
-            writer: File::from(writer.into()),
+            writer,
             splitter: FrameSplitter::new(limits.max_frame_bytes),
             chunk: vec![0; READ_CHUNK],
             limits,
             next_id: 1,
-            dead: None,
+            dead,
+            dropped_frames: 0,
             browser_events: VecDeque::new(),
             sessions: HashMap::new(),
         };
@@ -423,6 +559,13 @@ impl PipeBrowser {
 
     pub fn limits(&self) -> PipeLimits {
         self.wire.borrow().limits
+    }
+
+    /// Frames dropped unread so far: over the cap or not JSON, and not the
+    /// answer to the call that was waiting (an event, an abandoned call's
+    /// reply, or no readable id).
+    pub fn dropped_frames(&self) -> u64 {
+        self.wire.borrow().dropped_frames
     }
 
     /// One browser-level call (no `sessionId`). Returns the `result` text.
@@ -577,10 +720,12 @@ impl Drop for PipePage {
         let state = wire.sessions.remove(&self.session_id);
         if state.is_some_and(|state| !state.gone) && wire.dead.is_none() {
             // The reply is dropped later like any abandoned id.
+            let deadline = Instant::now() + wire.limits.call_deadline;
             let _ = wire.send(
                 None,
                 "Target.detachFromTarget",
                 json!({"sessionId": self.session_id}),
+                deadline,
             );
         }
     }
@@ -603,33 +748,59 @@ fn json_field(body: &str, key: &str, method: &str) -> Result<String, CdpError> {
 mod tests {
     use super::*;
 
+    fn message(bytes: &[u8]) -> Option<Frame> {
+        Some(Frame::Message(bytes.to_vec()))
+    }
+
     #[test]
-    fn splitter_refuses_an_unterminated_frame_past_the_cap_and_stays_failed() {
+    fn splitter_skips_an_unterminated_frame_past_the_cap_and_resyncs() {
         let mut splitter = FrameSplitter::new(4);
         splitter.push(b"abcd");
-        assert_eq!(splitter.next_frame(), Ok(None));
+        assert_eq!(splitter.next_frame(), None);
         splitter.push(b"e");
-        assert_eq!(
-            splitter.next_frame(),
-            Err(CdpError::FrameTooLarge { limit: 4 })
-        );
+        assert_eq!(splitter.next_frame(), None);
+        assert_eq!(splitter.buffered(), 0, "nothing held past the cap");
+        splitter.push(b"fgh");
+        assert_eq!(splitter.next_frame(), None);
         assert_eq!(splitter.buffered(), 0);
-        splitter.push(b"\0ok\0");
-        assert_eq!(
-            splitter.next_frame(),
-            Err(CdpError::FrameTooLarge { limit: 4 })
-        );
+        splitter.push(b"ij\0ok\0");
+        assert_eq!(splitter.next_frame(), Some(Frame::Oversize { id: None }));
+        assert_eq!(splitter.next_frame(), message(b"ok"));
+        assert_eq!(splitter.next_frame(), None);
     }
 
     #[test]
     fn splitter_takes_a_frame_exactly_at_the_cap() {
         let mut splitter = FrameSplitter::new(4);
         splitter.push(b"abcd\0abcde\0");
-        assert_eq!(splitter.next_frame(), Ok(Some(b"abcd".to_vec())));
+        assert_eq!(splitter.next_frame(), message(b"abcd"));
+        assert_eq!(splitter.next_frame(), Some(Frame::Oversize { id: None }));
+        assert_eq!(splitter.next_frame(), None);
+    }
+
+    #[test]
+    fn an_oversize_frame_keeps_the_id_it_starts_with() {
+        let mut splitter = FrameSplitter::new(16);
+        splitter.push(br#"{"id":42,"result":{"data":"xxxxxxxx"#);
+        assert_eq!(splitter.next_frame(), None);
+        splitter.push(b"xxxx\"}}\0");
         assert_eq!(
             splitter.next_frame(),
-            Err(CdpError::FrameTooLarge { limit: 4 })
+            Some(Frame::Oversize { id: Some(42) })
         );
+    }
+
+    #[test]
+    fn leading_id_reads_only_a_leading_id() {
+        assert_eq!(leading_id(br#"{"id":7,"result":{}}"#), Some(7));
+        assert_eq!(leading_id(br#" { "id" : 12 , "x"#), Some(12));
+        assert_eq!(leading_id(br#"{"id":-3}"#), Some(-3));
+        assert_eq!(leading_id(br#"{"method":"X","id":7}"#), None);
+        assert_eq!(leading_id(br#"{"id":"7"}"#), None);
+        assert_eq!(leading_id(b"\xff\xfe"), None);
+        // A number running to the end of a cut prefix may be cut short.
+        let long = format!("{{\"id\":{}", "1".repeat(80));
+        assert_eq!(leading_id(long.as_bytes()), None);
     }
 
     #[test]

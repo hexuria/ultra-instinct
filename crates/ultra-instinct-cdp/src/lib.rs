@@ -22,7 +22,8 @@ pub use backend::{CdpConnector, HttpBackend, PageTab, TargetBackend};
 pub use error::CdpError;
 #[cfg(unix)]
 pub use pipe::{
-    FrameSplitter, PipeBrowser, PipeLimits, PipePage, PipeTarget, DEFAULT_MAX_FRAME_BYTES,
+    leading_id, Frame, FrameSplitter, PipeBrowser, PipeLimits, PipePage, PipeTarget,
+    DEFAULT_MAX_FRAME_BYTES,
 };
 #[cfg(unix)]
 pub use pipe_backend::{PipeBackend, PIPE_ENDPOINT};
