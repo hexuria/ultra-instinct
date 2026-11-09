@@ -181,7 +181,7 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 | Crate | Owns |
 |---|---|
 | `ultra-instinct-core` | `InteractionManifold`, regions, `ActionSpace`, fixture grammar |
-| `ultra-instinct-cdp` | CDP transport trait, websocket, replay transport, replay script builder |
+| `ultra-instinct-cdp` | CDP transport trait, websocket, replay transport, replay script builder; unix `--remote-debugging-pipe` transport (`PipeBrowser` / `PipePage`, caller-owned fds, one thread, ADR 0013) |
 | `ultra-instinct-browser` | CDP observe (DOM/AX fusion, identity, stacking), raw CDP inputs; `launch.rs` (find / start a local Chrome, `ChromeProcess` killed on drop); `storage_state` (save / load cookies + storage, the 0600 state file and its parser) |
 | `ultra-instinct-observe` | Observation history and id diff |
 | `ultra-instinct-geometry` | Geometry helpers; `RegionState` (availability / visibility of a region) |
@@ -228,12 +228,16 @@ deliberate eval.
 - `write_fixture` / `parse_fixture` own the manifold fixture grammar. CDP
   replay is a different grammar. Fusion is the only DOM/accessibility merge.
   Region identity across observations is owned by the browser `IdentityMap`.
-- Untrusted input (fixture grammar, CDP replay scripts, MCP stdin lines,
+- Untrusted input (fixture grammar, CDP replay scripts, CDP pipe frames, MCP stdin lines,
   remote-model replies, model-text replies): `fuzz/` cargo-fuzz targets on a
   dated nightly (`scripts/fuzz-smoke.sh`, `.github/workflows/nightly.yml`),
   backed by the structured/garbage proptests at small case counts. Saved
   state files: the parser proptests in
   `crates/ultra-instinct-browser/tests/storage_state.rs`.
+- CDP pipe transport (framing, routing, dialogs, target gone, fail-closed
+  limits): `crates/ultra-instinct-cdp/tests/pipe.rs` against a fake Chrome on
+  `std::io::pipe()`, with the frame-splitter chunking proptests; the
+  `pipe_frame` fuzz target; live Chrome in `tests/pipe_live.rs` (`#[ignore]`).
 - Observe protocol cost: `crates/ultra-instinct-browser/tests/call_budget.rs`
   pins the CDP call count per observe as a regression tripwire.
 - Repo rules (toolchain pin, `forbid(unsafe_code)`, crate ceilings, pinned
