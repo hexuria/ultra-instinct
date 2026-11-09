@@ -142,7 +142,8 @@ surface.
   input, its label names a secret (AGENTS.md 7a, `is_secret_field`), or its
   type could not be read. Its value is never printed; text typed into it
   (any length; under 4 chars only as a whole token) is masked (`••••`) in
-  every later output, error and HAR. Masking is one exit,
+  every later output, error and HAR, also percent-encoded (either hex
+  case, `+` or `%20` for a space) or HTML-entity-escaped. Masking is one exit,
   `Server::call_tool`, for every tool; only the screenshot `base64` and
   PDF `data` fields are exempt. Sensitive values are never evicted: past
   64 a new one refuses `secrets_full` before it is typed. `run_goal`

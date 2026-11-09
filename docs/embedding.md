@@ -154,8 +154,12 @@ read. A sensitive field's value is never shown, and text typed into one
 (any length) is replaced by `••••` in every later tool output and error
 (every tool: `observe`, `guard` and `verify` too, through the one exit in
 `Server::call_tool`) and in HAR files, so a page that echoes it does not
-leak it. A secret shorter than 4 chars (a CVV, a PIN) is masked only as a
-whole token: `cvv=123` hides it, `41123` does not. Sensitive values are
+leak it. The forms a URL or HTML writes it in are masked too: percent
+encoding (either hex case, `%20` or `+` for a space: `p@ss word` as
+`p%40ss+word`) and HTML entities (`&amp;`, `&lt;`, `&gt;`, `&quot;`,
+`&#39;`). A secret shorter than 4 chars (a CVV, a PIN) is masked only as a
+whole token: `cvv=123` hides it, `41123` does not (a `%XX` next to it
+counts as the char it encodes). Sensitive values are
 never evicted; past 64 distinct ones a press that would type a new one
 refuses `secrets_full` with nothing typed. Only the binary fields are left
 as they are: `browser_screenshot`'s `base64` (and the MCP image item built

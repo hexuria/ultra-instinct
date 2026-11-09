@@ -86,3 +86,56 @@ fn only_the_screenshot_and_pdf_binary_fields_are_exempt() {
         .unwrap_err();
     assert_eq!(err, ToolError::Browser(format!("saw {MASK}")));
 }
+
+/// A page that sends a typed secret in a URL sends it encoded: percent
+/// encoding (either hex case, `%20` or `+` for a space) and, in HTML, its
+/// entity-escaped form are masked like the literal text, in a get_state url
+/// line and in a HAR entry's url and queryString alike.
+#[test]
+fn url_and_html_encoded_forms_of_a_secret_are_masked() {
+    let mut state = ToolState::default();
+    state.remember_typed("p@ss word", true).unwrap();
+    for encoded in ["p%40ss+word", "p%40ss%20word", "p@ss+word", "p%40ss word"] {
+        let line = format!("url: https://shop.example/login?pw={encoded}&next=1");
+        assert_eq!(
+            state.scrub_text(&line),
+            format!("url: https://shop.example/login?pw={MASK}&next=1"),
+            "{encoded}"
+        );
+    }
+    state.remember_typed("<a&b>\"c'", true).unwrap();
+    assert_eq!(
+        state.scrub_text("<input value=\"&lt;a&amp;b&gt;&quot;c&#39;\">"),
+        format!("<input value=\"{MASK}\">")
+    );
+    assert_eq!(
+        state.scrub_text("q=%3ca%26b%3E%22c%27"),
+        format!("q={MASK}")
+    );
+
+    let event = ultra_instinct_cdp::CdpEvent {
+        method: "Network.requestWillBeSent".into(),
+        params: json!({"requestId": "r1", "timestamp": 1.0, "wallTime": 1.0,
+            "request": {"url": "https://shop.example/a?pw=p%40ss+word&b=p%40ss%20word",
+                        "method": "GET", "headers": {}}}),
+    };
+    let mut har = ultra_instinct_cdp::har::build_har(&[event]);
+    assert!(har.to_string().contains("p%40ss"), "{har}");
+    let har = state
+        .scrub_result("browser_har", Ok(std::mem::take(&mut har)))
+        .unwrap();
+    let text = har.to_string();
+    assert!(!text.contains("p%40ss") && !text.contains("word"), "{text}");
+    assert!(text.contains(MASK), "{text}");
+}
+
+/// A short secret's encoded forms keep the whole-token rule.
+#[test]
+fn an_encoded_short_secret_is_masked_only_as_a_whole_token() {
+    let mut state = ToolState::default();
+    state.remember_typed("1 2", true).unwrap();
+    assert_eq!(
+        state.scrub_text("pin=1+2&x=31%202&y=1%2023&z=%201%202%20"),
+        format!("pin={MASK}&x=31%202&y=1%2023&z=%20{MASK}%20")
+    );
+}

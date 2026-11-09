@@ -88,16 +88,18 @@ impl Secrets {
         self.pinned.is_empty() && self.plain.is_empty()
     }
 
-    /// `text` with every remembered secret masked (longest first). A secret
-    /// shorter than 4 chars (a CVV, a PIN) is masked only as a whole token:
-    /// not next to a letter or digit, so `123` hides in `cvv=123` but not
-    /// in `41123`.
+    /// `text` with every remembered secret masked (longest first), as typed
+    /// or as a URL or HTML writes it ([`occurrence`]). A secret shorter than
+    /// 4 chars (a CVV, a PIN) is masked only as a whole token: not next to a
+    /// letter or digit (a `%XX` neighbour counts as the byte it encodes), so
+    /// `123` hides in `cvv=123` but not in `41123`.
     pub(crate) fn scrub_str(&self, text: &str) -> Option<String> {
+        let encoded = text.contains(['%', '+', '&']);
         let mut hits: Vec<&String> = self
             .pinned
             .iter()
             .chain(&self.plain)
-            .filter(|s| text.contains(s.as_str()))
+            .filter(|s| text.contains(s.as_str()) || (encoded && may_be_encoded(text, s)))
             .collect();
         if hits.is_empty() {
             return None;
@@ -105,11 +107,7 @@ impl Secrets {
         hits.sort_by_key(|s| std::cmp::Reverse(s.len()));
         let mut out = text.to_owned();
         for secret in hits {
-            out = if secret.chars().count() < MIN_PLAIN_CHARS {
-                mask_tokens(&out, secret)
-            } else {
-                out.replace(secret.as_str(), MASK)
-            };
+            out = mask(&out, secret, secret.chars().count() < MIN_PLAIN_CHARS);
         }
         (out != text).then_some(out)
     }
@@ -360,21 +358,114 @@ pub(crate) fn capture_hidden(
     })
 }
 
-/// `text` with each whole-token occurrence of `secret` masked: one with no
-/// letter or digit right before or after it.
-fn mask_tokens(text: &str, secret: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = 0;
-    for (at, _) in text.match_indices(secret) {
-        let end = at + secret.len();
-        let before = text[..at].chars().next_back();
-        let after = text[end..].chars().next();
-        if before.is_some_and(char::is_alphanumeric) || after.is_some_and(char::is_alphanumeric) {
+/// Whether `text` holds the longest ASCII letter / digit run of `secret`,
+/// which every encoded form keeps as it is (no run: maybe).
+fn may_be_encoded(text: &str, secret: &str) -> bool {
+    let run = secret
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .max_by_key(|run| run.len())
+        .unwrap_or_default();
+    run.is_empty() || text.contains(run)
+}
+
+/// The HTML entities a serializer writes for `c`.
+fn entities(c: char) -> &'static [&'static str] {
+    match c {
+        '&' => &["&amp;", "&#38;"],
+        '<' => &["&lt;", "&#60;"],
+        '>' => &["&gt;", "&#62;"],
+        '"' => &["&quot;", "&#34;"],
+        '\'' => &["&#39;", "&apos;"],
+        '\u{a0}' => &["&nbsp;"],
+        _ => &[],
+    }
+}
+
+/// The byte `%XX` (either hex case) at the start of `bytes` encodes.
+fn percent_byte(bytes: &[u8]) -> Option<u8> {
+    let hex = |b: u8| char::from(b).to_digit(16);
+    match bytes {
+        [b'%', hi, lo, ..] => Some(u8::try_from(hex(*hi)? * 16 + hex(*lo)?).ok()?),
+        _ => None,
+    }
+}
+
+/// Byte length of `secret` at `text[at..]`, as typed or as a URL or HTML
+/// writes it: each char but an ASCII letter or digit may also be its UTF-8
+/// bytes as `%XX` (either hex case, as `encodeURIComponent` or a form
+/// writes it), a space also `+`, and `& < > " '` (and no-break space) an
+/// HTML entity.
+fn occurrence(text: &str, at: usize, secret: &str) -> Option<usize> {
+    let mut i = at;
+    for c in secret.chars() {
+        let rest = &text[i..];
+        // An entity first: `&amp;` also starts with a literal `&`.
+        if let Some(entity) = entities(c).iter().find(|e| rest.starts_with(**e)) {
+            i += entity.len();
             continue;
         }
-        out.push_str(&text[rest..at]);
-        out.push_str(MASK);
-        rest = end;
+        if rest.starts_with(c) {
+            i += c.len_utf8();
+            continue;
+        }
+        if c.is_ascii_alphanumeric() {
+            return None;
+        }
+        if c == ' ' && rest.starts_with('+') {
+            i += 1;
+            continue;
+        }
+        let mut utf8 = [0u8; 4];
+        for byte in c.encode_utf8(&mut utf8).bytes() {
+            if percent_byte(&text.as_bytes()[i..]) != Some(byte) {
+                return None;
+            }
+            i += 3;
+        }
+    }
+    Some(i - at)
+}
+
+/// Whether the text right before (`before`) or after `text[at..]` is a
+/// letter or digit, reading a `%XX` there as the byte it encodes.
+fn word_next_to(text: &str, at: usize, before: bool) -> bool {
+    let bytes = text.as_bytes();
+    let encoded = if before {
+        at.checked_sub(3)
+            .and_then(|from| percent_byte(&bytes[from..]))
+    } else {
+        percent_byte(&bytes[at..])
+    };
+    match encoded {
+        Some(byte) => !byte.is_ascii() || byte.is_ascii_alphanumeric(),
+        None if before => text[..at]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_alphanumeric),
+        None => text[at..].chars().next().is_some_and(char::is_alphanumeric),
+    }
+}
+
+/// `text` with each [`occurrence`] of `secret` masked; with `whole_token`,
+/// only one with no letter or digit right before or after it.
+fn mask(text: &str, secret: &str, whole_token: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    let (mut rest, mut at) = (0, 0);
+    while at < text.len() {
+        let found = occurrence(text, at, secret).filter(|&len| {
+            len > 0
+                && !(whole_token
+                    && (word_next_to(text, at, true) || word_next_to(text, at + len, false)))
+        });
+        match found {
+            Some(len) => {
+                out.push_str(&text[rest..at]);
+                out.push_str(MASK);
+                at += len;
+                rest = at;
+            }
+            None => at += text[at..].chars().next().map_or(1, char::len_utf8),
+        }
     }
     out.push_str(&text[rest..]);
     out
