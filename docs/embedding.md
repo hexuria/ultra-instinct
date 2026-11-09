@@ -77,6 +77,11 @@ loop on any `CdpTransport` (a `PipePage` you attached yourself, say);
 `Server::run_goal` uses the server's current tab and policy and keeps the
 session.
 
+Use `run_goal` where no model reads the page: Instinct picks every step and
+ends `RunOutcome::Abstained` rather than guess on a page it cannot read. A
+host whose model reads `browser_get_state` calls the tools step by step
+instead.
+
 A run the policy stops ends `RunOutcome::Blocked { label, reason, kind }`
 with nothing pressed. `kind` is the guard's refusal, typed (never parsed
 from `reason`): `Some(BlockKind::NeedsConfirm)` (`label` is the press to

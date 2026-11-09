@@ -1,8 +1,18 @@
-# ultra-instinct — run a browser goal in plain language
+# ultra-instinct — drive a browser for the user
 
-The user gives a goal in their own words. You never need them to know CLI flags.
-Your job: get the `aui` binary, point it at a Chrome with CDP on, and run ONE
-command with their words verbatim.
+The user gives a goal in their own words; they never need to know CLI flags.
+Get the `aui` binary (section 1) and a Chrome (section 2), then pick the mode:
+
+- **You read the page and pick each step:** the shell verbs (section 6).
+  This is the default for an agent that can read `aui snap` output.
+- **One command, the runtime picks each step:** `aui run --goal`
+  (sections 3–4). With `--policy instinct` that is Instinct inside the
+  binary, with no model; section 3 says when a remote policy applies.
+  Instinct handles plain forms and ends `abstained` rather than guess on
+  harder pages: try it once on a simple goal, and switch to the verbs after
+  `abstained`.
+
+The policy flags (section 5) fence both modes.
 
 ## 1. Make sure `aui` exists
 
@@ -52,7 +62,7 @@ google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/aui-chrome &
 
 (Any port works — pass it via `--cdp http://127.0.0.1:<port>`.)
 
-## 3. Run the goal — verbatim
+## 3. One command: `aui run --goal`, verbatim
 
 ```bash
 aui run --goal "<the user's words, unchanged>" --cdp
@@ -215,8 +225,8 @@ and what changed (`success`, `state-changed`, `navigation`,
   sites; stop and tell the user.
 - `✗ not seen in 10.0 s · last url …`: the wait ran out.
 
-Prefer `aui run --goal` for a whole goal; use the verbs when you must check
-each step or the agent abstained.
+`aui run --goal` is the one-command path for a run nobody checks step by
+step; after it ends `abstained`, carry on here with the verbs.
 
 ## Hard rules
 

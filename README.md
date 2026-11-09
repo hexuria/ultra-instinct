@@ -14,8 +14,9 @@
 loop: it observes the page, builds a finite action space, lets a deterministic
 policy (Instinct) choose or abstain, and runs the choice only through a one-shot
 `ActionTicket` that a hard guard issued and the executor revalidates on a fresh
-look. Then it verifies the effect. No LLM and no MCP are needed to run it; MCP
-and an embeddable server are optional adapters over the same guard.
+look. Then it verifies the effect. No LLM and no MCP are needed to run it.
+When an agent or a person reads the page instead, the shell verbs, the MCP
+tools and an embeddable server run each step they pick through the same guard.
 
 ```mermaid
 flowchart TD
@@ -62,17 +63,21 @@ aui install              # prints the Chrome for Testing install command (--run 
 Code subagent that drives a private headless Chrome through `aui mcp` is in
 [`agents/screen-driver.md`](agents/screen-driver.md).
 
-## Quick start
+## Two ways to drive
 
-One goal, one command. `--launch` starts a headless Chrome for the run and
-kills it at exit; `--cdp <url>` attaches to yours instead.
+The guard, tickets and policy are the same in both. What differs is who
+picks the next action.
 
-```bash
-aui run --launch --url https://example.com --goal 'Type "rust" into Search'
-```
+| Who reads the page | Use | Who picks each step |
+|---|---|---|
+| An agent or a person (Claude, you) | the shell verbs or the MCP `browser_*` tools | the caller, one call per step |
+| Nobody: a script, a cron job, a bot host | `aui run --goal`, `run_goal` | the runtime: Instinct (no LLM, no tokens, same input same result), or an optional remote policy that may only pick an offered action |
 
-Step by step from a shell, through a session daemon. Every press still goes
-through the ticketed guard.
+Instinct handles plain forms ("type X in Search, then click Go") and
+abstains rather than guess on harder pages. An agent can try `--goal` once
+on a simple form and switch to the verbs when it abstains.
+
+Step by step from a shell, through a session daemon:
 
 ```bash
 aui open --launch https://shop.example/join   # daemon + its own Chrome
@@ -87,7 +92,16 @@ MCP: run `aui mcp` as a stdio server (56 tools: `observe`, `guard`, `verify`
 and the `browser_*` tools). Index presses take the `@eN` refs
 `browser_get_state` returns.
 
-As a library:
+One goal, one command. `--policy instinct` runs it with no model; an `aui`
+built with the `jev` feature (as `install-aui.sh` builds it) otherwise
+defaults to the JEV remote policy. `--launch` starts a headless Chrome for the
+run and kills it at exit; `--cdp <url>` attaches to yours instead.
+
+```bash
+aui run --launch --policy instinct --url https://example.com --goal 'Type "rust" into Search'
+```
+
+As a library, the same loop:
 
 ```rust,ignore
 use ultra_instinct_agent::AgentBuilder;

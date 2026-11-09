@@ -23,15 +23,8 @@ it through to its "Hard rules" before your first browser command.
 
 ## 3. Pick the path
 
-- **A whole goal:** one command, the user's words verbatim:
-
-  ```bash
-  aui run --launch --url https://shop.example/ --goal "<the user's words>"
-  ```
-
-  `--launch` starts a private Chrome for the run. Use `--cdp` instead to
-  drive a Chrome already listening on `127.0.0.1:9222`.
-- **Step by step:** the shell verbs on one session:
+- **You read the page and pick each step** (the default for an agent): the
+  shell verbs on one session.
 
   ```bash
   aui open --launch https://shop.example/   # daemon + its own Chrome
@@ -41,6 +34,18 @@ it through to its "Hard rules" before your first browser command.
   ```
 
   Act only on `@eN` refs from your latest `aui snap`.
+- **One command, the runtime picks each step:** for a run nobody checks
+  step by step, or a one-shot try on a simple form. Pass the user's words
+  verbatim.
+
+  ```bash
+  aui run --launch --policy instinct --url https://shop.example/ --goal "<the user's words>"
+  ```
+
+  With `--policy instinct`, Instinct picks every step inside the binary,
+  with no model, and ends `abstained` rather than guess; after `abstained`,
+  switch to the verbs. The guide says when a remote policy fits instead. `--launch` starts a
+  private Chrome; `--cdp` drives one already listening on `127.0.0.1:9222`.
 
 ## 4. Fence the run
 
