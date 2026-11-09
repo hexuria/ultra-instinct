@@ -611,7 +611,7 @@ fn hide_then(
         )
         .call(
             "Runtime.callFunctionOn",
-            json!({"result": {"type": "object", "value": ["width: 80px"]}}),
+            json!({"result": {"type": "string", "value": "width: 80px"}}),
         );
     capture(script)
         .call(
@@ -672,10 +672,15 @@ fn a_screenshot_hides_typed_sensitive_values_and_restores_them() {
         .as_str()
         .unwrap()
         .contains("-webkit-text-security"));
-    assert_eq!(hide["arguments"], json!([{"objectId": "cvv-1"}]));
+    assert_eq!(
+        hide["objectId"], "cvv-1",
+        "the field is the handle, not script text"
+    );
+    assert!(hide.get("arguments").is_none(), "{hide}");
+    assert_eq!(restore["objectId"], "cvv-1");
     assert_eq!(
         restore["arguments"],
-        json!([{"value": ["width: 80px"]}, {"objectId": "cvv-1"}]),
+        json!([{"value": "width: 80px"}]),
         "the style it had goes back"
     );
 }
@@ -708,7 +713,6 @@ fn a_field_that_cannot_be_hidden_refuses_the_capture() {
     let (mut server, log) = typed_cvv(|s| {
         s.observe_compact(&card())
             .call_error("DOM.resolveNode", "No node with given id found")
-            .call("Runtime.releaseObjectGroup", json!({}))
     });
     let err = server
         .call_tool("browser_screenshot", &json!({"cdp": CDP}))
@@ -737,4 +741,59 @@ fn a_screenshot_with_no_typed_secret_hides_nothing() {
         .call_tool("browser_screenshot", &json!({"cdp": CDP}))
         .expect("screenshot");
     assert_eq!(capture_calls(&log), ["Page.captureScreenshot"]);
+}
+
+/// Two sensitive fields; the second cannot be resolved: the first one,
+/// already hidden, is put back before the refusal, and nothing is captured.
+#[test]
+fn a_refused_capture_puts_back_the_fields_it_already_hid() {
+    let mut two = card();
+    two.dom[0].label = "PIN".into();
+    two.ax[0].name = "PIN".into();
+    two.dom[0] = two.dom[0]
+        .clone()
+        .with_compact_state(json!({"it": "text", "v": ""}));
+    let (mut server, log) = typed_cvv(move |s| {
+        s.observe_compact(&two)
+            .call(
+                "DOM.resolveNode",
+                json!({"object": {"type": "object", "objectId": "pin-1"}}),
+            )
+            .call(
+                "Runtime.callFunctionOn",
+                json!({"result": {"type": "object", "subtype": "null", "value": null}}),
+            )
+            .call_error("DOM.resolveNode", "No node with given id found")
+            .call(
+                "Runtime.callFunctionOn",
+                json!({"result": {"type": "boolean", "value": true}}),
+            )
+            .call("Runtime.releaseObjectGroup", json!({}))
+    });
+    let err = server
+        .call_tool("browser_screenshot", &json!({"cdp": CDP}))
+        .expect_err("refused");
+    assert_eq!(err.code(), "secret_on_screen", "{err:?}");
+    assert_eq!(
+        capture_calls(&log),
+        [
+            "DOM.resolveNode",
+            "Runtime.callFunctionOn",
+            "DOM.resolveNode",
+            "Runtime.callFunctionOn",
+            "Runtime.releaseObjectGroup",
+        ]
+    );
+    let calls = log.borrow();
+    let restore = calls
+        .iter()
+        .filter(|(m, _)| m == "Runtime.callFunctionOn")
+        .nth(1)
+        .unwrap();
+    assert_eq!(restore.1["objectId"], "pin-1");
+    assert_eq!(
+        restore.1["arguments"],
+        json!([{"value": null}]),
+        "no style before: none after"
+    );
 }

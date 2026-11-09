@@ -168,7 +168,7 @@ a `type=text` box, say; password inputs are dotted already) as dots
 then put each field's `style` attribute back exactly as it was, also when
 the capture failed (a failed restore shows as `restore_error`). Values are
 never changed. A field that cannot be hidden refuses `secret_on_screen`
-and nothing is captured. Cross-origin iframes and closed shadow roots are
+(the fields already hidden are put back) and nothing is captured. Cross-origin iframes and closed shadow roots are
 not covered (observe cannot see them), nor text the page copies elsewhere
 from a field: keep `browser_screenshot` off the allow-list if that matters.
 Before any secret is typed a capture is exactly one CDP call.

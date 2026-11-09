@@ -161,14 +161,15 @@ surface.
   observe first, resolve every sensitive text field on the page by the
   observe rule (password and hidden inputs show no value and are skipped)
   and set `-webkit-text-security: disc !important` on its inline style
-  through one `Runtime.callFunctionOn` whose fields are object arguments,
-  never script text. After the capture, whatever it returned, a second
-  call puts each `style` attribute back exactly as it was (absent stays
-  absent) and the handles are released; a failed restore is reported as
-  `restore_error` on a successful body. Field values are never touched;
-  only the inline style flips for the capture's duration (a page's
-  `MutationObserver` can see it). A field that cannot be resolved or
-  hidden refuses `secret_on_screen` with nothing captured. Not covered:
+  with a `Runtime.callFunctionOn` on that field's own handle (so a
+  same-origin frame's field runs in its own world; no field reaches script
+  text). After the capture, whatever it returned, each `style` attribute
+  goes back exactly as it was (absent stays absent) and the handles are
+  released; a failed restore is reported as `restore_error` on a
+  successful body. Field values are never touched; only the inline style
+  flips for the capture's duration (a page's `MutationObserver` can see
+  it). A field that cannot be resolved or hidden puts back the ones
+  already hidden and refuses `secret_on_screen` with nothing captured. Not covered:
   cross-origin iframes and closed shadow roots (observe does not see them),
   and values the page itself mirrors into other text. With no sensitive
   value typed, a capture is the one CDP call it was.
