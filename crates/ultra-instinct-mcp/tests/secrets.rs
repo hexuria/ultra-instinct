@@ -433,3 +433,104 @@ fn a_typed_password_is_never_evicted_by_later_typing() {
         .expect("text");
     assert_eq!(text["text"], format!("password {MASK}"), "{text}");
 }
+
+/// Nickname @e1 (a plain text field, or the same box turned into a password
+/// input), Password @e2.
+fn nickname(kind: &str) -> PageSpec {
+    let mut page = page();
+    page.dom[0].label = "Nickname".into();
+    page.ax[0].name = "Nickname".into();
+    page.dom[0] = page.dom[0]
+        .clone()
+        .with_compact_state(json!({"it": kind, "v": ""}));
+    page
+}
+
+fn connect_once(script: ScriptBuilder) -> Server {
+    let mut connect = Some(script);
+    Server::with_connector(move |_url| {
+        let script = connect.take().ok_or_else(|| CdpError::Transport {
+            message: "one connect".into(),
+        })?;
+        Ok(Box::new(ReplayTransport::parse(&script.to_json())?) as Box<dyn CdpTransport>)
+    })
+}
+
+/// The field the caller saw was plain text; by the time the executor
+/// observes, the page made it a password input (`input_type` is not in the
+/// fingerprint, so revalidation passes). The text typed into it is a secret.
+#[test]
+fn a_field_that_became_a_password_after_get_state_masks_what_is_typed() {
+    let mut server = connect_once(
+        ScriptBuilder::new()
+            .observe_compact(&nickname("text")) // get_state
+            .observe_compact(&nickname("text")) // type: resolve
+            .observe_compact(&nickname("password")) // type: executor
+            .dom_input(10)
+            .call(
+                "Runtime.evaluate",
+                string_result(&format!("Saved {SECRET}")),
+            ),
+    );
+    let state = server
+        .call_tool("browser_get_state", &json!({"cdp": CDP, "format": "json"}))
+        .expect("state");
+    assert_eq!(state["elements"][0]["sensitive"], false, "{state}");
+    server
+        .call_tool(
+            "browser_type",
+            &json!({"cdp": CDP, "index": 1, "text": SECRET, "snapshot": state["snapshot"]}),
+        )
+        .expect("typed");
+    let text = server
+        .call_tool("browser_get_text", &json!({"cdp": CDP}))
+        .expect("text");
+    assert_eq!(text["text"], format!("Saved {MASK}"), "{text}");
+}
+
+/// `browser_keyboard` types at the focus. The last observation (get_state,
+/// Email focused) is stale once a click moved the focus into Password: the
+/// focus is read again, and the text typed there is a secret.
+#[test]
+fn keyboard_text_after_a_click_into_a_password_field_is_masked() {
+    let focused = |at: usize| {
+        let mut page = page();
+        page.ax[at] = page.ax[at].clone().focused();
+        page
+    };
+    let mut script = ScriptBuilder::new()
+        .observe_compact(&focused(0)) // get_state
+        .observe_compact(&focused(0)) // click: resolve
+        .observe_compact(&focused(0)) // click: executor
+        .dom_click(11)
+        .observe_compact(&focused(1)) // keyboard: the focus now
+        .call(
+            "Runtime.evaluate",
+            json!({"result": {"type": "boolean", "value": true}}),
+        );
+    for _ in 0.."hunter2".len() * 2 {
+        script = script.call("Input.dispatchKeyEvent", json!({}));
+    }
+    let script = script.call(
+        "Runtime.evaluate",
+        string_result("Your password hunter2 is weak."),
+    );
+    let mut server = connect_once(script);
+    let state = server
+        .call_tool("browser_get_state", &json!({"cdp": CDP}))
+        .expect("state");
+    server
+        .call_tool(
+            "browser_click",
+            &json!({"cdp": CDP, "index": 2, "snapshot": state["snapshot"]}),
+        )
+        .expect("clicked");
+    let typed = server
+        .call_tool("browser_keyboard", &json!({"cdp": CDP, "text": "hunter2"}))
+        .expect("typed");
+    assert_eq!(typed["typed"], 7, "{typed}");
+    let text = server
+        .call_tool("browser_get_text", &json!({"cdp": CDP}))
+        .expect("text");
+    assert_eq!(text["text"], format!("Your password {MASK} is weak."), "{text}");
+}

@@ -473,7 +473,10 @@ fn keyboard_types_keys_or_inserts_text_at_the_focus() {
     for _ in 0..4 {
         script = script.call("Input.dispatchKeyEvent", json!({}));
     }
+    // The keys ran after the last observation: the next call reads the
+    // focus again (which field it is decides whether the text is secret).
     let script = script
+        .observe_compact(&login(true))
         .call("Runtime.evaluate", focused())
         .call("Input.insertText", json!({}));
     let (mut server, log) = server(script);

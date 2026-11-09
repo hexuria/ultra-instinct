@@ -798,9 +798,16 @@ fn gated_input(
         }
         .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
         // Text for a sensitive field is masked in every output from now on
-        // (before dispatch, so a failed press does not leak it either).
-        if let (Input::Type(text), Some(region)) = (&input, manifold.get(&region_id)) {
-            if crate::secrets::sensitive(region) {
+        // (before dispatch, so a failed press does not leak it either): the
+        // field the caller saw, or the one on this observation, is
+        // sensitive. The executor's own observation is checked again at
+        // dispatch (`TypingInto`).
+        if let Input::Type(text) = &input {
+            let secret = [manifold.get(&region_id), fresh.get(&region_id)]
+                .into_iter()
+                .flatten()
+                .any(crate::secrets::sensitive);
+            if secret {
                 server.tool_state_mut().secrets.remember(text, true)?;
             }
         }
@@ -813,8 +820,17 @@ fn gated_input(
                 .map_err(|reason| refusal_for(reason, &label, url.as_deref()))?;
         }
         let mut ledger = server.take_ledger(&key);
-        let executed = execute_ticketed_with(&mut session, &mut ledger, &ticket, &input, &policy);
+        let mut typing = crate::secrets::TypingInto {
+            session: &mut session,
+            secrets: &mut server.tool_state_mut().secrets,
+            refused: None,
+        };
+        let executed = execute_ticketed_with(&mut typing, &mut ledger, &ticket, &input, &policy);
+        let refused = typing.refused.take();
         server.keep_ledger(&key, ledger);
+        if let Some(full) = refused {
+            return Err(full);
+        }
         let done = executed.map_err(|err| match err {
             ExecError::Gate(
                 reason @ (GuardReason::DomainNotAllowed | GuardReason::NeedsConfirm),

@@ -13,10 +13,12 @@
 use std::collections::VecDeque;
 
 use serde_json::Value;
-use ultra_instinct_core::{Action, InteractionRegion};
+use ultra_instinct_agent::{AgentError, BrowserRuntime, Input};
+use ultra_instinct_browser::{PageState, ScrollDirection};
+use ultra_instinct_core::{Action, InteractionManifold, InteractionRegion, RegionId};
 
 use crate::error::ToolError;
-use crate::host::ToolState;
+use crate::host::{LiveSession, ToolState};
 
 /// What a remembered secret reads as in tool output.
 pub const MASK: &str = "••••";
@@ -173,6 +175,49 @@ impl Secrets {
             },
             other => other,
         }
+    }
+}
+
+/// The session the executor drives for one `browser_type`. Just before
+/// dispatch, the text becomes a secret when the target on the executor's
+/// own fresh observation (the one it revalidated against) is sensitive, or
+/// is missing from it (fail closed): `input_type` is not in the region
+/// fingerprint, so a field that became a password input after the caller
+/// looked still revalidates.
+pub(crate) struct TypingInto<'a> {
+    pub(crate) session: &'a mut LiveSession,
+    pub(crate) secrets: &'a mut Secrets,
+    /// `secrets_full` at dispatch: the ticket is spent, nothing was typed.
+    pub(crate) refused: Option<ToolError>,
+}
+
+impl BrowserRuntime for TypingInto<'_> {
+    fn observe(&mut self) -> Result<&InteractionManifold, AgentError> {
+        BrowserRuntime::observe(self.session)
+    }
+    fn focused(&self) -> Option<RegionId> {
+        BrowserRuntime::focused(self.session)
+    }
+    fn page(&self) -> Option<&PageState> {
+        BrowserRuntime::page(self.session)
+    }
+    fn last_observation(&self) -> Option<&InteractionManifold> {
+        BrowserRuntime::last_observation(self.session)
+    }
+    fn scroll(&mut self, direction: ScrollDirection) -> Result<(), AgentError> {
+        BrowserRuntime::scroll(self.session, direction)
+    }
+    fn dispatch(&mut self, target: &RegionId, input: &Input) -> Result<(), AgentError> {
+        if let Input::Type(text) = input {
+            let secret = BrowserRuntime::last_observation(self.session)
+                .and_then(|fresh| fresh.get(target))
+                .is_none_or(sensitive);
+            if let Err(err) = secret.then(|| self.secrets.remember(text, true)).transpose() {
+                self.refused = Some(err);
+                return Err(AgentError::InputRejected("secrets_full".into()));
+            }
+        }
+        BrowserRuntime::dispatch(self.session, target, input)
     }
 }
 
