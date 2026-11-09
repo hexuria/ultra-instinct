@@ -200,8 +200,15 @@ impl Server {
 
     /// [`crate::run_goal`] on the current tab (the bound pipe tab, or the
     /// default endpoint's), under this server's policy. The session stays
-    /// open for the next tool call, with the run's last observation. Not a
-    /// tool: the allow-list does not apply.
+    /// open for the next tool call, with the run's last observation.
+    ///
+    /// Not a tool, but the allow-list names it: with
+    /// [`Server::with_tool_allowlist`] set, the run goes ahead only when the
+    /// list holds `run_goal` (the loop clicks, types, selects, hovers, drags,
+    /// scrolls and presses keys, whatever press tools the list names). Else
+    /// it ends [`crate::RunOutcome::Failed`] with
+    /// ``tool_not_allowed: tool `run_goal` is not allowed on this server``
+    /// before any CDP call.
     ///
     /// Every payload the run types or selects is remembered before it is
     /// dispatched and masked in every later tool output, error and HAR, and
@@ -214,6 +221,12 @@ impl Server {
             outcome: crate::RunOutcome::Failed { error },
             typed: crate::TypedText::default(),
         };
+        if !self.allows("run_goal") {
+            let refused = ToolError::ToolNotAllowed {
+                tool: "run_goal".into(),
+            };
+            return failed(format!("{}: {refused}", refused.code()));
+        }
         let policy = match &self.policy {
             Ok(policy) => policy.clone(),
             Err(err) => return failed(err.clone()),

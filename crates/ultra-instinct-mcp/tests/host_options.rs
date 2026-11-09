@@ -431,3 +431,43 @@ fn text_and_html_are_cut_in_the_page_and_observe_caps_its_regions() {
     assert_eq!(observed["truncated"], true);
     assert_eq!(observed["dropped_regions"], 1);
 }
+
+/// `Server::run_goal` is gated by the allow-list as the name `run_goal`:
+/// with an allow-list that leaves it out, the run refuses `tool_not_allowed`
+/// before any CDP call, even when every press tool is allowed.
+#[test]
+fn run_goal_runs_only_when_the_allow_list_names_it() {
+    let (server, log) = replay(ScriptBuilder::new());
+    let mut server = server.with_tool_allowlist([
+        "browser_get_state",
+        "browser_click",
+        "browser_type",
+        "browser_select_dropdown",
+        "browser_navigate",
+    ]);
+    let report = server.run_goal("click Sign in", ultra_instinct_mcp::RunLimits::default());
+    assert_eq!(
+        report.outcome,
+        ultra_instinct_mcp::RunOutcome::Failed {
+            error: "tool_not_allowed: tool `run_goal` is not allowed on this server".into()
+        }
+    );
+    assert!(report.steps.is_empty());
+    assert!(log.borrow().is_empty(), "no CDP call at all: {log:?}");
+
+    // Named on the list, the run goes ahead (here it reaches the page).
+    let (server, log) = replay(ScriptBuilder::new());
+    let mut server = server.with_tool_allowlist(["run_goal"]);
+    let report = server.run_goal(
+        "click Sign in",
+        ultra_instinct_mcp::RunLimits {
+            max_steps: 1,
+            deadline: None,
+        },
+    );
+    assert!(
+        matches!(&report.outcome, ultra_instinct_mcp::RunOutcome::Failed { error } if !error.contains("tool_not_allowed")),
+        "{report:?}"
+    );
+    assert!(!log.borrow().is_empty(), "the run observed the page");
+}

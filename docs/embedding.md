@@ -43,6 +43,7 @@ let mut server = Server::with_pipe(browser)
         "browser_scroll", "browser_wait", "browser_screenshot", "browser_get_text",
         "browser_dialog", "browser_new_tab", "browser_list_tabs",
         "browser_switch_tab", "browser_close_tab",
+        "run_goal", // Server::run_goal below; not a tool, but the list gates it
     ]);
 server.set_policy(Policy::from_lists("*.shop.example", "Pay*, Delete*")?);
 
@@ -118,6 +119,15 @@ taken from the page now (your own typing moves it). With
 ## Which tools to allow-list
 
 Allow the reading and pressing tools a task needs (the example above).
+
+`Server::run_goal` is not a tool, but an allow-list gates it by the name
+`run_goal`: with a list set and `run_goal` not on it, the run ends
+`RunOutcome::Failed` with ``tool_not_allowed: tool `run_goal` is not allowed
+on this server`` before any CDP call. Naming it allows the whole loop, which
+presses whatever the page offers (click, type, select, hover, drag, scroll,
+key), still under the server's `Policy`, the hard gate and tickets, whichever
+press tools the list names. `tools/list` never shows it.
+
 Leave out, unless you need them and trust the caller:
 
 - `browser_exec` / `browser_javascript_exec`: arbitrary script in the page

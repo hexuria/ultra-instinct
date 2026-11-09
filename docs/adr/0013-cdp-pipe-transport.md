@@ -143,6 +143,11 @@ surface.
   `Server::with_downloads(Anywhere | Off | Dir)`.
 - **Allow-list.** `Server::with_tool_allowlist`: other tools refuse
   `tool_not_allowed` and `tools/list` shows only the allowed ones.
+  `Server::run_goal` is gated by the name `run_goal` (not a tool, never
+  listed): absent from a set list, the run ends `Failed` with
+  `tool_not_allowed: …` before any CDP call. One name, not the set of press
+  tools the loop could use: the loop presses through its own executor and
+  may click, type, select, hover, drag, scroll or press keys on any page.
 - **Runtime policy and the loop.** `Server::set_policy` between calls; a
   `confirm` lifts its own call only. `ultra_instinct_mcp::run_goal` runs the
   agent loop (InstinctPolicy, deterministic text, no model) under a guard
