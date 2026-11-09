@@ -527,13 +527,17 @@ fn keyboard(
             "`mode` must be type|insert, got `{mode}`"
         )));
     }
-    // Fail closed: unless the last observation shows a focused field that
-    // is not sensitive, this text is masked in every later output.
-    let focused_plain = server.take_session(key).map(|session| {
+    // Fail closed: unless a current observation shows a focused field that
+    // is not sensitive, this text is masked in every later output. One taken
+    // before a press is stale (the press may have moved the focus): observe
+    // again. No observation at all, or a failed one, counts as sensitive.
+    let focused_plain = server.take_session(key).map(|mut session| {
+        if session.is_stale() {
+            let _ = session.observe();
+        }
         let plain = session
-            .page()
-            .and_then(|page| page.focused())
-            .and_then(|id| session.manifold()?.get(id))
+            .fresh_manifold()
+            .and_then(|manifold| manifold.get(session.page()?.focused()?))
             .is_some_and(|region| !crate::secrets::sensitive(region));
         keep(server, key, session);
         plain
