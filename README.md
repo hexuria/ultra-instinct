@@ -10,219 +10,167 @@
 
 # ultra-instinct
 
-**Ultra-Instinct is a Rust-native browser-agent runtime with a deterministic
-decision kernel (Instinct) and executor-bound action tickets.** It observes the
-page (DOM + accessibility fusion, stable identity, stacking / hit-test
-occlusion, modal front layer), builds a finite action space, lets Instinct choose
-or abstain, gates the choice, and executes exactly the ticketed action — or
-nothing — then verifies the effect.
+**Ultra-Instinct is a Rust-native browser-agent runtime.** The agent owns the
+loop: it observes the page, builds a finite action space, lets a deterministic
+policy (Instinct) choose or abstain, and runs the choice only through a one-shot
+`ActionTicket` that a hard guard issued and the executor revalidates on a fresh
+look. Then it verifies the effect. No LLM and no MCP are needed to run it; MCP
+and an embeddable server are optional adapters over the same guard.
 
-```text
-goal
- │
- ▼  observe (CDP) ─► ActionSpace (front layer applied; hidden/disabled/covered excluded)
- │
- ▼  policy: Instinct ─► abstain? ─► optional remote tier (feature `remote`, same finite menu)
- │
- ▼  TYPE_TEXT / SELECT payload: TextResolver (never Instinct)
- │
- ▼  hard gate ─► ActionTicket (action + target + world fingerprint)
- │
- ▼  executor: one-shot ledger → fresh observe → revalidate → gate → consume → input
- │
- ▼  observe → diff / value read-back → success | no-effect | wrong-effect | navigation
- │
- └─► history → next tick (DONE / BLOCKED / abstain / bounds)
+```mermaid
+flowchart TD
+    goal([goal]) --> observe["observe (CDP: DOM + accessibility)"]
+    observe --> space["ActionSpace (front layer applied)"]
+    space --> policy["Instinct policy (or abstain)"]
+    policy --> gate["hard gate + guard Policy (allow-domain / confirm)"]
+    gate --> ticket["one-shot ActionTicket"]
+    ticket --> exec["execute_ticketed: fresh observe, revalidate, gate, consume"]
+    exec --> dispatch[dispatch input]
+    dispatch --> verify["verify (diff / value read-back)"]
+    verify --> observe
+    verify --> done(["DONE / BLOCKED / abstain"])
 ```
 
-No LLM and no MCP are required to run the loop. See `docs/PRD.md`,
-`docs/adr/0001…0003`, and `docs/EVAL.md` for status and honest gaps.
+```mermaid
+flowchart LR
+    run["ultra-instinct run"] --> agent[ultra-instinct-agent]
+    verbs["aui verbs + session daemon"] --> mcp["ultra-instinct-mcp Server"]
+    stdio["MCP over stdio (aui mcp)"] --> mcp
+    host["embedding host: CDP pipe or websocket"] --> mcp
+    mcp --> tools[ultra-instinct-browser-tools]
+    tools --> agent
+    agent --> guard[ultra-instinct-guard]
+    agent --> browser[ultra-instinct-browser]
+    browser --> cdp[ultra-instinct-cdp]
+```
 
-Toolchain: Rust 1.99.0. Versions are 0.1.0 and `publish = false`. Public API
-is unstable until 1.0.
-
-Crates are `ultra-instinct-*` (Autonomous Ultra Instinct, e.g. `ultra-instinct-agent`,
-`ultra-instinct-browser`). The binary is `ultra-instinct`, with `aui` as a short
-alias for the same CLI.
+Rust 1.99.0. Crates are `ultra-instinct-*` 0.1.0 on crates.io; the API is
+unstable until 1.0. The binary is `ultra-instinct`, with `aui` as a short
+alias. Every crate is `#![forbid(unsafe_code)]`.
 
 ## Install
 
 ```bash
 scripts/install-aui.sh   # idempotent; installs aui + ultra-instinct to ~/.cargo/bin
+aui doctor               # checks Chrome, the --cdp endpoint, a test launch, $TMPDIR/aui
+aui install              # prints the Chrome for Testing install command (--run runs it)
 ```
 
-Agents: `skills/ultra-instinct/SKILL.md` turns a plain-language goal into one
-`aui run` call — install, CDP check, policy pick, and run are all covered there.
+`ULTRA_INSTINCT_CHROME=<path>` picks the Chrome binary. Agents: read
+[`skills/ultra-instinct/SKILL.md`](skills/ultra-instinct/SKILL.md), or
+`aui skills get core` for the full guide that ships in the binary. A Claude
+Code subagent that drives a private headless Chrome through `aui mcp` is in
+[`agents/screen-driver.md`](agents/screen-driver.md).
 
-### Claude Code: `screen-driver` subagent
+## Quick start
 
-[`agents/screen-driver.md`](agents/screen-driver.md) is the Claude Code subagent
-from the [benchmark](#benchmark-browser-tools-for-an-llm-agent): it starts
-`aui mcp` for itself, drives a private headless Chrome (never your own), clicks
-by element index, and checks visuals from `browser_screenshot` images. It needs
-`aui` on `PATH` and Chrome or Chromium installed.
-
-```bash
-scripts/install-aui.sh
-mkdir -p ~/.claude/agents && cp agents/screen-driver.md ~/.claude/agents/
-```
-
-Copy it to `.claude/agents/` instead to scope it to one project. Claude Code
-reads agent files and their MCP servers when a session starts, so restart the
-session after installing it or after rebuilding `aui`. Then delegate page checks
-to it, for example: "use screen-driver to check the checkout page in dark mode".
-
-## Run the agent
-
-```bash
-# Live: attach to a Chrome started with --remote-debugging-port
-cargo run -p ultra-instinct -- run --cdp http://127.0.0.1:9222 \
-  --url https://example.com --goal 'Type "rust" into Search'
-
-# Offline: predict-only dry run on a manifold (a --fixture *.cdp.json replay
-# runs the full loop, but must script every observe/input/observe CDP call)
-cargo run -p ultra-instinct -- run --goal "Delete" --fixture fixtures/modal-confirm.manifold
-# Full offline agent loop (type / click / select CDP replays)
-cargo run -p ultra-instinct -- run --goal 'Type "rust" into Search' \
-  --fixture fixtures/agent-type-search.cdp.json
-cargo run -p ultra-instinct -- run --goal "Click Go" \
-  --fixture fixtures/agent-click-go.cdp.json
-cargo run -p ultra-instinct -- run --goal 'Select "Business" in Cabin class' \
-  --fixture fixtures/agent-select-cabin.cdp.json
-```
-
-Each `ultra-instinct run --cdp ... --url ...` opens its own background tab and
-closes it when the run ends, so multiple agents can run against one Chrome.
-`--cdp` without `--url` continues to drive the first existing tab.
-
-Optional model payloads (feature `model-text`, ADR 0006): Instinct still picks the
-target; a model only extracts a TYPE_TEXT / SELECT value that must occur in the
-goal, else deterministic fallback, else abstain. Tests use scripted models.
-
-```bash
-cargo run -p ultra-instinct --features model-text -- run --cdp http://127.0.0.1:9222 \
-  --goal "type rust ownership in the Search box" --text-model-cmd ./my-text-model.sh
-```
-
-Without `--text-model-cmd`, `TEXT_MODEL_API_KEY` turns on the built-in HTTP model.
-`TEXT_MODEL_BASE_URL`, `TEXT_MODEL`, and `TEXT_MODEL_API` (`openai` | `anthropic` |
-`gemini`; unset, the base URL host picks it) select the provider wire shape:
-
-```bash
-TEXT_MODEL_API=anthropic TEXT_MODEL=claude-haiku-5-5 TEXT_MODEL_API_KEY=... \
-  cargo run -p ultra-instinct --features model-text -- run --cdp http://127.0.0.1:9222 \
-  --goal "type rust ownership in the Search box"
-```
-
-```rust
-let mut agent = AgentBuilder::new(BrowserSession::new(transport), InstinctPolicy::default())
-    .max_steps(20)
-    .build(r#"Select "Business" in Cabin class"#);
-let outcome = agent.run(); // Done | Blocked | Abstained | Failed, with verified steps
-```
-
-### Chrome
-
-`aui doctor` checks what `aui` needs: the Chrome it would launch, whether
-`--cdp` answers, a test launch (skipped by `--quick`), and the `$TMPDIR/aui`
-socket dir. `aui install` prints
-`npx @puppeteer/browsers install chrome@stable --path ~/.cache/ultra-instinct/chrome`
-(Chrome for Testing); `aui install --run` runs it, then `doctor`. Set
-`ULTRA_INSTINCT_CHROME=<path>` to pick a binary. `run --launch [--headed]`
-starts a headless (or headed) Chrome for the run when `--cdp` is not given,
-and kills it at exit:
+One goal, one command. `--launch` starts a headless Chrome for the run and
+kills it at exit; `--cdp <url>` attaches to yours instead.
 
 ```bash
 aui run --launch --url https://example.com --goal 'Type "rust" into Search'
 ```
 
-### Reuse a login
-
-`--save-state <path>` writes the run's cookies and local / session storage
-when it ends (a 0600 file; the run prints counts, never values).
-`--load-state <path>` sets them before the first observe:
-
-```bash
-aui run --launch --url https://shop.example/login --goal "..." --save-state shop.json
-aui run --launch --url https://shop.example/orders --goal "..." --load-state shop.json
-```
-
-Storage is written for the origin the tab is on; other origins are reported
-as pending.
-
-### Policy flags
-
-`--allow-domain shop.example` (or `*.shop.example`, repeatable) allows input
-only on those hosts, and `--url` must match. `--confirm-press "Pay*"`
-(repeatable glob) makes a matching click end `blocked` with
-`rerun with --confirm "<label>"`; only the user's `--confirm "<label>"` lets
-it through. MCP reads the same lists from `ULTRA_INSTINCT_ALLOW_DOMAINS` /
-`ULTRA_INSTINCT_CONFIRM_PRESS`, and press tools take a `confirm` argument.
-
-## Drive from a shell
-
-The shell verbs drive one browser, one step at a time, through a small
-session daemon (`$TMPDIR/aui/<session>.sock`). Every press still goes
+Step by step from a shell, through a session daemon. Every press still goes
 through the ticketed guard.
 
 ```bash
-aui open --launch https://shop.example/join   # daemon + its own Chrome (or --cdp <url>)
+aui open --launch https://shop.example/join   # daemon + its own Chrome
 aui snap                                      # @e1 textbox "Email"  value="" …
 aui type @e2 "kid@example.com"
 aui click @e5                                 # ✓ ticket 41 · navigation
-aui wait --gone "Loading" --timeout 10
+aui wait --text "Welcome" --timeout 10
 aui close                                     # stops the daemon and its Chrome
 ```
 
-`@eN` refs come from the latest `aui snap` (`N` works too). Other verbs:
-`select`, `key`, `scroll`, `shot [--annotate]`, `tabs`, `dialog`, `forward`,
-`reload`, `check` / `uncheck`, `focus`, `keyboard`, `get`, `is`, `count`,
-`state save|load`, `cookies`, `storage`, `set viewport|device|media|offline|headers|reset`,
-`download`, `network block|unblock|har`. A refusal or error exits non-zero.
-`aui batch "snap" "click @e5" --bail` runs several verbs in order on one
-session (`--json` for `[{cmd, ok, output}]`; no args reads a JSON array on
-stdin). `--session <name>` picks the browser; `aui session` prints the
-current one and `aui session list` the live ones. The daemon (and a
-`--launch` Chrome) exits after 60 minutes without a verb; `aui open --idle
-<secs>` sets that for the session (1 s to 24 h). `aui skills get core` prints
-the full guide.
+MCP: run `aui mcp` as a stdio server (56 tools: `observe`, `guard`, `verify`
+and the `browser_*` tools). Index presses take the `@eN` refs
+`browser_get_state` returns.
 
-## MCP tools (optional adapter)
+As a library:
 
-`observe`, `guard`, `verify` for hosts that keep their own executor. `guard`
-finds its target by exact label (and role / `within`), unique or refuse, runs
-the hard gate, and returns an `ActionTicket`; it never clicks. The locate,
-inspect, act and diff helpers and the matcher are removed
-([ADR 0012](docs/adr/0012-borrow-and-prune.md)).
+```rust,ignore
+use ultra_instinct_agent::AgentBuilder;
+use ultra_instinct_browser::{launch, open_tab, BrowserSession};
+use ultra_instinct_policy::InstinctPolicy;
 
-## Benchmark: browser tools for an LLM agent
+let chrome = launch::launch(&launch::LaunchOptions::default())?; // killed on drop
+let mut session = BrowserSession::new(open_tab(&chrome.endpoint())?);
+session.navigate("https://example.com")?;
+let mut agent = AgentBuilder::new(session, InstinctPolicy::default())
+    .max_steps(20)
+    .build(r#"Type "rust" into Search"#);
+let outcome = agent.run(); // Done | Blocked | Abstained | Failed
+```
 
-The same Claude Code subagent (Claude Haiku 5.5) checked and drove one page with
-different browser tools, 2 runs each. With `ultra-instinct mcp` it was as
-accurate as obscura + pageshot (10 / 10), used **30% fewer tokens**, ran **2.2×
-faster**, and screenshotted every state, including after clicks. Small sample,
-one site: see [`RESULTS.md`](RESULTS.md) and the
-[writeup](bench/results/AGENT-MCP-COMPARE-2026-10-17.md) for method and caveats.
+Every tool and verb: [`docs/tools.md`](docs/tools.md). Run flags:
+`aui --help`.
 
-## Commands
+## Safety
+
+- **Hard gate and tickets.** Disabled, readonly, hidden, occluded,
+  offscreen or behind-a-modal targets never run. A press runs only through
+  a one-shot ticket, revalidated on a fresh observation; a changed page
+  refuses instead of pressing the wrong element.
+- **Domain allow-list.** `--allow-domain shop.example` (or `*.shop.example`)
+  allows input only on those hosts, checks navigation URLs first, and
+  refuses a press that would submit a form to another host.
+- **Confirm before press.** `--confirm-press "Pay*"` blocks a matching press
+  until the user's `--confirm "<label>"` (or a tool call's `confirm`, that
+  call only). Enter / Space on a button and Enter in a form that submits
+  through a matching button count as presses.
+- **Snapshot-bound presses.** An MCP press given the `snapshot` id it was
+  chosen from refuses `stale_ref` if that element moved, changed or left.
+- **Secrets fail closed.** Password, hidden, file and secret-labelled fields
+  never show a value; text typed into one is masked in every later output,
+  error and HAR file; screenshots hide those fields or refuse.
+- **Files and tools.** File paths must be absolute; a host can keep
+  downloads and uploads to one folder and serve only an allow-list of tools.
+- **Closed model replies.** An optional remote policy may only pick an
+  offered choice or abstain.
+
+Report vulnerabilities as described in [`SECURITY.md`](SECURITY.md).
+
+## Embedding
+
+A host that launches Chromium with `--remote-debugging-pipe` hands the pipe
+ends to a `PipeBrowser`, builds `ultra_instinct_mcp::Server::with_pipe`, and
+calls `Server::call_tool` with the same tools; `Server::run_goal` runs the
+agent loop on its tab. The example, host options, limits, threading and the
+62 error codes are in [`docs/embedding.md`](docs/embedding.md).
+
+## Crates
+
+| Crate | Role |
+|---|---|
+| `ultra-instinct-core` | `InteractionManifold`, regions, `ActionSpace`, fixture grammar |
+| `ultra-instinct-geometry` | Viewport geometry helpers and `RegionState` |
+| `ultra-instinct-observe` | Observation history, snapshot ring, id diff |
+| `ultra-instinct-cdp` | CDP transports: websocket, replay, caller-owned pipe; tab backends |
+| `ultra-instinct-chrome` | Find and launch a local Chrome |
+| `ultra-instinct-browser` | CDP observe (DOM/AX fusion, label folding, identity, stacking), inputs, saved state |
+| `ultra-instinct-protocol` | Guard / ticket / verify wire types |
+| `ultra-instinct-guard` | Hard gate, `ActionTicket`, ledger, world snapshots, the user `Policy` |
+| `ultra-instinct-policy` | `InstinctPolicy`, `TextResolver`, optional model-text and remote policies |
+| `ultra-instinct-agent` | The `Agent` loop, `execute_ticketed`, verification, `MockBrowser` |
+| `ultra-instinct-browser-tools` | The `browser_*` tools over a `BrowserHost` trait, error codes, secret masking |
+| `ultra-instinct-mcp` | JSON-RPC adapter and the embeddable `Server` |
+| `ultra-instinct-remote` | Remote decision transports and the HTTP text model (the only model / HTTP client crate) |
+| `ultra-instinct` | The `ultra-instinct` / `aui` CLI and session daemon |
+| `ultra-instinct-dojo` | Battle diary, replay arena, lesson store |
+
+## Development
 
 ```bash
 cargo test --workspace
-cargo run -p ultra-instinct -- run --goal "Delete" --fixture fixtures/modal-confirm.manifold
-# Full offline agent loop (type / click / select CDP replays)
-cargo run -p ultra-instinct -- run --goal 'Type "rust" into Search' \
-  --fixture fixtures/agent-type-search.cdp.json
-cargo run -p ultra-instinct -- run --goal "Click Go" \
-  --fixture fixtures/agent-click-go.cdp.json
-cargo run -p ultra-instinct -- run --goal 'Select "Business" in Cabin class' \
-  --fixture fixtures/agent-select-cabin.cdp.json
-cargo run -p ultra-instinct -- observe --fixture fixtures/sign-in.cdp.json
-cargo run -p ultra-instinct -- guard \
-  --fixture fixtures/sign-in.cdp.json \
-  --action click --target "Sign in" --role button --json
-cargo run -p ultra-instinct -- verify \
-  --fixture fixtures/welcome.cdp.json --expect-text Welcome
+scripts/check_repo_rules.sh && python3 scripts/check_architecture.py
 ```
 
-See `docs/PRD.md`, `docs/DECISIONS.md`, and `docs/EVAL.md`. Historical A1–A8 benchmark evidence that motivated
-this pivot lives on the `bench/uniform` branch (`RESULTS.md`, PR #2).
+Live Chrome tests are `#[ignore]`; CI uses CDP replay fixtures. The bench
+harness in `bench/` compares browser tools and agents on local scenario
+sites. Read [`AGENTS.md`](AGENTS.md) (the anti-drift rules and test owners)
+before changing the agent path.
+
+## License
+
+MIT, see [`LICENSE`](LICENSE).
