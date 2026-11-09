@@ -336,6 +336,97 @@ impl PageSpec {
         Self::new(dom, ax, url, title)
     }
 
+    /// A sign-up form whose fields are named by labels, one of each kind:
+    /// `<label for>` (Email 101, Password 103), a wrapping label (Remember
+    /// me 105), a `for` label holding a link (terms 107, checkbox 108),
+    /// `aria-labelledby` (Nickname 110), a custom checkbox whose native
+    /// input has no box inside its styled label (Send me news: label 111,
+    /// input 112), a label for a disabled field (113 / 114), a label for
+    /// nothing (115), and a button (116). Labels are `LabelText` in the
+    /// accessibility tree and click targets in the DOM snapshot, as Chrome
+    /// reports them (a label for a disabled field takes no click).
+    /// `checked` is the state of both checkboxes.
+    pub fn labelled_form(checked: bool) -> Self {
+        let state = json!({"c": checked});
+        let label = |node, backend, text: &str, rect| {
+            DomSpec::button(node, backend, text, rect).with_tag("LABEL")
+        };
+        let input = |node, backend, kind: &str, rect| {
+            DomSpec::button(node, backend, "", rect)
+                .with_tag("INPUT")
+                .with_attr("type", kind)
+        };
+        let mut news_input =
+            input(62, 112, "checkbox", (22.0, 224.0, 1.0, 1.0)).with_compact_state(state.clone());
+        news_input.rect = None;
+        let dom = vec![
+            label(50, 100, "Email", (20.0, 20.0, 60.0, 20.0)).with_attr("for", "e"),
+            input(51, 101, "text", (90.0, 20.0, 200.0, 24.0)).with_attr("id", "e"),
+            label(52, 102, "Password", (20.0, 60.0, 60.0, 20.0)).with_attr("for", "p"),
+            input(53, 103, "password", (90.0, 60.0, 200.0, 24.0)).with_attr("id", "p"),
+            label(54, 104, "Remember me", (20.0, 100.0, 120.0, 20.0))
+                .with_compact_state(state.clone())
+                .with_children(vec![input(55, 105, "checkbox", (22.0, 104.0, 13.0, 13.0))
+                    .with_compact_state(state.clone())]),
+            label(56, 106, "I agree to the", (20.0, 140.0, 100.0, 20.0))
+                .with_attr("for", "t")
+                .with_children(vec![DomSpec::button(
+                    57,
+                    107,
+                    "terms",
+                    (124.0, 140.0, 40.0, 20.0),
+                )
+                .with_tag("A")
+                .with_attr("href", "https://example.test/terms")]),
+            input(58, 108, "checkbox", (170.0, 144.0, 13.0, 13.0)).with_attr("id", "t"),
+            DomSpec::button(59, 109, "Nickname", (20.0, 180.0, 60.0, 20.0))
+                .with_tag("SPAN")
+                .with_attr("id", "nm"),
+            input(60, 110, "text", (90.0, 180.0, 200.0, 24.0)).with_attr("aria-labelledby", "nm"),
+            label(61, 111, "Send me news", (20.0, 220.0, 120.0, 20.0))
+                .with_compact_state(state)
+                .with_children(vec![news_input]),
+            label(63, 113, "Disabled one", (20.0, 260.0, 90.0, 20.0)).with_attr("for", "d"),
+            input(64, 114, "text", (120.0, 260.0, 200.0, 24.0))
+                .with_attr("id", "d")
+                .with_attr("disabled", ""),
+            label(65, 115, "Orphan label", (20.0, 300.0, 90.0, 20.0)).with_attr("for", "nothing"),
+            DomSpec::button(66, 116, "Sign in", (20.0, 340.0, 80.0, 28.0)),
+        ];
+        let ax = vec![
+            AxSpec::new(100, "LabelText", "Email", (20.0, 20.0, 60.0, 20.0)),
+            AxSpec::new(101, "textbox", "Email", (90.0, 20.0, 200.0, 24.0)),
+            AxSpec::new(102, "LabelText", "Password", (20.0, 60.0, 60.0, 20.0)),
+            AxSpec::new(103, "textbox", "Password", (90.0, 60.0, 200.0, 24.0)),
+            AxSpec::new(104, "LabelText", "Remember me", (20.0, 100.0, 120.0, 20.0)),
+            AxSpec::new(105, "checkbox", "Remember me", (22.0, 104.0, 13.0, 13.0)),
+            AxSpec::new(
+                106,
+                "LabelText",
+                "I agree to the terms",
+                (20.0, 140.0, 144.0, 20.0),
+            ),
+            AxSpec::new(107, "link", "terms", (124.0, 140.0, 40.0, 20.0)),
+            AxSpec::new(
+                108,
+                "checkbox",
+                "I agree to the terms",
+                (170.0, 144.0, 13.0, 13.0),
+            ),
+            AxSpec::new(110, "textbox", "Nickname", (90.0, 180.0, 200.0, 24.0)),
+            AxSpec::new(111, "LabelText", "Send me news", (20.0, 220.0, 120.0, 20.0)),
+            AxSpec::new(112, "checkbox", "Send me news", (22.0, 224.0, 1.0, 1.0)),
+            AxSpec::new(113, "LabelText", "Disabled one", (20.0, 260.0, 90.0, 20.0)),
+            AxSpec::new(114, "textbox", "Disabled one", (120.0, 260.0, 200.0, 24.0)),
+            AxSpec::new(116, "button", "Sign in", (20.0, 340.0, 80.0, 28.0)),
+        ];
+        let mut page = Self::new(dom, ax, "http://127.0.0.1/join", "Join");
+        for backend in [100, 102, 104, 106, 111, 116] {
+            page = page.listener(backend);
+        }
+        page
+    }
+
     /// Replace the history step.
     pub fn with_history(mut self, history: HistorySpec) -> Self {
         self.history = history;

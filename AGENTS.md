@@ -142,7 +142,11 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    own text (its value). Observe
 >    also records control state (value, checked,
 >    expanded, select options) as evidence only: it is not in the region
->    fingerprint, and password values are never read. Do not claim cross-origin
+>    fingerprint, and password values are never read. A label (`for`,
+>    wrapping, or `aria-labelledby` text) folds into the one offered control
+>    it names, in fusion, with compact hit evidence; a zero-size, transparent,
+>    or covered checkbox / radio folds the other way, onto its label's box
+>    (ADR 0014). Do not claim cross-origin
 >    iframe or closed-shadow coverage.
 > 8. **Remote escalation is explicit and closed.** Feature `remote`;
 >    reply is exactly a choice id + kind from the offered menu or abstain.
@@ -192,7 +196,8 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 |---|---|
 | `ultra-instinct-core` | `InteractionManifold`, regions, `ActionSpace`, fixture grammar |
 | `ultra-instinct-cdp` | CDP transport trait, websocket, replay transport, replay script builder; unix `--remote-debugging-pipe` transport (`PipeBrowser` / `PipePage`, caller-owned fds, one thread, ADR 0013); tab backends: `TargetBackend` (list / create / activate / close pages, connect a session key), `HttpBackend` (the `/json` endpoints + a connector, the default) and unix `PipeBackend` (`Target.*` on a `PipeBrowser`, keys `pipe:<targetId>`) |
-| `ultra-instinct-browser` | CDP observe (DOM/AX fusion, identity, stacking), raw CDP inputs; `launch.rs` (find / start a local Chrome, `ChromeProcess` killed on drop); `storage_state` (save / load cookies + storage, the 0600 state file and its parser) |
+| `ultra-instinct-chrome` | Find / start a local Chrome (`find_chrome`, `launch`, `ChromeProcess` killed on drop); std only, re-exported as `ultra_instinct_browser::launch` |
+| `ultra-instinct-browser` | CDP observe (DOM/AX fusion, identity, stacking), raw CDP inputs; `launch` (re-export of `ultra-instinct-chrome`); `storage_state` (save / load cookies + storage, the 0600 state file and its parser) |
 | `ultra-instinct-observe` | Observation history and id diff |
 | `ultra-instinct-geometry` | Geometry helpers; `RegionState` (availability / visibility of a region) |
 | `ultra-instinct-policy` | `BrowserPolicy` + `PolicyContext` (`set_situation`, default no-op), `InstinctPolicy` (`instinct-*` 0.1.0 from crates.io) + `TRUST_CAP_MILLIS`/`set_evidence_adjustments` (bounded learned-trust evidence), `TextResolver`, `ModelTextResolver` (feature `model-text`), `RemotePolicy` (feature `remote`), multi-step clause split |

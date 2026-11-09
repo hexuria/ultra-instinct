@@ -269,8 +269,12 @@ function visit(el,doc,off){
       if((name==='INPUT'&&inputType!=='password'&&inputType!=='hidden'&&inputType!=='file'&&inputType!=='checkbox'&&inputType!=='radio')||name==='TEXTAREA'){
         rec.v=Array.from(String(el.value)).slice(0,200).join('');
       }
+      // A label stands for its checkbox or radio: its state is the control's.
+      var ctl=name==='LABEL'?el.control:null;
       if(name==='INPUT'&&(inputType==='checkbox'||inputType==='radio')){
         rec.c=!!el.checked;
+      }else if(ctl&&(ctl.type==='checkbox'||ctl.type==='radio')){
+        rec.c=!!ctl.checked;
       }else{
         var checked=el.getAttribute('aria-checked');
         if(checked==='true'||checked==='false')rec.c=checked==='true';

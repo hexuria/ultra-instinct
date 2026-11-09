@@ -1,7 +1,12 @@
 //! Fuse a DOM node and an accessibility node that describe one control.
 //!
-//! Version 2 runs two passes.
+//! Version 2 runs two passes, after label folding.
 //!
+//! 0. A text element that labels one control (`<label for>`, a `<label>`
+//!    wrapping its control, or a generic element a control names with
+//!    `aria-labelledby`, linked by `extract`) is folded into it
+//!    ([`fold_labels`]): one region, not two. The label's other targets (a
+//!    link inside its text) stay regions of their own.
 //! 1. A DOM node and an accessibility node with the same backend node id are
 //!    the same control and always merge. Chrome gives both trees that key.
 //! 2. Only nodes left over from pass 1 are paired heuristically, when all of
@@ -27,6 +32,7 @@
 //! the same DOM node is left over; it is not deleted. Two AX-only nodes that
 //! share a backend id are kept as `ax{id}` and `ax{id}-{k}`.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use ultra_instinct_core::{
@@ -58,6 +64,38 @@ pub(crate) struct RawNode {
     pub from_ax: bool,
     /// Backend ids of kept DOM ancestors, nearest first.
     pub ancestors: Vec<i64>,
+    /// The one control this text element labels (DOM nodes only).
+    pub labels: Option<LabelTarget>,
+}
+
+/// The control a label names, as `extract` saw it in the DOM, and how the
+/// pointer sees that control (`sight`, filled in by observe).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LabelTarget {
+    pub control: i64,
+    pub role: Role,
+    pub actions: Vec<ultra_instinct_core::Action>,
+    /// The control is disabled or hidden in markup.
+    pub off: bool,
+    /// A `<label>` element (clicking it clicks the control), not an
+    /// `aria-labelledby` text.
+    pub label_element: bool,
+    pub sight: Sight,
+}
+
+/// Compact-walk evidence about a labelled control's own box.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Sight {
+    /// No evidence (no compact walk, an untagged node, `display: none`, or
+    /// no hit test): nothing is folded.
+    #[default]
+    Unknown,
+    /// Rendered with a box, not transparent, and a hit test at its center
+    /// lands on it.
+    Visible,
+    /// Rendered but not where a pointer meets it: no box (zero size),
+    /// `opacity: 0`, or something else under its center.
+    Faint,
 }
 
 impl RawNode {
@@ -76,6 +114,7 @@ impl RawNode {
             from_dom: true,
             from_ax: false,
             ancestors: element.ancestors.clone(),
+            labels: element.labels.clone(),
         }
     }
 
@@ -94,6 +133,7 @@ impl RawNode {
             from_dom: false,
             from_ax: true,
             ancestors: Vec::new(),
+            labels: None,
         }
     }
 }
@@ -111,6 +151,8 @@ pub(crate) fn fuse(
     dom_nodes: &[RawNode],
     ax_nodes: &[RawNode],
 ) -> Result<(InteractionManifold, BTreeMap<RegionId, NodeBinding>), BrowserError> {
+    let (dom_nodes, ax_nodes) = fold_labels(viewport, dom_nodes, ax_nodes);
+    let (dom_nodes, ax_nodes) = (&*dom_nodes, &*ax_nodes);
     let mut used = vec![false; ax_nodes.len()];
     // backend id -> ax indices, so the deterministic pass-1 join is a map
     // lookup, not a linear scan per dom node.
@@ -229,7 +271,128 @@ fn merge(dom: &RawNode, ax: &RawNode) -> RawNode {
         from_dom: true,
         from_ax: true,
         ancestors: dom.ancestors.clone(),
+        labels: None,
     }
+}
+
+/// Fold each label into the one control it names, so a field is one region.
+///
+/// - **Forward** (the usual case): the control is in this observation,
+///   offered (enabled, shown, a box with area, not fully offscreen, not
+///   disabled in either tree), and [`Sight::Visible`]. The label's nodes are
+///   dropped; the control keeps its own name, box, and id.
+/// - **Reverse** (a custom checkbox: the native input is zero-size,
+///   transparent, or covered, and the styled `<label>` is what a reader
+///   clicks): a [`Sight::Faint`] checkbox or radio, enabled, named by a
+///   `<label>` element that holds no other click target. The label's node
+///   stays (its box, id, and binding: a click on it toggles the control)
+///   and takes the control's role and claims; the control's nodes are
+///   dropped. The label's control state is the control's (compact walk).
+/// - Otherwise nothing changes: a label for nothing, for a disabled or
+///   hidden control, for a control not observed, or without evidence.
+///
+/// Inner targets of a label (a link in its text) are their own nodes and
+/// are never dropped. The only visible clickable box is never dropped.
+fn fold_labels<'a>(
+    viewport: Rect,
+    dom_nodes: &'a [RawNode],
+    ax_nodes: &'a [RawNode],
+) -> (Cow<'a, [RawNode]>, Cow<'a, [RawNode]>) {
+    use ultra_instinct_core::Action;
+    let unchanged = (Cow::Borrowed(dom_nodes), Cow::Borrowed(ax_nodes));
+    if dom_nodes.iter().all(|node| node.labels.is_none()) {
+        return unchanged;
+    }
+    let clicks = |node: &RawNode| node.actions.contains(&Action::Click);
+    let mut index = BTreeMap::new();
+    // Kept ancestor → (nodes under it, click targets under it).
+    let mut held: BTreeMap<i64, (usize, usize)> = BTreeMap::new();
+    for (i, node) in dom_nodes.iter().enumerate() {
+        if let Some(backend) = node.backend_node_id {
+            index.entry(backend).or_insert(i);
+        }
+        for ancestor in &node.ancestors {
+            let entry = held.entry(*ancestor).or_default();
+            entry.0 += 1;
+            entry.1 += usize::from(clicks(node));
+        }
+    }
+    let ax_disabled: BTreeSet<i64> = ax_nodes
+        .iter()
+        .filter(|ax| ax.disabled)
+        .filter_map(|ax| ax.backend_node_id)
+        .collect();
+    let mut dropped = BTreeSet::new();
+    let mut reversed = BTreeMap::new();
+    let mut reversed_controls = BTreeSet::new();
+    for (i, node) in dom_nodes.iter().enumerate() {
+        let (Some(target), Some(label)) = (&node.labels, node.backend_node_id) else {
+            continue;
+        };
+        if target.off || ax_disabled.contains(&target.control) {
+            continue;
+        }
+        let control = index.get(&target.control).map(|&j| &dom_nodes[j]);
+        // What the label holds besides its own control.
+        let inside = control.is_some_and(|c| c.ancestors.contains(&label));
+        let (all, click_targets) = held.get(&label).copied().unwrap_or_default();
+        let others = all - usize::from(inside);
+        let other_clicks = click_targets - usize::from(inside && control.is_some_and(clicks));
+        // Text named by `aria-labelledby` folds only when it is plain text:
+        // nothing inside, and no click of its own (markup, a listener, or
+        // its own pointer cursor, all on the node by now).
+        if !target.label_element && (others > 0 || clicks(node)) {
+            continue;
+        }
+        let offered = control.is_some_and(|c| {
+            !c.disabled
+                && !c.hidden
+                && !c.rect.is_zero_area()
+                && !is_fully_offscreen(c.rect, viewport)
+        });
+        match target.sight {
+            Sight::Visible if offered => {
+                dropped.insert(label);
+            }
+            Sight::Faint
+                if target.label_element
+                    && target.role == Role::Checkbox
+                    && other_clicks == 0
+                    && reversed_controls.insert(target.control) =>
+            {
+                reversed.insert(i, target);
+                dropped.insert(target.control);
+            }
+            _ => {}
+        }
+    }
+    if dropped.is_empty() {
+        return unchanged;
+    }
+    let kept = |node: &&RawNode| {
+        !node
+            .backend_node_id
+            .is_some_and(|backend| dropped.contains(&backend))
+    };
+    let dom = dom_nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| kept(node))
+        .map(|(i, node)| {
+            let mut node = node.clone();
+            if let Some(target) = reversed.get(&i) {
+                node.role = target.role;
+                for action in &target.actions {
+                    if !node.actions.contains(action) {
+                        node.actions.push(*action);
+                    }
+                }
+            }
+            node
+        })
+        .collect();
+    let ax = ax_nodes.iter().filter(kept).cloned().collect();
+    (Cow::Owned(dom), Cow::Owned(ax))
 }
 
 fn compatible(dom: &RawNode, ax: &RawNode) -> bool {
@@ -376,6 +539,7 @@ mod tests {
             from_dom: true,
             from_ax: false,
             ancestors: Vec::new(),
+            labels: None,
         }
     }
 
@@ -394,6 +558,7 @@ mod tests {
             from_dom: false,
             from_ax: true,
             ancestors: Vec::new(),
+            labels: None,
         }
     }
 
@@ -511,6 +676,151 @@ mod tests {
         assert_eq!(ids, ["ax100", "ax100-2"]);
         assert_eq!(merged.get_str("ax100").unwrap().label(), "Sign in");
         assert_eq!(merged.get_str("ax100-2").unwrap().label(), "Cancel");
+    }
+
+    fn label(backend: i64, control: i64, role: Role, sight: Sight) -> RawNode {
+        let mut node = with_backend(dom("Remember me", Role::Generic, 100.0), backend);
+        node.rect = Rect::try_new(100.0, 400.0, 120.0, 20.0).unwrap();
+        node.labels = Some(LabelTarget {
+            control,
+            role,
+            actions: crate::extract::actions_for_role(role),
+            off: false,
+            label_element: true,
+            sight,
+        });
+        node
+    }
+
+    fn fold(dom: &[RawNode], ax: &[RawNode]) -> InteractionManifold {
+        fuse(viewport(), dom, ax).unwrap().0
+    }
+
+    fn ids(manifold: &InteractionManifold) -> Vec<&str> {
+        manifold.ids().map(RegionId::as_str).collect()
+    }
+
+    #[test]
+    fn a_label_folds_into_the_visible_control_it_names() {
+        let field = dom("", Role::Checkbox, 400.0);
+        let mut link = with_backend(dom("terms", Role::Link, 150.0), 52);
+        link.ancestors = vec![50];
+        let label = label(50, 100, Role::Checkbox, Sight::Visible);
+        let label_ax = with_backend(ax("Remember me", Role::Generic, 100.0), 50);
+        let field_ax = ax("Remember me", Role::Checkbox, 400.0);
+        let merged = fold(&[label, field, link], &[label_ax, field_ax]);
+        assert_eq!(
+            ids(&merged),
+            ["n100", "n52"],
+            "label nodes in both trees go"
+        );
+        assert_eq!(merged.get_str("n100").unwrap().label(), "Remember me");
+        assert_eq!(merged.get_str("n52").unwrap().parent(), None);
+    }
+
+    #[test]
+    fn a_label_stays_for_an_off_unobserved_or_unseen_control() {
+        let field = || dom("", Role::TextField, 400.0);
+        let mut off = label(50, 100, Role::TextField, Sight::Visible);
+        off.labels.as_mut().unwrap().off = true;
+        let mut disabled = field();
+        disabled.disabled = true;
+        let mut ax_disabled = ax("Email", Role::TextField, 400.0);
+        ax_disabled.disabled = true;
+        let visible = || label(50, 100, Role::TextField, Sight::Visible);
+        let cases = [
+            (vec![off, field()], vec![]),
+            (vec![visible(), disabled], vec![]),
+            (vec![visible(), field()], vec![ax_disabled]),
+            (vec![visible()], vec![]),
+            (
+                vec![label(50, 100, Role::TextField, Sight::Unknown), field()],
+                vec![],
+            ),
+            // A faint text field: typing into its label would type nowhere.
+            (
+                vec![label(50, 100, Role::TextField, Sight::Faint), field()],
+                vec![],
+            ),
+        ];
+        for (dom, ax) in cases {
+            let merged = fold(&dom, &ax);
+            assert!(merged.get_str("n50").is_some(), "{:?}", ids(&merged));
+            assert_eq!(merged.get_str("n50").unwrap().role(), Role::Generic);
+        }
+    }
+
+    #[test]
+    fn labelledby_text_folds_only_when_it_is_plain_text() {
+        let text = || {
+            let mut node = label(50, 100, Role::TextField, Sight::Visible);
+            node.labels.as_mut().unwrap().label_element = false;
+            node.actions = vec![Action::Focus];
+            node
+        };
+        let field = || dom("", Role::TextField, 400.0);
+        assert_eq!(ids(&fold(&[text(), field()], &[])), ["n100"]);
+        // Its own click (a pointer cursor, a listener) keeps it a target.
+        let mut clickable = text();
+        clickable.actions.push(Action::Click);
+        assert_eq!(ids(&fold(&[clickable, field()], &[])), ["n100", "n50"]);
+        // So does another node inside it.
+        let mut inner = with_backend(dom("more", Role::Generic, 150.0), 52);
+        inner.ancestors = vec![50];
+        inner.actions = vec![Action::Focus];
+        assert_eq!(
+            ids(&fold(&[text(), field(), inner], &[])),
+            ["n100", "n50", "n52"]
+        );
+    }
+
+    #[test]
+    fn a_faint_checkbox_folds_into_its_label_box() {
+        let hidden_input = dom("", Role::Checkbox, 104.0);
+        let input_ax = ax("Remember me", Role::Checkbox, 104.0);
+        let merged = fold(
+            &[
+                label(50, 100, Role::Checkbox, Sight::Faint),
+                hidden_input.clone(),
+            ],
+            &[input_ax],
+        );
+        assert_eq!(ids(&merged), ["n50"], "the only visible box is kept");
+        let region = merged.get_str("n50").unwrap();
+        assert_eq!(
+            (region.role(), region.rect().width()),
+            (Role::Checkbox, 120.0)
+        );
+        assert!(region.actions().contains(&Action::Toggle));
+        // Not observed at all (a zero-size input): the label still stands for it.
+        assert_eq!(
+            ids(&fold(&[label(50, 100, Role::Checkbox, Sight::Faint)], &[])),
+            ["n50"]
+        );
+        // A second label for the same input is left as it was.
+        let second = label(51, 100, Role::Checkbox, Sight::Faint);
+        let merged = fold(
+            &[
+                label(50, 100, Role::Checkbox, Sight::Faint),
+                second,
+                hidden_input.clone(),
+            ],
+            &[],
+        );
+        assert_eq!(ids(&merged), ["n50", "n51"]);
+        assert_eq!(merged.get_str("n51").unwrap().role(), Role::Generic);
+        // A label that holds a link of its own is not one click target.
+        let mut link = with_backend(dom("terms", Role::Link, 150.0), 52);
+        link.ancestors = vec![50];
+        let merged = fold(
+            &[
+                label(50, 100, Role::Checkbox, Sight::Faint),
+                hidden_input,
+                link,
+            ],
+            &[],
+        );
+        assert_eq!(ids(&merged), ["n100", "n50", "n52"]);
     }
 
     #[test]

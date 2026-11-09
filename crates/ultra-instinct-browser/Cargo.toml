@@ -10,6 +10,7 @@ description = "CDP browser session for ultra-instinct."
 
 [dependencies]
 ultra-instinct-cdp = { path = "../ultra-instinct-cdp", version = "0.1.0"}
+ultra-instinct-chrome = { path = "../ultra-instinct-chrome", version = "0.1.0"}
 ultra-instinct-observe = { path = "../ultra-instinct-observe", version = "0.1.0"}
 ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.0"}
 ultra-instinct-geometry = { path = "../ultra-instinct-geometry", version = "0.1.0"}

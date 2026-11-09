@@ -48,6 +48,8 @@ pub(crate) struct DomElement {
     /// An SVG shape whose markup names no fill: observe names its computed
     /// fill instead.
     pub unpainted: bool,
+    /// The one control this text element labels ([`link_labels`]).
+    pub labels: Option<crate::fusion::LabelTarget>,
 }
 
 #[derive(Clone, Debug)]
@@ -121,10 +123,164 @@ pub(crate) fn dom_document_with(
         })
     })?;
     let mut out = DomDocument::default();
-    walk_dom(root, listeners, hidden, &mut out);
+    let mut facts = LabelFacts::default();
+    walk_dom(root, listeners, hidden, &mut out, &mut facts);
+    link_labels(&facts, &mut out);
     drop_listener_clicks_on_containers(&mut out);
     drop_ambiguous_hu_k(&mut out);
     Ok(out)
+}
+
+/// Label links the walk saw, resolved after it by [`link_labels`]. Ids are
+/// keyed by tree scope (a document, an open shadow root, an iframe
+/// document), as `for` and `aria-labelledby` resolve.
+#[derive(Default)]
+struct LabelFacts {
+    /// (scope, id) → element backend; `None` when the id repeats.
+    ids: std::collections::BTreeMap<(u32, String), Option<i64>>,
+    /// `<label>` backend → its `for` (scope, id), else its first labelable
+    /// descendant.
+    labels: Vec<(i64, Names)>,
+    /// Control backend, scope, and its `aria-labelledby` ids.
+    labelledby: Vec<(i64, u32, String)>,
+    /// Elements a `<label>` can name.
+    labelable: BTreeSet<i64>,
+}
+
+/// What a `<label>` names.
+enum Names {
+    /// The element with this id in this scope.
+    For(u32, String),
+    /// This descendant.
+    Wraps(i64),
+}
+
+/// Record the label facts of one element node.
+fn note_label_facts(node: &Value, backend: i64, scope: u32, facts: &mut LabelFacts) {
+    if let Some(id) = attr(node, "id").filter(|id| !id.is_empty()) {
+        facts
+            .ids
+            .entry((scope, id.to_owned()))
+            .and_modify(|seen| *seen = None)
+            .or_insert(Some(backend));
+    }
+    if is_labelable(node) {
+        facts.labelable.insert(backend);
+    }
+    let name = node.get("nodeName").and_then(Value::as_str).unwrap_or("");
+    if name.eq_ignore_ascii_case("LABEL") {
+        match attr(node, "for") {
+            Some(target) => facts
+                .labels
+                .push((backend, Names::For(scope, target.to_owned()))),
+            None => {
+                if let Some(control) = first_labelable(node) {
+                    facts.labels.push((backend, Names::Wraps(control)));
+                }
+            }
+        }
+    }
+    if let Some(ids) = attr(node, "aria-labelledby") {
+        facts.labelledby.push((backend, scope, ids.to_owned()));
+    }
+}
+
+/// The first labelable element inside a `<label>`, in tree order: the
+/// control a wrapping label names.
+fn first_labelable(label: &Value) -> Option<i64> {
+    let mut stack: Vec<&Value> = label
+        .get("children")
+        .and_then(Value::as_array)
+        .map(|c| c.iter().rev().collect())
+        .unwrap_or_default();
+    while let Some(node) = stack.pop() {
+        if is_labelable(node) {
+            return node.get("backendNodeId").and_then(Value::as_i64);
+        }
+        if let Some(children) = node.get("children").and_then(Value::as_array) {
+            stack.extend(children.iter().rev());
+        }
+    }
+    None
+}
+
+/// HTML labelable elements (a hidden input is not one).
+fn is_labelable(node: &Value) -> bool {
+    let name = node.get("nodeName").and_then(Value::as_str).unwrap_or("");
+    match name.to_ascii_uppercase().as_str() {
+        "INPUT" => !attr(node, "type").is_some_and(|t| t.eq_ignore_ascii_case("hidden")),
+        "SELECT" | "TEXTAREA" | "BUTTON" | "METER" | "OUTPUT" | "PROGRESS" => true,
+        _ => false,
+    }
+}
+
+/// Give each text element that labels exactly one kept control its
+/// [`crate::fusion::LabelTarget`]. A `<label>` names its `for` target or the
+/// control it wraps; a generic element names the controls whose
+/// `aria-labelledby` points at it. Fusion decides whether to fold, from the
+/// final claims (a pointer cursor's CLICK is added after this).
+fn link_labels(facts: &LabelFacts, out: &mut DomDocument) {
+    use std::collections::BTreeMap;
+    // Text backend → control backend → named by a `<label>` element.
+    let mut named: BTreeMap<i64, BTreeMap<i64, bool>> = BTreeMap::new();
+    for (label, target) in &facts.labels {
+        let control = match target {
+            Names::For(scope, id) => facts.ids.get(&(*scope, id.clone())).copied().flatten(),
+            Names::Wraps(control) => Some(*control),
+        };
+        if let Some(control) = control.filter(|c| facts.labelable.contains(c)) {
+            named.entry(*label).or_default().insert(control, true);
+        }
+    }
+    for (control, scope, ids) in &facts.labelledby {
+        for id in ids.split_whitespace() {
+            if let Some(Some(text)) = facts.ids.get(&(*scope, id.to_owned())) {
+                if text != control {
+                    named
+                        .entry(*text)
+                        .or_default()
+                        .entry(*control)
+                        .or_insert(false);
+                }
+            }
+        }
+    }
+    if named.is_empty() {
+        return;
+    }
+    let index: BTreeMap<i64, usize> = out
+        .elements
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.backend_node_id, i))
+        .collect();
+    let target_of = |text: &DomElement| {
+        let [(&control, &label_element)] =
+            named.get(&text.backend_node_id)?.iter().collect::<Vec<_>>()[..]
+        else {
+            return None;
+        };
+        let c = &out.elements[*index.get(&control)?];
+        if text.role != Role::Generic {
+            return None;
+        }
+        Some(crate::fusion::LabelTarget {
+            control,
+            role: c.role,
+            actions: c.actions.clone(),
+            off: c.disabled || c.hidden,
+            label_element,
+            sight: crate::fusion::Sight::Unknown,
+        })
+    };
+    let kept: Vec<_> = out.elements.iter().map(&target_of).collect();
+    let boxes: Vec<_> = out.hint_boxes.iter().map(&target_of).collect();
+    for (element, target) in out.elements.iter_mut().zip(kept) {
+        element.labels = target;
+    }
+    for (element, target) in out.hint_boxes.iter_mut().zip(boxes) {
+        element.labels = target;
+    }
 }
 
 /// A listener on an element that holds other click targets (a dialog that
@@ -358,7 +514,8 @@ pub(crate) fn call_threw(call_json: &str) -> Result<bool, BrowserError> {
 /// so a recursive descent would just move the stack wall from serde_json
 /// into this walk. `Pop` restores the ancestor chain after a subtree.
 enum DomWork<'a> {
-    Visit(&'a Value, Option<i64>),
+    /// A node, its nearest element ancestor, and its tree scope.
+    Visit(&'a Value, Option<i64>, u32),
     Pop,
     /// Leave an element: restore the element chain.
     PopNode,
@@ -375,15 +532,17 @@ fn walk_dom(
     listeners: &BTreeSet<i64>,
     hidden: &BTreeSet<u32>,
     out: &mut DomDocument,
+    facts: &mut LabelFacts,
 ) {
+    let mut scopes = 0u32;
     let mut kept_ancestors: Vec<i64> = Vec::new();
     // Parallel to `kept_ancestors`: that kept element is a click control.
     let mut kept_controls: Vec<bool> = Vec::new();
     // Every element above the current node, outermost first.
     let mut chain: Vec<&Value> = Vec::new();
-    let mut stack = vec![DomWork::Visit(root, None)];
+    let mut stack = vec![DomWork::Visit(root, None, 0)];
     while let Some(work) = stack.pop() {
-        let (node, parent_backend) = match work {
+        let (node, parent_backend, scope) = match work {
             DomWork::Pop => {
                 kept_ancestors.pop();
                 kept_controls.pop();
@@ -393,7 +552,7 @@ fn walk_dom(
                 chain.pop();
                 continue;
             }
-            DomWork::Visit(node, parent_backend) => (node, parent_backend),
+            DomWork::Visit(node, parent_backend, scope) => (node, parent_backend, scope),
         };
         let node_type = node.get("nodeType").and_then(Value::as_i64).unwrap_or(1);
         let mut next_parent = parent_backend;
@@ -404,10 +563,8 @@ fn walk_dom(
                     out.parent_of.insert(backend, parent);
                 }
                 next_parent = Some(backend);
-                if let Some(k) = attr_map(node)
-                    .get(crate::compact::HU_K_ATTR)
-                    .and_then(|raw| raw.parse::<u32>().ok())
-                {
+                note_label_facts(node, backend, scope, facts);
+                if let Some(k) = hu_k_of(node) {
                     out.hu_k_of_backend.insert(backend, k);
                     out.backend_of_hu_k.insert(k, backend);
                 }
@@ -480,18 +637,20 @@ fn walk_dom(
         // Same-origin iframe document. Cross-origin frames omit
         // `contentDocument`.
         if let Some(doc) = node.get("contentDocument") {
-            stack.push(DomWork::Visit(doc, next_parent));
+            scopes += 1;
+            stack.push(DomWork::Visit(doc, next_parent, scopes));
         }
         // Open shadow roots (closed ones are absent). CDP only populates
         // `shadowRoots` when `DOM.getDocument` was called with `pierce: true`.
         if let Some(roots) = node.get("shadowRoots").and_then(Value::as_array) {
             for root in roots.iter().rev() {
-                stack.push(DomWork::Visit(root, next_parent));
+                scopes += 1;
+                stack.push(DomWork::Visit(root, next_parent, scopes));
             }
         }
         if let Some(children) = node.get("children").and_then(Value::as_array) {
             for child in children.iter().rev() {
-                stack.push(DomWork::Visit(child, next_parent));
+                stack.push(DomWork::Visit(child, next_parent, scope));
             }
         }
     }
@@ -662,6 +821,7 @@ fn element_from(node: &Value, listener: bool, hidden: &BTreeSet<u32>) -> Option<
         svg_shape,
         click_from_listener,
         unpainted: svg_shape && shape_fill(&attributes).is_none(),
+        labels: None,
     })
 }
 
@@ -1169,13 +1329,18 @@ fn direct_text(node: &Value) -> String {
 
 /// The node's `data-hu-k`, read without building its attribute map.
 fn hu_k_of(node: &Value) -> Option<u32> {
+    attr(node, crate::compact::HU_K_ATTR)?.parse().ok()
+}
+
+/// One attribute's value, read without building the attribute map.
+fn attr<'a>(node: &'a Value, name: &str) -> Option<&'a str> {
     let attributes = node.get("attributes").and_then(Value::as_array)?;
     attributes
         .as_chunks::<2>()
         .0
         .iter()
-        .find(|[name, _]| name.as_str() == Some(crate::compact::HU_K_ATTR))
-        .and_then(|[_, value]| value.as_str()?.parse().ok())
+        .find(|[key, _]| key.as_str() == Some(name))
+        .and_then(|[_, value]| value.as_str())
 }
 
 fn attr_map(node: &Value) -> std::collections::BTreeMap<String, String> {
@@ -1465,6 +1630,97 @@ mod pierce_tests {
         assert!(
             clicks(6),
             "a listener box with nothing inside stays a target"
+        );
+    }
+
+    #[test]
+    fn labels_link_to_the_one_control_they_name() {
+        let el = |b: i64, tag: &str, attrs: &[&str], text: &str, kids: &str| {
+            let text = if text.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    r##"{{"nodeId":{},"backendNodeId":{},"nodeType":3,"nodeName":"#text","nodeValue":"{text}"}},"##,
+                    b * 100,
+                    b * 100
+                )
+            };
+            format!(
+                r#"{{"nodeId":{b},"backendNodeId":{b},"nodeType":1,"nodeName":"{tag}","attributes":{attrs:?},"children":[{text}{kids}]}}"#
+            )
+            .replace(",]", "]")
+        };
+        let input = |b, attrs: &[&str]| el(b, "INPUT", attrs, "", "");
+        let body = [
+            el(2, "LABEL", &["for", "e"], "Email", ""),
+            input(3, &["id", "e"]),
+            el(
+                4,
+                "LABEL",
+                &[],
+                "Remember",
+                &input(5, &["type", "checkbox"]),
+            ),
+            el(
+                6,
+                "LABEL",
+                &["for", "t"],
+                "I agree",
+                &el(7, "A", &["href", "/t"], "terms", ""),
+            ),
+            input(8, &["id", "t", "type", "checkbox"]),
+            el(9, "SPAN", &["id", "nm"], "Nickname", ""),
+            input(10, &["aria-labelledby", "nm"]),
+            el(11, "LABEL", &["for", "d"], "Off", ""),
+            input(12, &["id", "d", "disabled", ""]),
+            el(13, "LABEL", &["for", "nothing"], "Orphan", ""),
+            el(14, "SPAN", &["id", "dup"], "Twice", ""),
+            el(15, "SPAN", &["id", "dup"], "Again", ""),
+            input(16, &["aria-labelledby", "dup"]),
+            el(
+                18,
+                "SPAN",
+                &["id", "cl", "onclick", "go()"],
+                "Clickable",
+                "",
+            ),
+            input(19, &["aria-labelledby", "cl"]),
+            input(20, &["id", "h", "type", "hidden"]),
+            el(21, "LABEL", &["for", "h"], "Hidden", ""),
+        ]
+        .join(",");
+        // A label in a shadow root does not name an id of the document.
+        let shadow = format!(
+            r##"{{"nodeId":30,"backendNodeId":30,"nodeType":11,"nodeName":"#document-fragment","children":[{}]}}"##,
+            el(17, "LABEL", &["for", "e"], "Shadow", "")
+        );
+        let host = el(31, "DIV", &[], "", "").replace(
+            r#""children":[]"#,
+            &format!(r#""children":[],"shadowRoots":[{shadow}]"#),
+        );
+        let json = format!(
+            r##"{{"root":{{"nodeId":1,"backendNodeId":1,"nodeType":9,"nodeName":"#document","children":[{body},{host}]}}}}"##
+        );
+        let doc = dom_document(&json).unwrap();
+        let linked: Vec<(i64, i64, bool, bool)> = doc
+            .elements
+            .iter()
+            .filter_map(|e| {
+                let t = e.labels.as_ref()?;
+                Some((e.backend_node_id, t.control, t.label_element, t.off))
+            })
+            .collect();
+        assert_eq!(
+            linked,
+            [
+                (2, 3, true, false),
+                (4, 5, true, false),
+                (6, 8, true, false),
+                (9, 10, false, false),
+                (11, 12, true, true),
+                // Linked here; fusion keeps it, because it takes a click.
+                (18, 19, false, false)
+            ]
         );
     }
 
