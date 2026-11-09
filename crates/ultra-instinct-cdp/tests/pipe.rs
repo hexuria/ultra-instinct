@@ -299,8 +299,8 @@ fn browser_level_events_queue_on_the_browser_and_survive_page_calls() {
     fake.join().unwrap();
 }
 
-/// One frame over the cap costs that frame only (it used to close the pipe
-/// for every tab): the call it answers gets `FrameTooLarge`, an oversize
+/// One frame over the cap costs that frame only, not the pipe for every
+/// tab: the call it answers gets `FrameTooLarge`, an oversize
 /// event or an abandoned call's oversize reply is dropped and counted, and
 /// the next call works.
 #[test]
@@ -517,7 +517,7 @@ fn a_silent_browser_times_out_at_the_deadline_and_the_pipe_stays_usable() {
             after: Duration::from_millis(200),
         })
     );
-    // Same wording as the transport error it used to be.
+    // Same wording as the websocket transport's timeout.
     assert_eq!(
         timed_out.unwrap_err().to_string(),
         "CDP transport: no CDP result for `Never.answered` within 200 ms"
@@ -746,7 +746,7 @@ proptest! {
 
 /// Chrome is not reading (its input pipe is full): dropping a page makes
 /// one non-blocking try at `Target.detachFromTarget`, returns at once, and
-/// leaves the pipe usable. (It used to wait out the call deadline.)
+/// leaves the pipe usable without waiting out the call deadline.
 #[test]
 fn dropping_a_page_while_chrome_is_not_reading_returns_at_once() {
     use std::io::ErrorKind;

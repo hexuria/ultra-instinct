@@ -65,8 +65,8 @@ impl ReplayTransport {
                 message: err.to_string(),
             })?;
         for raw_call in calls {
-            // A non-object element decodes to an empty map and reports the
-            // same missing-method error it always did.
+            // A non-object element decodes to an empty map and reports a
+            // missing-method error.
             let call: BTreeMap<String, Box<RawValue>> =
                 serde_json::from_str(raw_call.get()).unwrap_or_default();
             let method = call
