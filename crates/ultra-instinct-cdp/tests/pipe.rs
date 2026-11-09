@@ -743,3 +743,59 @@ proptest! {
         prop_assert_eq!(splitter.buffered(), 0);
     }
 }
+
+/// Chrome is not reading (its input pipe is full): dropping a page makes
+/// one non-blocking try at `Target.detachFromTarget`, returns at once, and
+/// leaves the pipe usable. (It used to wait out the call deadline.)
+#[test]
+fn dropping_a_page_while_chrome_is_not_reading_returns_at_once() {
+    use std::io::ErrorKind;
+    use std::sync::mpsc;
+
+    let outcome = within(Duration::from_secs(20), || {
+        let (requests, browser_out) = pipe().expect("pipe");
+        let (browser_in, out) = pipe().expect("pipe");
+        // A second handle on the browser's write end, to fill Chrome's input.
+        let mut filler = browser_out.try_clone().expect("dup");
+        let (go, wait) = mpsc::channel::<()>();
+        let chrome = thread::spawn(move || {
+            let mut fake = Fake {
+                requests: BufReader::new(requests),
+                out,
+            };
+            fake.attach("S1");
+            wait.recv().expect("go");
+            // Skip the filler frames (no method) and anything else queued.
+            loop {
+                let request = fake.recv().expect("a request");
+                if request["method"] == "Browser.getVersion" {
+                    fake.reply(&request, json!({"product": "Fake/1"}));
+                    break;
+                }
+            }
+        });
+        let browser = PipeBrowser::with_limits(browser_in, browser_out, short_deadline(5000));
+        let page = browser.page("T1").expect("attach");
+        // The write end is non-blocking now (shared with the dup): fill the
+        // pipe with whole 3-byte frames (atomic under PIPE_BUF) until full.
+        let mut filled = 0usize;
+        loop {
+            match filler.write(b"{}\0") {
+                Ok(_) => filled += 1,
+                Err(err) if err.kind() == ErrorKind::WouldBlock => break,
+                Err(err) => panic!("fill: {err}"),
+            }
+        }
+        let started = Instant::now();
+        drop(page);
+        let dropped_in = started.elapsed();
+        go.send(()).expect("go");
+        let next = browser.call("Browser.getVersion", "{}");
+        chrome.join().expect("fake");
+        (filled, dropped_in, next)
+    });
+    let (filled, dropped_in, next) = outcome.expect("hung");
+    assert!(filled > 0);
+    assert!(dropped_in < Duration::from_millis(500), "{dropped_in:?}");
+    assert_eq!(next, Ok(r#"{"product":"Fake/1"}"#.into()));
+}

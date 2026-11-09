@@ -225,6 +225,9 @@ struct Wire {
     dropped_frames: u64,
     browser_events: VecDeque<CdpEvent>,
     sessions: HashMap<String, Session>,
+    /// The rest of a frame [`Wire::send_now`] got only partly written: the
+    /// next [`Wire::send`] writes it first, so frames stay whole.
+    outbox: Vec<u8>,
 }
 
 /// What one frame meant to the call waiting on it.
@@ -275,14 +278,11 @@ impl Wire {
         if let Some(err) = &self.dead {
             return Err(err.clone());
         }
-        let id = self.next_id;
-        self.next_id += 1;
-        let mut envelope = json!({"id": id, "method": method, "params": params});
-        if let Some(session) = session {
-            envelope["sessionId"] = Value::from(session);
-        }
-        let mut bytes = envelope.to_string().into_bytes();
-        bytes.push(0);
+        let (id, frame) = self.frame(session, method, params);
+        // A frame `send_now` left half written goes first.
+        let mut bytes = std::mem::take(&mut self.outbox);
+        let carried = bytes.len();
+        bytes.extend_from_slice(&frame);
         let mut written = 0;
         let mut early = None;
         while written < bytes.len() {
@@ -292,11 +292,16 @@ impl Wire {
             }
             let ready = match self.wait(deadline, method, Some(&bytes[written..])) {
                 Ok(ready) => ready,
-                Err(err @ CdpError::Timeout { .. }) if written > 0 => {
+                Err(err @ CdpError::Timeout { .. }) if written > carried => {
                     // Half a request on the wire: nothing after it parses.
                     self.die(CdpError::PipeClosed {
                         message: format!("`{method}` was cut off mid-write by its deadline"),
                     });
+                    return Err(err);
+                }
+                Err(err @ CdpError::Timeout { .. }) => {
+                    // None of this request left; the carried rest still waits.
+                    self.outbox = bytes[written..carried].to_vec();
                     return Err(err);
                 }
                 Err(err) => return Err(err),
@@ -304,6 +309,36 @@ impl Wire {
             written += ready;
         }
         Ok((id, early))
+    }
+
+    /// A request frame with the next id, NUL included.
+    fn frame(&mut self, session: Option<&str>, method: &str, params: Value) -> (i64, Vec<u8>) {
+        let id = self.next_id;
+        self.next_id += 1;
+        let mut envelope = json!({"id": id, "method": method, "params": params});
+        if let Some(session) = session {
+            envelope["sessionId"] = Value::from(session);
+        }
+        let mut bytes = envelope.to_string().into_bytes();
+        bytes.push(0);
+        (id, bytes)
+    }
+
+    /// One non-blocking try at a request whose answer nobody waits for. It
+    /// never waits and never marks the pipe dead: a frame the pipe takes
+    /// none of now is skipped (also while an earlier one's rest is pending,
+    /// or on a write error the next call meets); one it takes part of keeps
+    /// its rest in `outbox` for the next [`Self::send`].
+    fn send_now(&mut self, method: &str, params: Value) {
+        if self.dead.is_some() || !self.outbox.is_empty() {
+            return;
+        }
+        let (_, frame) = self.frame(None, method, params);
+        if let Ok(n) = self.writer.write(&frame) {
+            if n > 0 && n < frame.len() {
+                self.outbox = frame[n..].to_vec();
+            }
+        }
     }
 
     /// Route every complete frame buffered; the waiting call's answer, if
@@ -551,6 +586,7 @@ impl PipeBrowser {
             dropped_frames: 0,
             browser_events: VecDeque::new(),
             sessions: HashMap::new(),
+            outbox: Vec::new(),
         };
         Self {
             wire: Rc::new(RefCell::new(wire)),
@@ -674,10 +710,11 @@ impl CdpTransport for PipeBrowser {
 
 /// One attached page session on a [`PipeBrowser`]'s pipe.
 ///
-/// `!Send` / `!Sync`, like its browser. Dropping it sends
-/// `Target.detachFromTarget` without waiting for the reply (best effort;
-/// skipped when the pipe is dead or the target is already gone) and drops
-/// the session's queued events.
+/// `!Send` / `!Sync`, like its browser. Dropping it makes one non-blocking
+/// try at `Target.detachFromTarget` and never waits for the reply or for
+/// room in the pipe (skipped when the pipe is dead or full, or the target
+/// is already gone; a frame written in part is finished by the next call),
+/// and drops the session's queued events.
 pub struct PipePage {
     wire: Rc<RefCell<Wire>>,
     session_id: String,
@@ -718,14 +755,12 @@ impl Drop for PipePage {
             return;
         };
         let state = wire.sessions.remove(&self.session_id);
-        if state.is_some_and(|state| !state.gone) && wire.dead.is_none() {
-            // The reply is dropped later like any abandoned id.
-            let deadline = Instant::now() + wire.limits.call_deadline;
-            let _ = wire.send(
-                None,
+        if state.is_some_and(|state| !state.gone) {
+            // One non-blocking try (Chrome detaches on target or browser
+            // close anyway); the reply is dropped like any abandoned id.
+            wire.send_now(
                 "Target.detachFromTarget",
                 json!({"sessionId": self.session_id}),
-                deadline,
             );
         }
     }

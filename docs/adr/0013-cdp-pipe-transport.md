@@ -51,7 +51,13 @@ fine. Every transport we had (`WebSocketTransport`, `open_tab`) needs a port.
   the calling session ends the wait with `DialogOpened` (the event stays
   queued). `Target.detachedFromTarget` / `Target.targetDestroyed` make the
   page's calls return `TargetGone`, including one already waiting. Dropping
-  a live page sends `Target.detachFromTarget` without waiting.
+  a live page makes one non-blocking try at `Target.detachFromTarget`
+  (revised; the first draft waited up to the call deadline for room in the
+  pipe, and a partial write then closed it): it never waits and never
+  closes the pipe. A frame the pipe takes none of is skipped (Chrome
+  detaches on target or browser close anyway); one it takes part of keeps
+  its rest, which the next call writes before its own frame, so frames stay
+  whole.
 - **One bad frame costs one frame** (revised; the first draft failed
   closed). JSON never holds a raw NUL, so the stream re-syncs at the next
   one. A frame over the cap is skipped without being buffered past the cap;
