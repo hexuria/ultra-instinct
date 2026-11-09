@@ -163,7 +163,7 @@ Verbs:
 | `forward`, `reload [--ignore-cache]` | history forward, reload |
 | `check <ref>`, `uncheck <ref>` | set a checkbox; `--mouse` presses a real pointer |
 | `focus <ref>` | focus a control (ticketed) |
-| `keyboard type\|insert <text>` | keys into whatever has focus (`insert` sends the text in one go) |
+| `keyboard type\|insert <text> [--confirm <label>]` | keys into whatever has focus (`insert` sends the text in one go); refused off `--allow-domain`; an Enter / space on a focused button matching `--confirm-press` needs `--confirm` like a click |
 | `get value\|label\|role\|box <ref>`, `get attr <ref> <name>` | read one fact; never a password value |
 | `is visible\|enabled\|checked\|editable <ref>` | prints `true` or `false` |
 | `count [--label L] [--role R]` | how many controls match, and their refs |
