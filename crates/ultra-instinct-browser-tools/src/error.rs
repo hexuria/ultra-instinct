@@ -2,11 +2,11 @@
 //!
 //! [`ToolError::to_value`] is the JSON a client matches on. Every value
 //! carries a stable snake_case `code` ([`ToolError::code`]; the table is in
-//! docs/embedding.md, pinned by `tests/error_codes.rs`); `variant` and `message` keep their earlier text, so a
-//! client that read them still works. Typed refusals that used to be free
-//! text (`needs-confirm`, `domain-not-allowed`, a stale ref, CDP pipe and
-//! timeout failures) are their own variants and carry their fields; their
-//! `variant` stays the one they had (`TicketInvalid`, `Browser`,
+//! docs/embedding.md, pinned by `tests/error_codes.rs`); `variant` and
+//! `message` are stable too. Typed refusals (`needs-confirm`,
+//! `domain-not-allowed`, a stale ref, CDP pipe and timeout failures) are
+//! their own variants and carry their fields, but report the `variant` of
+//! the generic error they refine (`TicketInvalid`, `Browser`,
 //! `InvalidArguments`). A low-confidence act is not one of these: it is a
 //! successful tool result with `executed: false`.
 
@@ -180,9 +180,9 @@ pub enum ToolError {
 }
 
 impl ToolError {
-    /// The `variant` field: the Rust variant name, except for typed errors
-    /// that kept the variant they were sent as before they had their own
-    /// (`TicketInvalid`, `InvalidArguments`, `Browser`).
+    /// The `variant` field: the Rust variant name, except for typed errors,
+    /// which report the generic variant they refine (`TicketInvalid`,
+    /// `InvalidArguments`, `Browser`).
     pub const fn variant(&self) -> &'static str {
         match self {
             Self::MissingFixture => "MissingFixture",
@@ -363,7 +363,8 @@ impl ToolError {
         }
     }
 
-    /// The legacy message text this error was sent with, when it has one.
+    /// The `message` text of a typed error, in the wording of the generic
+    /// error it refines.
     fn message(&self) -> Option<String> {
         Some(match self {
             Self::NeedsConfirm { label } => {

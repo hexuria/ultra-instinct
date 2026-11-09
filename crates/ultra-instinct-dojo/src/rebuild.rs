@@ -3,8 +3,8 @@
 //!
 //! The rebuilt space is exactly the recorded menu — controls and
 //! target-bound actions alike — so a replayed decision sees what the live
-//! decision saw. Diaries written before `region` was recorded keep working:
-//! those actions rebuild as controls (a degraded but honest replay).
+//! decision saw. An action recorded without `region` rebuilds as a control
+//! (a degraded but honest replay).
 
 use ultra_instinct_core::{
     ActionId, ActionKind, ActionSpace, ElementState, ObservedAction, RegionId, Role,

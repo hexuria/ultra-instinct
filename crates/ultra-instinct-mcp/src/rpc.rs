@@ -356,7 +356,7 @@ mod tests {
     }
 
     /// The default text state reaches an MCP client as plain text (not a
-    /// JSON-escaped string); `format: "json"` keeps today's JSON body.
+    /// JSON-escaped string); `format: "json"` keeps the JSON body.
     #[test]
     fn text_state_is_a_plain_text_item() {
         use ultra_instinct_browser::script::{Control, PageSpec};

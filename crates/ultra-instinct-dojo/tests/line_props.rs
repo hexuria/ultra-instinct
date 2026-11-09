@@ -1,4 +1,4 @@
-//! Parser proptests (issue #49): the diary-line parser is the replay arena's
+//! Parser proptests: the diary-line parser is the replay arena's
 //! front door — every serialized line round-trips, and garbage never panics.
 
 use proptest::prelude::*;

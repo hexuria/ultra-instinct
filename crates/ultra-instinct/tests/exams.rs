@@ -1,4 +1,4 @@
-//! Golden for `aui exams`: the issue-#49 progress metric — remote calls
+//! Golden for `aui exams`: the dojo's progress metric — remote calls
 //! per 100 recorded decisions — plus belt reporting over the diaries.
 
 use ultra_instinct_dojo::line::{DecisionLine, DiaryLine, Situation};

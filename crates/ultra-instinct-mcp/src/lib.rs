@@ -1,7 +1,6 @@
 //! stdio MCP server for ultra-instinct.
 //!
-//! Product tools: observe, guard, verify. The locate, inspect, act and diff
-//! helpers are removed (ADR 0012).
+//! Product tools: observe, guard, verify.
 //!
 //! `browser_*` tools are the browser-use-compatible host surface (navigate,
 //! get_state, click, type, scroll, screenshot, tabs). Target-bound input still
@@ -103,9 +102,8 @@ pub const PRODUCT_TOOLS: [&str; 3] = [TOOL_OBSERVE, TOOL_GUARD, TOOL_VERIFY];
 
 pub use ultra_instinct_browser_tools::{BROWSER_TOOLS, ENV_TOOLS, EXTRA_TOOLS, STATE_TOOLS};
 
-/// Tool name for a legacy protocol phase. The locate, inspect and diff tools
-/// are removed, so their phases map onto the product tool that now covers
-/// them: Locate and Inspect read the page with `observe` (regions carry id,
+/// Tool name for a legacy protocol phase, mapped onto the product tool that
+/// covers it: Locate and Inspect read the page with `observe` (regions carry id,
 /// label, parent and state), Act is `guard`, and Diff is `verify` with
 /// `before_snapshot` / `after_snapshot`.
 pub fn tool_for_phase(phase: ultra_instinct_protocol::LoopPhase) -> &'static str {
@@ -130,7 +128,7 @@ mod tests {
         }
         assert!(!PRODUCT_TOOLS.contains(&"navigate"));
         assert!(!PRODUCT_TOOLS.contains(&"act"));
-        // The `browser_*` host surface sits beside the firewall tools; it
+        // The `browser_*` host surface sits beside the product tools; it
         // never enters PRODUCT_TOOLS.
         for name in crate::BROWSER_TOOLS.into_iter().chain(crate::EXTRA_TOOLS) {
             assert!(TOOLS.contains(&name));

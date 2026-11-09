@@ -14,8 +14,8 @@
 //! `$TMPDIR/aui/<session>.sock` (directory 0700, socket 0600). It answers one
 //! connection and one line at a time, in a single thread: each line is a
 //! JSON-RPC request for one [`ultra_instinct_mcp::Server`], so a session owns
-//! one CDP socket (anti-drift #10). Every press goes through the existing
-//! ticketed `browser_*` tools. The daemon exits after 60 minutes idle
+//! one CDP socket. Every press goes through the ticketed `browser_*`
+//! tools. The daemon exits after 60 minutes idle
 //! (`aui open --idle <secs>`, 1 s to 24 h, sets it for the session) or on
 //! `aui close`, and removes its socket.
 //!

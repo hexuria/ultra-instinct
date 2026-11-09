@@ -16,8 +16,7 @@ use crate::vocab::{Action, Role, Zone};
 /// - `near`: an anchor such as the focused region (the "cursor"). Locate
 ///   scopes to the innermost ancestor-or-self of the anchor that contains a
 ///   best text/role match. With no anchor, or no such ancestor, locate falls
-///   back to the unscoped ranking, the way a cargo runner falls back to the
-///   default command when there is no cursor context.
+///   back to the unscoped ranking.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocateQuery {
     text: Option<String>,

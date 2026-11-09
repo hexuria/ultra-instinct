@@ -404,7 +404,7 @@ fn an_exec_result_under_a_data_key_is_masked() {
 }
 
 /// A password stays masked however many other secrets are typed after it
-/// (the list used to keep the newest 32).
+/// (only plain entries are capped).
 #[test]
 fn a_typed_password_is_never_evicted_by_later_typing() {
     let then = |mut s: ScriptBuilder| {
@@ -721,7 +721,7 @@ fn a_field_that_cannot_be_hidden_refuses_the_capture() {
     assert!(!capture_calls(&log).contains(&"Page.captureScreenshot".to_owned()));
 }
 
-/// Nothing secret typed yet: a screenshot is the one capture call it was.
+/// Nothing secret typed yet: a screenshot is one plain capture call.
 #[test]
 fn a_screenshot_with_no_typed_secret_hides_nothing() {
     let log: CallLog = std::rc::Rc::default();

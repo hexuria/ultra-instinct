@@ -3,7 +3,7 @@ use std::fmt;
 use crate::error::CoreError;
 
 /// A point in viewport pixels. The origin and axis direction belong to the
-/// producer of the snapshot. Phase 1 fixtures use a top-left origin with `y`
+/// producer of the snapshot. Fixtures use a top-left origin with `y`
 /// increasing downward.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Point {

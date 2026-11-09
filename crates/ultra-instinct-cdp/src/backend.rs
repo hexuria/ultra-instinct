@@ -1,4 +1,4 @@
-//! Where tabs and their CDP sessions come from (ADR 0013 phase 2).
+//! Where tabs and their CDP sessions come from.
 //!
 //! A [`TargetBackend`] lists, opens, activates and closes page tabs and
 //! opens a session's transport. [`HttpBackend`] is Chrome's HTTP `/json`
@@ -45,7 +45,7 @@ pub trait TargetBackend {
     }
 }
 
-/// Today's backend: tabs through Chrome's HTTP `/json/*` endpoints and a
+/// The HTTP backend: tabs through Chrome's HTTP `/json/*` endpoints and a
 /// browser websocket, sessions from a connector (a page websocket by default).
 pub struct HttpBackend {
     connector: CdpConnector,

@@ -20,7 +20,7 @@ pub enum CliError {
         message: String,
     },
     Fixture(String),
-    /// `guard` rejected the request (for example a removed `near` field).
+    /// `guard` rejected the request (for example an unsupported `near` field).
     Guard(String),
     ExpectedTextMissing {
         expected: String,
@@ -211,7 +211,7 @@ pub(crate) mod skills_cmd;
 pub(crate) mod state_cmd;
 pub(crate) mod verbs;
 
-// Remote transports live in `ultra-instinct-remote`; re-exported under their old paths.
+// Remote transports live in `ultra-instinct-remote`; re-exported here.
 #[cfg(feature = "clef")]
 pub use ultra_instinct_remote::clef;
 #[cfg(feature = "model-text")]

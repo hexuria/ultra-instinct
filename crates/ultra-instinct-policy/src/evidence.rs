@@ -7,8 +7,7 @@ use ultra_instinct_core::{tokenize, ActionKind, ObservedAction, Role};
 
 /// Everything scoring needs from one goal string, computed once: whitespace
 /// tokens, the whitespace-insensitive fold, instruction tokens (conditional
-/// clauses stripped), and the Instinct-normalized form. Scoring used to redo
-/// each of these — including the normalize — for every candidate action.
+/// clauses stripped), and the Instinct-normalized form.
 struct TextView<'a> {
     tokens: Vec<String>,
     folded: String,

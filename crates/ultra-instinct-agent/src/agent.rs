@@ -253,8 +253,7 @@ pub enum AgentState {
 /// [`gate()`](fn@ultra_instinct_guard::gate) on [`Self::manifold`] and revalidated by
 /// [`crate::execute_ticketed`] against a fresh observation (target-scoped world
 /// fingerprint + target role / label / fingerprint). A prediction carries no
-/// fingerprint of its own, so nothing here implies a second pre-ticket check
-/// (ADR 0005 §R2).
+/// fingerprint of its own, so nothing here implies a second pre-ticket check.
 #[derive(Clone, Debug)]
 pub struct Predicted {
     pub decision: PolicyDecision,
@@ -917,8 +916,8 @@ where
                 }
                 // A deliberate decline (`Missing`/`Abstain`) stays quiet —
                 // `ground_select` still gets its goal match. Genuine resolver
-                // failures were silent before; journal them so a diary reader
-                // can tell "declined" from "broken".
+                // failures are journaled so a diary reader can tell
+                // "declined" from "broken".
                 Err(err @ (TextError::Ambiguous | TextError::Invalid(_))) => {
                     self.journal.push(JournalEvent::PolicyError {
                         clause_index: self.clause_index,
@@ -1143,8 +1142,8 @@ where
 
         let action = region_action(kind)
             .ok_or(AgentError::InvalidState("non-executable kind reached act"))?;
-        // The space the decision was made in travels with the prediction —
-        // rebuilding it per act was a whole-space clone for one lookup.
+        // The space the decision was made in travels with the prediction, so
+        // act never clones the whole space for one lookup.
         let offered = predicted
             .space
             .get(&predicted.decision.action_id)

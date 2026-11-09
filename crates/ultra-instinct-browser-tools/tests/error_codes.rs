@@ -1,6 +1,6 @@
 //! Pins the `code` of every `ToolError` (the table in docs/embedding.md):
 //! one stable snake_case code per variant, in declaration order, on every
-//! wire value next to the `variant` it always had.
+//! wire value next to its stable `variant`.
 
 use serde_json::{json, Value};
 use ultra_instinct_browser_tools::ToolError;
@@ -243,7 +243,7 @@ fn named_codes_carry_their_fields() {
         field(ToolError::OutputTooLarge { limit: 7, bytes: 9 }, "limit"),
         7
     );
-    // Old variants keep their exact old body, plus `code`.
+    // Untyped variants keep their plain body, plus `code`.
     assert_eq!(
         ToolError::InvalidArguments(s("m")).to_value(),
         json!({"code": "invalid_arguments", "variant": "InvalidArguments", "message": "m"})

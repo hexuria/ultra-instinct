@@ -1,4 +1,4 @@
-//! The exam report (issue #49, work item 6): belts per pairing plus the
+//! The exam report: belts per pairing plus the
 //! dojo's progress metric — remote policy calls per 100 decisions of the
 //! same task, which must fall as lessons accumulate.
 //!

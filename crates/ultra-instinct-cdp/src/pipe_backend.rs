@@ -1,11 +1,10 @@
-//! The tab backend for a caller-owned CDP pipe (ADR 0013 phase 2).
+//! The tab backend for a caller-owned CDP pipe.
 //!
 //! [`PipeBackend`] drives one [`PipeBrowser`]: tabs are `Target.*` calls on
 //! the browser connection, and a tab's session is a [`PipePage`] attached
 //! with `flatten: true`. Session keys are `pipe:<targetId>`; every call's
 //! `cdp` argument is replaced by [`PIPE_ENDPOINT`]. One thread owns the
-//! browser, its pages and the server (rule 10: `Rc`, no locks, no reader
-//! thread).
+//! browser, its pages and the server (`Rc`, no locks, no reader thread).
 
 use std::collections::BTreeSet;
 

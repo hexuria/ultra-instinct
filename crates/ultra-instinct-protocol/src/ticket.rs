@@ -1,16 +1,9 @@
-//! ActionTicket: the product boundary between guard Allow and host actuation.
+//! ActionTicket: the one-shot lease between an allowed choice and page input.
 //!
-//! Ultra-Instinct MCP never clicks. On [`crate::GuardDecision::Allow`] the runtime
-//! issues a ticket. The host (or an invisible executor interceptor) must
-//! revalidate that ticket against a fresh observation, then click the **exact**
-//! target. If the world or target fingerprint drifted, the ticket is invalid
-//! and nothing is pressed.
-//!
-//! Direction (hard gates before rank): occluded / front-layer / disabled /
-//! hidden / wrong ancestry / stale ticket should be impossible evidence, not
-//! score penalties. Ranking only chooses among viable candidates. Today's
-//! `buried_better_label` path remains until that split lands; the ticket is
-//! the enforcement lease regardless.
+//! Guard never presses. On [`crate::GuardDecision::Allow`] (or the agent's
+//! hard gate) a ticket is issued. The executor revalidates it against a fresh
+//! observation, then presses the **exact** target. If the world or target
+//! fingerprint drifted, the ticket is invalid and nothing is pressed.
 
 use std::fmt;
 

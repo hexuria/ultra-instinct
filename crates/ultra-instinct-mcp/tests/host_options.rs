@@ -342,7 +342,7 @@ fn the_allow_list_refuses_other_tools_and_lists_only_its_own() {
         .map(|t| t["name"].as_str().unwrap())
         .collect();
     assert_eq!(names, ["browser_get_state", "browser_click"]);
-    // Without an allow-list every tool is listed, as before.
+    // Without an allow-list every tool is listed.
     let all: Value = serde_json::from_str(
         &replay(ScriptBuilder::new())
             .0

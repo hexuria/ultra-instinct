@@ -1,8 +1,7 @@
-//! MCP tools for the action-firewall product: observe, guard, verify.
+//! MCP product tools: observe, guard, verify.
 //!
 //! `guard` finds its target by exact label (and role / `within`), unique or
-//! refuse, runs the hard gate, and never clicks. The locate, inspect, act and
-//! diff helpers and the matcher are gone (ADR 0012).
+//! refuse, runs the hard gate, and never clicks.
 
 use std::fs;
 use std::path::Path;
@@ -28,8 +27,8 @@ use crate::ToolError;
 
 const PRODUCT: &str = "ultra-instinct";
 
-/// Guard arguments the matcher understood. Refused by name so a caller that
-/// still sends them learns why instead of getting an unscoped decision.
+/// Guard arguments the exact-label guard does not support. Refused by name so
+/// a caller that sends them learns why instead of getting an unscoped decision.
 const REMOVED_GUARD_ARGUMENTS: [&str; 4] = ["near", "position", "matcher", "dims"];
 
 enum Origin {

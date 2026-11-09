@@ -1,4 +1,4 @@
-//! The lesson store (issue #49, work item 3): what the dojo learned from
+//! The lesson store: what the dojo learned from
 //! its battle diaries, versioned and keyed per situation — never global.
 //!
 //! Four lesson kinds:
@@ -8,7 +8,7 @@
 //!   diary ids.
 //! - **Moves**: clause → winning action routines that worked here.
 //! - **Trust**: per situation+label wins/losses/last-seen — the evidence
-//!   work item 4 feeds back into Instinct.
+//!   fed back into Instinct ([`crate::trust`]).
 //!
 //! Every lesson carries the diary ids that prove it. `load` rejects a
 //! different schema version rather than silently misreading it.
@@ -73,7 +73,7 @@ pub struct Trust {
     pub wins: u32,
     pub losses: u32,
     /// Unix millis of the most recent run that touched this pair (the
-    /// diary filename stamp), for the item-4 decay.
+    /// diary filename stamp), for trust decay.
     pub last_seen_ms: u64,
     pub diaries: Vec<String>,
 }

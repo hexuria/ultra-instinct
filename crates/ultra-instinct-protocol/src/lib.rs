@@ -1,11 +1,11 @@
 //! Loop messages for ultra-instinct.
 //!
-//! Product operations are observe, guard, verify. Ultra-Instinct does not click and
-//! does not plan navigation. Locate / inspect / diff remain internal helpers.
+//! Wire types for the guard, ticket, and verify boundary. The MCP host
+//! operations are observe, guard, verify.
 //!
-//! [`GuardDecision`] plus [`ActionTicket`] are the guard contract; the owned
-//! agent loop lives in `ultra-instinct-agent`. Legacy JEV task/result types and the
-//! unused `Request` enum were removed (ADR 0003).
+//! [`GuardDecision`] plus [`ActionTicket`] are the guard contract. The agent
+//! loop in `ultra-instinct-agent` owns observe → decide → act and presses only
+//! through one-shot tickets.
 
 #![forbid(unsafe_code)]
 

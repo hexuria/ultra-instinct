@@ -35,7 +35,7 @@ proptest! {
     fn structured_tool_calls_are_typed(
         tool in prop_oneof![
             Just("observe"),
-            // Removed helpers (ADR 0012): unknown tools now.
+            // Locate / inspect / act / diff are not tools: unknown.
             Just("locate"),
             Just("act"),
             Just("guard"),

@@ -1,4 +1,4 @@
-//! The dojo policy (issue #49, work item 5): lessons inside the loop.
+//! The dojo policy: lessons inside the loop.
 //!
 //! Decision order, closed as a [`BrowserPolicy`] so the agent loop's
 //! guard → ticket → revalidate → executor chain is untouched:
@@ -292,7 +292,8 @@ impl BrowserPolicy for DojoPolicy {
         self.credit_pending(history);
         let key = self.key(goal);
 
-        // Trust evidence into Instinct, capped — item 4's only channel.
+        // Trust evidence into Instinct, capped — the only way lessons reach
+        // scoring.
         let adjustments: BTreeMap<String, i16> = self
             .store
             .trust

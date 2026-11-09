@@ -1,6 +1,6 @@
 //! `browser_*` MCP tool families for ultra-instinct: the browser-use-compatible
 //! host surface (navigate, get_state, click, type, scroll, screenshot, tabs),
-//! the agent-browser ports (dialog, check, focus, get / is, login state,
+//! the agent-browser-style tools (dialog, check, focus, get / is, login state,
 //! settings, downloads, network) and the [`ToolError`] every tool returns.
 //!
 //! The tools run on a [`BrowserHost`] (the MCP `Server` in

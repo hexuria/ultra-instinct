@@ -1,4 +1,4 @@
-//! Arm D offline: Instinct abstains → remote (scripted) chooses → same gate/ticket.
+//! Remote escalation offline: Instinct abstains → remote (scripted) chooses → same gate/ticket.
 #![cfg(feature = "remote")]
 
 use ultra_instinct_agent::{AgentBuilder, AgentOutcome, MockBrowser};

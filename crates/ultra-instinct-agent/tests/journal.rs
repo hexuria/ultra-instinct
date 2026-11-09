@@ -1,4 +1,4 @@
-//! Golden journal test (issue #49, work item 1): a full mock run drains as
+//! Golden journal test: a full mock run drains as
 //! Run → Decision(s) → Step(s) → Finished, with the decision's offered menu,
 //! ranked candidates, source, and step win flags all populated.
 

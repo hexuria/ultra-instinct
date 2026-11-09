@@ -812,9 +812,9 @@ mod tests {
 
     #[test]
     fn connect_socket_fails_fast_when_the_peer_never_answers() {
-        // A listener that accepts TCP but never completes the ws upgrade used
-        // to stall the CLI forever: `tungstenite::connect` applies no deadline
-        // until it returns.
+        // A listener that accepts TCP but never completes the ws upgrade must
+        // not stall the CLI: `tungstenite::connect` applies no deadline until
+        // it returns.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().expect("addr").port();
         std::thread::spawn(move || {

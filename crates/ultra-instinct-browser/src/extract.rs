@@ -1373,9 +1373,9 @@ fn parse_json(text: &str) -> Result<Value, BrowserError> {
 }
 
 /// Only the document tree needs depth beyond serde_json's 128-level cap —
-/// a real DOM nests ~2 JSON levels per element level, so observe died at
-/// ~60-deep pages. Stack growth makes deep parse safe; every other CDP
-/// payload stays bounded.
+/// a real DOM nests ~2 JSON levels per element level, so a ~60-deep page
+/// passes it. Stack growth makes deep parse safe; every other CDP payload
+/// stays bounded.
 fn parse_json_deep(text: &str) -> Result<Value, BrowserError> {
     use serde::Deserialize;
     let mut deserializer = serde_json::Deserializer::from_str(text);

@@ -1,5 +1,5 @@
 //! Observe, identity, press tiers, focus and history over CDP replay
-//! scripts (moved from `lib.rs`'s inline `phase2` tests; public API only).
+//! scripts, through the public API only.
 
 use ultra_instinct_browser::*;
 use ultra_instinct_core::{Action, RegionId, Role, SourceMask};
@@ -471,7 +471,7 @@ fn with_focused_email(script: &str) -> String {
         .position(|call| call["method"] == "Page.getNavigationHistory")
         .unwrap();
     let insert_at = history_at + 1;
-    // Existing fixture already has hits for 100 and 200 after history.
+    // The fixture already has hits for 100 and 200 after history.
     calls.insert(
         insert_at + 2,
         serde_json::json!({

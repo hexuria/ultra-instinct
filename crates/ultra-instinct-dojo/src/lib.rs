@@ -6,7 +6,7 @@
 //! diary is the evidence base the replay arena, lesson store, and belt
 //! exams all read. Lessons only ever adjust evidence inside the finite
 //! `ActionSpace`; they never pick an off-menu action and never bypass the
-//! guard/ticket/executor chain (the anti-drift rules own that path).
+//! guard/ticket/executor chain.
 
 pub mod belt;
 pub mod diary;

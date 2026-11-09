@@ -83,8 +83,8 @@ fn twin_suspend_within_a_row_allows_that_row_only() {
 
 #[test]
 fn near_the_focused_field_is_an_error_now() {
-    // `near` went with the matcher: the host scopes with `within` or names
-    // the region with `proposed`.
+    // `near` is not supported: the host scopes with `within` or names the
+    // region with `proposed`.
     let m = load(TWINS);
     let request = GuardRequest::click(button("Suspend").near(Some(id("beta-host"))));
     assert_eq!(

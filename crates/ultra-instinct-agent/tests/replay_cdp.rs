@@ -591,7 +591,7 @@ fn autocomplete_stops_when_document_options_change_over_cdp() {
     assert_eq!(autocomplete_poll_calls(transport.logged_calls()).len(), 3);
 }
 
-/// Label folding (ADR 0014): the label is not a second target, so "check
+/// Label folding: the label is not a second target, so "check
 /// Remember me" clicks the checkbox itself, and a custom checkbox (native
 /// input with no box) is clicked on its label's box. Both verify by the
 /// checkbox state the page reports.
@@ -637,7 +637,7 @@ fn check_goals_click_the_control_a_label_names() {
     }
 }
 
-/// ADR 0014: when a folded checkbox's evidence flips between observations
+/// When a folded checkbox's evidence flips between observations
 /// (input `opacity: 0` at rest, shown on focus) its id holds but its box
 /// moves between the label and the input. A ticket from the old box is
 /// stale: the executor discards it, re-observes, and decides again, and the

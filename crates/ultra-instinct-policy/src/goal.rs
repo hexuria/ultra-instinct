@@ -36,7 +36,7 @@ impl fmt::Display for AgentGoal {
 
 /// Split a goal into sequential clauses on `then` / `and then` (case-insensitive).
 ///
-/// Limits (documented, not aspirational):
+/// Limits:
 /// - Only the literal connectives `then` and `and then` outside of `"..."` /
 ///   `'...'` quotes are split. No `after that`, commas, or numbered lists.
 /// - No branching, conditionals, or loops.

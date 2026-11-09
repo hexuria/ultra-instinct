@@ -185,7 +185,7 @@ pub trait BrowserPolicy {
     ) -> Result<PolicyOutcome, PolicyError>;
 
     /// Stable name recorded in the battle diary (`instinct`, `jev`,
-    /// `clef-flash`, …). Default keeps old test policies honest.
+    /// `clef-flash`, …). Default: `"policy"`.
     fn name(&self) -> &'static str {
         "policy"
     }

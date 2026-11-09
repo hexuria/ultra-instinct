@@ -1,5 +1,5 @@
 //! `browser_state_*`, `browser_cookies`, `browser_storage`: save and reuse a
-//! login (ported from agent-browser `state` / `cookies` / `storage`).
+//! login (after agent-browser's `state` / `cookies` / `storage`).
 //!
 //! Cookie and storage values are masked (`"•••"` plus `value_length`) in list
 //! output unless the call passes `reveal: true`, so session tokens stay out

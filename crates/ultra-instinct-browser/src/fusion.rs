@@ -1,6 +1,6 @@
 //! Fuse a DOM node and an accessibility node that describe one control.
 //!
-//! Version 2 runs two passes, after label folding.
+//! Fusion runs label folding, then two passes.
 //!
 //! 0. A text element that labels one control (`<label for>`, a `<label>`
 //!    wrapping its control, or a generic element a control names with

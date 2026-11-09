@@ -1,4 +1,4 @@
-//! Live Chrome checks for the borrowed shell verbs (ADR 0012). Ignored by
+//! Live Chrome checks for the borrowed shell verbs. Ignored by
 //! default (not in CI; CI stays on CDP replay).
 //!
 //! ```text

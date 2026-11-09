@@ -1,4 +1,4 @@
-//! Label folding (ADR 0014) through `browser_get_state`: a field named by a
+//! Label folding through `browser_get_state`: a field named by a
 //! label is listed once, as the field, and a custom checkbox is listed as a
 //! checkbox on its label's box.
 

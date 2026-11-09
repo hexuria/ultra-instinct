@@ -18,13 +18,13 @@ use crate::types::{
 
 pub const HABITUATION_STEP: i16 = 250;
 
-/// Instinct-backed finite policy. Hard-invalid targets are already absent from
-/// [`ActionSpace`]; this policy never applies occlusion/disabled as scores.
 /// Hard cap on learned-trust evidence, in confidence millis. Kept well
 /// below the Standard profile's `min_margin` (150) so a lesson can break a
 /// near-tie but can never lift a candidate over the bar on its own.
 pub const TRUST_CAP_MILLIS: i16 = 75;
 
+/// Instinct-backed finite policy. Hard-invalid targets are already absent from
+/// [`ActionSpace`]; this policy never applies occlusion/disabled as scores.
 #[derive(Clone, Debug)]
 pub struct InstinctPolicy {
     profile: Profile,
@@ -702,7 +702,7 @@ mod tests {
         }
     }
 
-    /// Learned-trust evidence (issue #49, item 4): a penalty drops an
+    /// Learned-trust evidence: a penalty drops an
     /// at-threshold winner to abstain — evidence enters through the
     /// capped adjustment only.
     #[test]

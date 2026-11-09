@@ -2,7 +2,7 @@
 //!
 //! Transports: a blocking websocket ([`WebSocketTransport`]), a replay
 //! script ([`ReplayTransport`]), and, on unix only, a caller-owned
-//! `--remote-debugging-pipe` pair ([`PipeBrowser`] / [`PipePage`], ADR 0013).
+//! `--remote-debugging-pipe` pair ([`PipeBrowser`] / [`PipePage`]).
 
 #![forbid(unsafe_code)]
 
