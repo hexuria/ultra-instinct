@@ -1,4 +1,4 @@
-//! The "what counts as a win" oracle (issue #49, open decision).
+//! The "what counts as a win" oracle.
 //!
 //! A win is verified evidence, never a DONE choice:
 //!

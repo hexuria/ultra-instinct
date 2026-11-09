@@ -1873,7 +1873,7 @@ impl BrowserPolicy for PressesKey {
 
 /// Enter in a field submits its form, which presses the form's submit
 /// button: under a confirm pattern for that button's label the run ends
-/// BLOCKED naming it, and nothing is dispatched (guard policy, ADR 0013).
+/// BLOCKED naming it, and nothing is dispatched.
 #[test]
 fn enter_in_a_field_whose_form_submits_with_a_confirm_label_blocks_unpressed() {
     let page = |form: Option<ultra_instinct_core::FormSubmit>| {

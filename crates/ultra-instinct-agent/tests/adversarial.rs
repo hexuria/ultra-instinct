@@ -74,7 +74,7 @@ fn type_text_without_resolvable_value_never_types() {
         .max_steps(3)
         .build("type into Search");
     let outcome = agent.run();
-    // No value: TYPE_TEXT is withdrawn and the re-plan abstains (issue #70).
+    // No value: TYPE_TEXT is withdrawn and the re-plan abstains.
     assert!(
         matches!(outcome, AgentOutcome::Abstained { .. }),
         "{outcome:?}"
@@ -91,9 +91,9 @@ fn wrong_effect_is_detected_and_bounded() {
         .build(r#"Type "rust" into Search"#);
     let outcome = agent.run();
     match &outcome {
-        // Habituation (ADR 0008) freezes the repeated wrong-effect TYPE_TEXT
-        // after 2 trailing failures (urge 500 < standard min 750): Abstained,
-        // not the old 3-strike Blocked. Still bounded, nothing else typed.
+        // Habituation freezes the repeated wrong-effect TYPE_TEXT after 2
+        // trailing failures (urge 500 < standard min 750): Abstained, not
+        // Blocked. Still bounded, nothing else typed.
         AgentOutcome::Abstained { steps, .. } => {
             assert_eq!(steps.len(), 2, "{steps:?}");
             assert!(steps
@@ -382,9 +382,9 @@ fn never_settling_page_hits_stale_bound_without_input() {
 
 #[test]
 fn repeated_no_effect_click_is_bounded() {
-    // Clicking changes nothing; policy would repeat. Habituation (ADR 0008)
-    // freezes the repeat after 2 presses → Abstained before the old 3-strike
-    // bound; the abstain then feeds the escalation tier when configured.
+    // Clicking changes nothing; policy would repeat. Habituation freezes the
+    // repeat after 2 presses → Abstained; the abstain then feeds the
+    // escalation tier when configured.
     let page = m(r#"
         viewport w=800 h=600
         region id=go role=button label="Refresh" x=10 y=10 w=80 h=24 actions=click sources=dom,accessibility
