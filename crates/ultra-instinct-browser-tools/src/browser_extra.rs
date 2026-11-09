@@ -446,10 +446,7 @@ fn check(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
         let mut ledger = server.take_ledger(key);
         let executed = execute_ticketed_with(&mut session, &mut ledger, &ticket, &input, &policy);
         server.keep_ledger(key, ledger);
-        executed.map_err(|err| {
-            let url = session.page().and_then(|p| p.url().map(str::to_owned));
-            exec_error(err, url.as_deref())
-        })?;
+        executed.map_err(exec_error)?;
         let after = session.observe().map_err(browser_err)?;
         let read = after.get(&id).and_then(|r| r.state().checked);
         if read != Some(want) {
@@ -508,7 +505,7 @@ fn focus(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
             },
         );
         server.keep_ledger(key, ledger);
-        result.map_err(|err| consume_error(err, &ticket.target_label, url.as_deref()))?;
+        result.map_err(consume_error)?;
         Ok(json!({"focused": index, "region": id.as_str()}))
     })();
     keep(server, key, session);
@@ -545,11 +542,15 @@ fn keyboard(
         ));
     }
     let now = crate::press::focus_now(server, key, !policy.is_empty())?;
-    let pressed = [('\n', "Enter"), (' ', " ")]
-        .into_iter()
-        .find(|(ch, _)| keys && text.contains(*ch))
-        .map(|(_, key)| key);
-    crate::press::check_focused(&policy, &now, pressed)?;
+    // Every activating key that lands on the observed focus (before the
+    // first Tab; after it the Tab rules above apply), each checked.
+    let before_tab = text.split('\t').next().unwrap_or_default();
+    for (ch, key) in [(' ', " "), ('\n', "Enter")] {
+        if keys && before_tab.contains(ch) {
+            crate::press::check_focused(&policy, &now, Some(key))?;
+        }
+    }
+    crate::press::check_focused(&policy, &now, None)?;
     // Fail closed: unless a current observation shows a focused field that
     // is not sensitive, this text is masked in every later output. One taken
     // before a press is stale (the press may have moved the focus): observe
@@ -978,7 +979,7 @@ pub(crate) fn spec(name: &str) -> (String, Map<String, Value>, Vec<&'static str>
             );
             props.insert("confirm".into(), crate::browser_tools::confirm_prop());
             required.push("text");
-            "Type text at the focused element, no target: mode type (default) sends key events per char, insert sends one Input.insertText. Refuses when nothing is focused, or on a page off the domain allow-list (where the text leads is checked on the next call); an Enter / Space on a focused control whose label needs a confirm needs `confirm`."
+            "Type text at the focused element, no target: mode type (default) sends key events per char, insert sends one Input.insertText. Refuses when nothing is focused, or on a page off the domain allow-list (and a form it would submit off the list; a link it follows is checked on the next call); an Enter / Space on a focused control whose label needs a confirm needs `confirm`."
         }
         "browser_get" => {
             props.insert("index".into(), index());

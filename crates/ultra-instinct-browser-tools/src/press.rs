@@ -6,7 +6,9 @@ use serde_json::Value;
 use ultra_instinct_agent::ExecError;
 use ultra_instinct_browser::BrowserError;
 use ultra_instinct_core::{Action, InteractionRegion};
-use ultra_instinct_guard::{host_of, is_activating_key, ConsumeError, Policy, UNOBSERVED_FOCUS};
+use ultra_instinct_guard::{
+    host_of, is_activating_key, ConsumeError, Policy, Refusal, UNOBSERVED_FOCUS,
+};
 use ultra_instinct_protocol::GuardReason;
 
 use crate::bound::ticket_error;
@@ -55,30 +57,32 @@ pub(crate) fn refusal_for(reason: GuardReason, label: &str, url: Option<&str>) -
     }
 }
 
+/// A guard [`Refusal`] as the tool error: its label for a confirm, the URL
+/// it checked (the page, or a form's target) for a domain.
+pub(crate) fn refusal_error(refusal: Refusal) -> ToolError {
+    refusal_for(refusal.reason, &refusal.label, refusal.url.as_deref())
+}
+
 /// Executor failures: the user's policy (confirm / domain) is its typed
-/// refusal for the label the executor checked, on `url`; ticket drift is a
+/// refusal for what the executor's fresh look checked; ticket drift is a
 /// stale ref; other ticket and gate refusals are `TicketInvalid` (never
 /// silently retried); observe / dispatch / page rejection are `Browser`.
-pub(crate) fn exec_error(err: ExecError, url: Option<&str>) -> ToolError {
+pub(crate) fn exec_error(err: ExecError) -> ToolError {
     match err {
         // The label the executor's fresh look checked.
-        ExecError::Policy { reason, label } => refusal_for(reason, &label, url),
+        ExecError::Policy { reason, label, url } => refusal_for(reason, &label, url.as_deref()),
         ExecError::Ticket(invalid) => ticket_error(invalid, err.to_string()),
         ExecError::Gate(_) => ToolError::TicketInvalid(err.to_string()),
         other => ToolError::Browser(other.to_string()),
     }
 }
 
-/// Host-side consume failures, the same way: a policy refusal for `label`
-/// on `url`, an invalid lease as `TicketInvalid` / stale ref, a page-side
-/// press failure as `Browser` (the ticket is already consumed).
-pub(crate) fn consume_error(
-    err: ConsumeError<BrowserError>,
-    label: &str,
-    url: Option<&str>,
-) -> ToolError {
+/// Host-side consume failures, the same way: a policy refusal as
+/// [`refusal_error`], an invalid lease as `TicketInvalid` / stale ref, a
+/// page-side press failure as `Browser` (the ticket is already consumed).
+pub(crate) fn consume_error(err: ConsumeError<BrowserError>) -> ToolError {
     match err {
-        ConsumeError::Refused(reason) => refusal_for(reason, label, url),
+        ConsumeError::Refused(refusal) => refusal_error(refusal),
         ConsumeError::Invalid(invalid) => ticket_error(invalid, err.to_string()),
         other => ToolError::Browser(other.to_string()),
     }
@@ -115,8 +119,9 @@ pub(crate) fn focus_now(
 /// unreadable URL while the list is set, is `domain_not_allowed`), and
 /// `key` on the focused region is checked by the guard's press rule
 /// ([`Policy::press_label`]: Enter / Space on a button-like control, Enter
-/// in a form control that submits a form). With a confirm list, an
-/// activating key to a focus no observation names refuses
+/// in a form control that submits a form, and a form submit's target host).
+/// An activating key to a focus no observation names refuses: with an
+/// allow-list `domain_not_allowed`, else with a confirm list
 /// [`UNOBSERVED_FOCUS`].
 pub(crate) fn check_focused(
     policy: &Policy,
@@ -131,22 +136,21 @@ pub(crate) fn check_focused(
         }
         None => {}
     }
-    let Some(key) = key.filter(|_| !policy.confirm_press.is_empty()) else {
+    let Some(key) = key.filter(|_| !policy.is_empty()) else {
         return Ok(());
     };
     match focused {
-        Some(region) => {
-            let label = policy
-                .press_label(region, Action::Key, Some(key))
-                .unwrap_or(region.label());
-            policy
-                .check(url.as_deref(), region, Action::Key, Some(key))
-                .map_err(|reason| refuse(reason, label))
-        }
+        // The guard's own rule: the press label, and where a form submit
+        // the key causes would go.
+        Some(region) => policy
+            .check_detail(url.as_deref(), region, Action::Key, Some(key))
+            .map_err(refusal_error),
+        None if !is_activating_key(key) => Ok(()),
         // No observed focus (no observation, or focus the observation does
-        // not name, as in a cross-origin frame): what this key presses is
-        // not known. Lifted only by confirming that placeholder label.
-        None if is_activating_key(key) && policy.needs_confirm(UNOBSERVED_FOCUS) => {
+        // not name, as in a cross-origin frame): what this key presses, and
+        // where a form it submits goes, is not known.
+        None if !policy.allow_domains.is_empty() => Err(refuse(GuardReason::DomainNotAllowed, "")),
+        None if policy.needs_confirm(UNOBSERVED_FOCUS) => {
             Err(refuse(GuardReason::NeedsConfirm, UNOBSERVED_FOCUS))
         }
         None => Ok(()),

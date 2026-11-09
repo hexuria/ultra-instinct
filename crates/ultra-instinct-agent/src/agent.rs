@@ -326,7 +326,7 @@ pub struct Agent<B, P, T = DeterministicTextResolver> {
     /// after the gate and again by the executor on the fresh observation.
     guard_policy: Policy,
     /// The policy refusal that ended the run BLOCKED, with the target label.
-    policy_refusal: Option<(GuardReason, String)>,
+    policy_refusal: Option<(GuardReason, String, Option<String>)>,
     /// [`Agent::run`] stops here, checked between steps.
     deadline: Option<std::time::Instant>,
 }
@@ -710,7 +710,14 @@ where
     pub fn policy_refusal(&self) -> Option<(GuardReason, &str)> {
         self.policy_refusal
             .as_ref()
-            .map(|(reason, label)| (*reason, label.as_str()))
+            .map(|(reason, label, _)| (*reason, label.as_str()))
+    }
+
+    /// The host a `domain-not-allowed` refusal named: the page's, or the
+    /// off-list host a form submit would have sent to (`None`: not read).
+    pub fn policy_refusal_host(&self) -> Option<String> {
+        let (_, _, url) = self.policy_refusal.as_ref()?;
+        url.as_deref().and_then(ultra_instinct_guard::host_of)
     }
 
     /// Stale predictions discarded so far (ticket revalidation caught a change).
@@ -1197,18 +1204,14 @@ where
             .get(&target)
             .ok_or_else(|| AgentError::Guard("refuse: missing-target".into()))?;
         let url = self.browser.page().and_then(|page| page.url());
-        // A confirm names the press it is for: the target, or (Enter in a
-        // field) the button its form submits with.
-        let refusal_label = self
-            .guard_policy
-            .press_label(region, action, key)
-            .unwrap_or(region.label())
-            .to_owned();
+        // A refusal names the press it is for (the target, or the button its
+        // form submits with) and what a domain refusal checked.
         self.guard_policy
-            .check(url, region, action, key)
-            .map_err(|reason| AgentError::PolicyRefused {
-                reason,
-                label: refusal_label,
+            .check_detail(url, region, action, key)
+            .map_err(|r| AgentError::PolicyRefused {
+                reason: r.reason,
+                label: r.label,
+                url: r.url,
             })?;
 
         let input = match kind {
@@ -1290,8 +1293,8 @@ where
             Err(err) if err.is_stale() => return Err(AgentError::Stale(err.to_string())),
             Err(ExecError::Rejected(msg)) => return Err(AgentError::InputRejected(msg)),
             // The label the executor's fresh look checked, not the decision's.
-            Err(ExecError::Policy { reason, label }) => {
-                return Err(AgentError::PolicyRefused { reason, label })
+            Err(ExecError::Policy { reason, label, url }) => {
+                return Err(AgentError::PolicyRefused { reason, label, url })
             }
             Err(ExecError::Gate(reason)) => {
                 return Err(AgentError::Guard(format!("refuse at executor: {reason}")))
@@ -1584,23 +1587,22 @@ where
             }
             // Not stale and never retried: observing again gives the same
             // answer, so the run stops for the user.
-            Err(AgentError::PolicyRefused { reason, label }) => {
+            Err(AgentError::PolicyRefused { reason, label, url }) => {
                 self.state = AgentState::Blocked;
                 let why = match reason {
                     GuardReason::NeedsConfirm => format!(
                         "{reason}: {label:?} matches a confirm-press pattern; confirm {label:?} to press it"
                     ),
                     _ => {
-                        let host = self
-                            .browser
-                            .page()
-                            .and_then(|page| page.url())
+                        // The page's host, or where a form submit would go.
+                        let host = url
+                            .as_deref()
                             .and_then(ultra_instinct_guard::host_of)
                             .unwrap_or_else(|| "(unknown url)".to_owned());
                         format!("{reason}: {host} is not an allowed domain")
                     }
                 };
-                self.policy_refusal = Some((reason, label));
+                self.policy_refusal = Some((reason, label, url));
                 Ok(TickResult::Finished(self.finish_blocked(why)))
             }
             Err(e) => Err(e),

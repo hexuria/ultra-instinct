@@ -48,8 +48,13 @@ pub enum ExecError {
     /// The user's policy refused the input on the fresh observation
     /// (`domain-not-allowed`, `needs-confirm`); `label` is what that look
     /// checked (`Policy::press_label`: the target, or the button its form
-    /// submits with), the label a confirm must name.
-    Policy { reason: GuardReason, label: String },
+    /// submits with), the label a confirm must name; `url` what a domain
+    /// refusal checked (the page, or where a form submit would go).
+    Policy {
+        reason: GuardReason,
+        label: String,
+        url: Option<String>,
+    },
     /// Observation failed before input (nothing dispatched).
     Observe(String),
     /// The page refused the input (disabled / readonly / no unique option).
@@ -161,20 +166,17 @@ pub fn execute_ticketed_with<B: BrowserRuntime + ?Sized>(
             .ok_or(ExecError::Ticket(TicketInvalid::TargetGone))?;
         ultra_instinct_guard::check_drop_target(&fresh, drop).map_err(ExecError::Gate)?;
     }
-    let key = ticket.key.as_deref();
     policy
-        .check(
+        .check_detail(
             before_page.as_ref().and_then(PageState::url),
             region,
             ticket.action,
-            key,
+            ticket.key.as_deref(),
         )
-        .map_err(|reason| ExecError::Policy {
-            reason,
-            label: policy
-                .press_label(region, ticket.action, key)
-                .unwrap_or(region.label())
-                .to_owned(),
+        .map_err(|r| ExecError::Policy {
+            reason: r.reason,
+            label: r.label,
+            url: r.url,
         })?;
 
     ledger
@@ -290,7 +292,8 @@ mod tests {
             err,
             ExecError::Policy {
                 reason: GuardReason::DomainNotAllowed,
-                label: "Go".into()
+                label: "Go".into(),
+                url: Some("https://evil.test/cart".into()),
             }
         );
         assert!(!err.is_stale());
@@ -327,14 +330,18 @@ mod tests {
         let mut ledger = TicketLedger::new();
         let policy = Policy::from_lists("", "Pay*").unwrap();
         let t = ultra_instinct_guard::gate_key(&seen, &id("name"), "Enter", None, 0).unwrap();
-        b.replace_manifold(with_form(FormSubmit::Button("Pay $18".into())));
+        b.replace_manifold(with_form(FormSubmit::Button {
+            label: "Pay $18".into(),
+            action: None,
+        }));
         let enter = Input::Key("Enter".into());
         let err = execute_ticketed_with(&mut b, &mut ledger, &t, &enter, &policy).unwrap_err();
         assert_eq!(
             err,
             ExecError::Policy {
                 reason: GuardReason::NeedsConfirm,
-                label: "Pay $18".into()
+                label: "Pay $18".into(),
+                url: None,
             }
         );
         assert!(!ledger.is_consumed(t.ticket_id));
@@ -357,7 +364,8 @@ mod tests {
             err,
             ExecError::Policy {
                 reason: GuardReason::NeedsConfirm,
-                label: "Go".into()
+                label: "Go".into(),
+                url: None,
             }
         );
         assert!(!ledger.is_consumed(t.ticket_id));

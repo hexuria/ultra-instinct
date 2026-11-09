@@ -490,3 +490,31 @@ fn run_goal_runs_only_when_the_allow_list_names_it() {
     );
     assert!(!log.borrow().is_empty(), "the run observed the page");
 }
+
+/// The download folder check resolves symlinks like the upload one: a
+/// destination inside the folder that is a symlink to a file outside it is
+/// refused `path_not_allowed` before any CDP call (a copy would write
+/// through it).
+#[cfg(unix)]
+#[test]
+fn a_download_through_a_symlink_out_of_the_folder_is_refused() {
+    let root = std::env::temp_dir().join(format!("ui-dl-link-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let dir = root.join("downloads");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(root.join("outside.txt"), b"keep").unwrap();
+    std::os::unix::fs::symlink(root.join("outside.txt"), dir.join("r.pdf")).unwrap();
+    let (server, log) = replay(ScriptBuilder::new());
+    let mut boxed = server.with_downloads(Downloads::Dir(dir.clone()));
+    let err = boxed
+        .call_tool(
+            "browser_download",
+            &json!({"cdp": CDP, "index": 1, "path": dir.join("r.pdf").display().to_string(),
+                    "overwrite": true}),
+        )
+        .expect_err("through a symlink");
+    assert_eq!(err.code(), "path_not_allowed", "{err:?}");
+    assert!(log.borrow().iter().all(|m| m == "Page.enable"), "{log:?}");
+    assert_eq!(std::fs::read(root.join("outside.txt")).unwrap(), b"keep");
+    let _ = std::fs::remove_dir_all(root);
+}

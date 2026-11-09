@@ -193,7 +193,8 @@ pub fn request_json_with_evidence(
                 action["tried"] = json!({"times": times, "last": last});
             }
             let observed = a.state();
-            if !observed.is_empty() {
+            // Form evidence alone is no `state` (the wire shape it had).
+            if !observed.is_empty_but_form() {
                 let mut state = Map::new();
                 if let Some(value) = &observed.value {
                     state.insert("value".to_owned(), json!(value));
@@ -530,6 +531,7 @@ mod tests {
                 input_type: None,
                 href: None,
                 form: None,
+                submit_action: None,
             });
         manifold.replace(name);
         ActionSpace::from_manifold(&manifold)
@@ -620,6 +622,38 @@ mod tests {
             !echoes_goal("Arrival date of the flight", goal),
             "one goal word in five is not an echo"
         );
+    }
+
+    /// Form evidence is not control state: a control observe found in no
+    /// form sends no `state` (paid tokens, and the wire shape it always had).
+    #[test]
+    fn form_evidence_alone_sends_no_state() {
+        let mut manifold = parse_fixture(
+            r#"
+            viewport w=800 h=600
+            region id=go role=button label="Go" x=10 y=10 w=80 h=24 actions=click sources=dom,accessibility
+            "#,
+        )
+        .unwrap();
+        let go = manifold
+            .get_str("go")
+            .unwrap()
+            .clone()
+            .with_state(ElementState {
+                form: Some(ultra_instinct_core::FormSubmit::NotInForm),
+                ..ElementState::default()
+            });
+        manifold.replace(go);
+        let space = ActionSpace::from_manifold(&manifold);
+        let request: Value =
+            serde_json::from_str(&request_json(&space, &AgentGoal::new("Go"), &[])).unwrap();
+        let click = request["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|action| action["id"] == "CLICK:go")
+            .unwrap();
+        assert!(click.get("state").is_none(), "{click}");
     }
 
     #[test]

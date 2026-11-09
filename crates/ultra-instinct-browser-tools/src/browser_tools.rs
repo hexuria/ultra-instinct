@@ -32,7 +32,7 @@ use crate::args::{browser_err, opt_bool, opt_str, opt_usize, req_str};
 use crate::bound::{self, at_index};
 use crate::error::ToolError;
 use crate::host::{endpoint_of, keep, session_key, BrowserHost};
-use crate::press::{consume_error, exec_error, press_policy, refusal_for, refused};
+use crate::press::{consume_error, exec_error, press_policy, refused};
 use ultra_instinct_cdp::PageTab;
 
 /// All `browser_*` tool names this module serves.
@@ -755,18 +755,12 @@ fn gated_input(
         }
         // The user's policy after the gate, before the ticket is used; the
         // executor checks it again on its fresh observation.
-        // A confirm names the press: the target, or (Enter in a field) the
-        // button its form submits with.
-        let pressed_key = ticket.key.as_deref();
-        let region = fresh.get(&region_id).or_else(|| manifold.get(&region_id));
-        let label = region
-            .and_then(|r| policy.press_label(r, action, pressed_key))
-            .unwrap_or(&ticket.target_label)
-            .to_owned();
-        if let Some(region) = region {
+        // A refusal names the press (the target, or the button its form
+        // submits with) and what a domain refusal checked.
+        if let Some(region) = fresh.get(&region_id).or_else(|| manifold.get(&region_id)) {
             policy
-                .check(url.as_deref(), region, action, pressed_key)
-                .map_err(|reason| refusal_for(reason, &label, url.as_deref()))?;
+                .check_detail(url.as_deref(), region, action, ticket.key.as_deref())
+                .map_err(crate::press::refusal_error)?;
         }
         let mut ledger = server.take_ledger(&key);
         // The executor's own observation decides again whether the text is
@@ -787,10 +781,7 @@ fn gated_input(
         if let Some(full) = refused {
             return Err(full);
         }
-        let done = executed.map_err(|err| {
-            let fresh_url = session.page().and_then(|p| p.url().map(str::to_owned));
-            exec_error(err, fresh_url.as_deref())
-        })?;
+        let done = executed.map_err(exec_error)?;
         let mut body = json!({
             "acted": input_kind,
             "index": index,
@@ -896,7 +887,7 @@ fn gated_press_at(
         server.keep_ledger(&key, ledger);
         result
             .map(|_| json!({"acted": true, "index": index, "ticket": ticket.ticket_id}))
-            .map_err(|err| consume_error(err, &ticket.target_label, url.as_deref()))
+            .map_err(consume_error)
     })();
     keep(server, &key, session);
     outcome
@@ -1014,7 +1005,7 @@ fn drag(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolEr
         server.keep_ledger(&key, ledger);
         result
             .map(|_| json!({"dragged": {"from": from, "to": to}}))
-            .map_err(|err| consume_error(err, &ticket.target_label, url.as_deref()))
+            .map_err(consume_error)
     })();
     keep(server, &key, session);
     outcome
@@ -1714,7 +1705,7 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             props.insert("verify".into(), verify_prop());
             props.insert("confirm".into(), confirm_prop());
             required.push("key");
-            "One key event (Enter, Tab, Escape, arrows, letters...) via Input.dispatchKeyEvent. With index: a ticketed KEY on that element (it must take keys; key is one of ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Home, End, PageUp, PageDown, Enter, Escape). Without index the key goes to the focus: on a page off the domain allow-list it refuses (where the key leads is checked on the next call), and Enter / Space on a focused control whose label needs a confirm needs `confirm`."
+            "One key event (Enter, Tab, Escape, arrows, letters...) via Input.dispatchKeyEvent. With index: a ticketed KEY on that element (it must take keys; key is one of ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Home, End, PageUp, PageDown, Enter, Escape). Without index the key goes to the focus: on a page off the domain allow-list it refuses (and a form it would submit off the list; a link it follows is checked on the next call), and Enter / Space on a focused control whose label needs a confirm needs `confirm`."
         }
         "browser_hold_key" => {
             props.insert("key".into(), json!({"type": "string"}));
@@ -1722,7 +1713,7 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             props.insert("hold_ms".into(), json!({"type": "integer"}));
             props.insert("confirm".into(), confirm_prop());
             required.push("key");
-            "Hold a key for a duration (seconds or hold_ms, capped 10s). On a page off the domain allow-list it refuses (where the key leads is checked on the next call); Enter / Space on a focused control whose label needs a confirm needs `confirm`."
+            "Hold a key for a duration (seconds or hold_ms, capped 10s). On a page off the domain allow-list it refuses (and a form it would submit off the list; a link it follows is checked on the next call); Enter / Space on a focused control whose label needs a confirm needs `confirm`."
         }
         "browser_file_upload" => {
             props.insert("index".into(), index_prop());

@@ -425,10 +425,9 @@ fn enter_submits_from_fields_and_boxes_under_the_form_rule() {
     call(&mut server, "browser_focus", at("Accept terms"));
     call(&mut server, "browser_send_key", json!({"key": "Enter"}));
     let from_box = title(&mut server);
-    println!(
-        "pipe live: Enter on a checkbox submits its form: {}",
-        from_box == "tAB"
-    );
+    // Chrome submits a form on Enter from a checkbox (as from a field).
+    assert_eq!(from_box, "tAB", "Enter on a checkbox submits its form");
+    println!("pipe live: Enter on a checkbox submits its form");
 
     server.set_policy(ultra_instinct_mcp::Policy::from_lists("", "Pay*").unwrap());
     call(&mut server, "browser_focus", at("Accept terms"));
@@ -453,6 +452,76 @@ fn enter_submits_from_fields_and_boxes_under_the_form_rule() {
         }
     );
     assert_eq!(title(&mut server), from_box, "nothing more submitted");
+    drop(server);
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&profile);
+}
+
+/// A form that posts to a host off the allow-list refuses the Enter or the
+/// click that would submit it, naming that host; a control whose content
+/// box is empty (all padding) still carries its form, so Enter in it needs
+/// the Pay button's confirm.
+#[test]
+#[ignore = "needs a local Chrome"]
+fn form_targets_and_empty_content_boxes_are_checked() {
+    let (mut child, profile, browser) = launch();
+    let mut server = Server::with_pipe(browser);
+    let url = "data:text/html,<title>t</title>\
+<form action='https://evil.test/collect' onsubmit=\"document.title+='E';return false\">\
+<label>Email <input></label><button>Join</button></form>\
+<form onsubmit=\"document.title+='P';return false\">\
+<label>Code <input style='width:0;padding:8px 60px'></label><button>Pay $18</button></form>";
+    call(&mut server, "browser_navigate", json!({ "url": url }));
+    let state = call(&mut server, "browser_get_state", json!({"format": "json"}));
+    let press = |label: &str, key: Option<&str>| {
+        let mut args = json!({"index": index_of(&state, label), "snapshot": state["snapshot"]});
+        if let Some(key) = key {
+            args["key"] = json!(key);
+        }
+        args
+    };
+    server.set_policy(ultra_instinct_mcp::Policy::from_lists("shop.example", "").unwrap());
+    let evil = ToolError::DomainNotAllowed {
+        host: "evil.test".into(),
+    };
+    let err = server
+        .call_tool("browser_send_key", &press("Email", Some("Enter")))
+        .expect_err("Enter posts to evil.test");
+    assert_eq!(err, evil);
+    let err = server
+        .call_tool("browser_click", &press("Join", None))
+        .expect_err("Join posts to evil.test");
+    assert_eq!(err, evil);
+    server.set_policy(ultra_instinct_mcp::Policy::from_lists("", "Pay*").unwrap());
+    // The padded field is no region of its own; focused, an Enter into it
+    // still needs a confirm (its focus is not one observe names).
+    assert!(state["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| e["label"] != "Code"));
+    call(
+        &mut server,
+        "browser_exec",
+        json!({"expression": "document.querySelectorAll('input')[1].focus()"}),
+    );
+    let err = server
+        .call_tool("browser_send_key", &json!({"key": "Enter"}))
+        .expect_err("the padded field is in the Pay form");
+    println!("pipe live: Enter in the padded field: {err:?}");
+    assert_eq!(
+        err,
+        ToolError::NeedsConfirm {
+            label: "(unobserved focus)".into()
+        }
+    );
+    let title = call(
+        &mut server,
+        "browser_exec",
+        json!({"expression": "document.title"}),
+    );
+    assert_eq!(title["result"], "t", "nothing submitted: {title}");
+    println!("pipe live: off-list form target and empty content box refused");
     drop(server);
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&profile);

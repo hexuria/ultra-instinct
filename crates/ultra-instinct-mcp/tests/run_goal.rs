@@ -231,3 +231,31 @@ fn block_kind_codes_are_the_tool_error_codes() {
         ultra_instinct_mcp::ToolError::DomainNotAllowed { host: "x".into() }.code()
     );
 }
+
+/// A run whose Enter would submit a form to evil.test ends `Blocked` with
+/// `DomainNotAllowed { host: "evil.test" }` (the form's target, not the
+/// allowed page), nothing typed or pressed.
+#[test]
+fn a_run_that_would_submit_off_the_allow_list_is_blocked_naming_that_host() {
+    use ultra_instinct_core::ElementState;
+    let mut m = parse_fixture(
+        r#"
+        viewport w=800 h=600
+        region id=go role=button label="Join" x=10 y=10 w=80 h=24 actions=click sources=dom,accessibility
+        "#,
+    )
+    .unwrap();
+    let join = m.get_str("go").unwrap().clone().with_state(ElementState {
+        submit_action: Some("https://evil.test/collect".into()),
+        ..ElementState::default()
+    });
+    m.replace(join);
+    let policy = Policy::from_lists("mock.invalid", "").unwrap();
+    let (report, browser) = run_goal_on(MockBrowser::new(m), "click Join", policy, limits(3));
+    assert!(
+        matches!(&report.outcome, RunOutcome::Blocked { label, kind: Some(BlockKind::DomainNotAllowed { host: Some(host) }), .. }
+            if label == "Join" && host == "evil.test"),
+        "{report:?}"
+    );
+    assert!(browser.input_log().is_empty());
+}

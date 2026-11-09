@@ -71,7 +71,9 @@ pub enum Downloads {
     Anywhere,
     /// `browser_download` refuses with `downloads_off`.
     Off,
-    /// Only files directly in this folder; Chrome also writes there.
+    /// Only files directly in this (existing) folder once the folder and the
+    /// destination are canonicalized (`..` and symlinks resolved); Chrome
+    /// also writes there.
     Dir(PathBuf),
 }
 

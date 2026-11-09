@@ -234,7 +234,7 @@ fn a_ticketed_enter_that_presses_a_confirm_label_needs_confirm() {
     page.dom[0] = page.dom[0]
         .clone()
         .with_compact_state(json!({"it": "text", "fm": 0}));
-    page.forms = vec![json!("Pay $18")];
+    page.forms = vec![json!(["Pay $18", "http://127.0.0.1/pay"])];
     page.dom[1] = page.dom[1].clone().with_attr("class", "ui-slider-handle");
     for (index, node) in [(1, 10), (2, 11)] {
         let script = ScriptBuilder::new()
@@ -362,7 +362,7 @@ fn a_refusal_names_the_label_on_the_executors_fresh_look() {
         page.dom[0] = page.dom[0]
             .clone()
             .with_compact_state(json!({"it": "text", "fm": 0}));
-        page.forms = vec![json!(label)];
+        page.forms = vec![json!([label, "http://127.0.0.1/pay"])];
         page
     };
     let script = ScriptBuilder::new()
@@ -424,4 +424,70 @@ fn only_an_enter_or_a_leading_space_after_a_tab_refuses() {
         )
         .expect("insert sends no keys");
     assert_eq!(inputs(&log), 1);
+}
+
+/// Every activating key in the text is checked against the focus it hits:
+/// in `" \n"` the Space presses the focused "Accept terms" box (its own
+/// label), even though the Enter would only submit a "Continue" form.
+#[test]
+fn every_activating_key_before_a_tab_is_checked() {
+    let terms = Control {
+        tag: "INPUT",
+        role: "checkbox",
+        ..Control::button(10, 100, "Accept terms", (20.0, 20.0, 20.0, 20.0))
+    }
+    .focused();
+    let mut page = PageSpec::of(&[terms], "http://127.0.0.1/pay", "Pay");
+    page.dom[0] = page.dom[0]
+        .clone()
+        .with_attr("type", "checkbox")
+        .with_compact_state(json!({"it": "checkbox", "c": false, "fm": 0}));
+    page.forms = vec![json!(["Continue", "http://127.0.0.1/pay"])];
+    let (mut server, log) = host(
+        ScriptBuilder::new().observe_compact(&page),
+        policy("", "accept*"),
+    );
+    let err = server
+        .call_tool("browser_keyboard", &json!({"cdp": CDP, "text": " \n"}))
+        .expect_err("the Space presses the box");
+    assert_eq!(
+        err,
+        ToolError::NeedsConfirm {
+            label: "Accept terms".into()
+        }
+    );
+    assert_eq!(inputs(&log), 0);
+}
+
+/// A form whose action posts off the allow-list: Enter in its field would
+/// send what was typed to evil.test, so it refuses `domain_not_allowed`
+/// naming that host, with zero `Input.*` calls, though the page is allowed.
+#[test]
+fn enter_in_a_form_that_posts_off_the_allow_list_is_refused() {
+    let field = Control::text_field(10, 100, "Email", (20.0, 20.0, 300.0, 28.0));
+    let mut page = PageSpec::of(&[field], "http://127.0.0.1/join", "Join");
+    page.dom[0] = page.dom[0]
+        .clone()
+        .with_compact_state(json!({"it": "email", "fm": 0}));
+    page.forms = vec![json!(["Join", "https://evil.test/collect"])];
+    let script = ScriptBuilder::new()
+        .observe_compact(&page)
+        .observe_compact(&page);
+    let (mut server, log) = host(script, policy("127.0.0.1", ""));
+    let state = server
+        .call_tool("browser_get_state", &json!({"cdp": CDP}))
+        .unwrap();
+    let err = server
+        .call_tool(
+            "browser_send_key",
+            &json!({"cdp": CDP, "index": 1, "key": "Enter", "snapshot": state["snapshot"]}),
+        )
+        .expect_err("off-list form action");
+    assert_eq!(
+        err,
+        ToolError::DomainNotAllowed {
+            host: "evil.test".into()
+        }
+    );
+    assert_eq!(inputs(&log), 0);
 }

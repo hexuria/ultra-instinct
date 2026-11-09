@@ -182,8 +182,8 @@ impl Server {
 
     /// Where `browser_download` may write: [`Downloads::Anywhere`] (default,
     /// any absolute path), [`Downloads::Off`] (refuses `downloads_off`), or
-    /// [`Downloads::Dir`] (only files directly in that folder, else
-    /// `path_not_allowed`).
+    /// [`Downloads::Dir`] (only files directly in that existing folder once
+    /// `..` and symlinks are resolved, else `path_not_allowed`).
     pub fn with_downloads(mut self, downloads: Downloads) -> Self {
         self.downloads = downloads;
         self

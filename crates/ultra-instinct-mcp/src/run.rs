@@ -226,12 +226,9 @@ pub(crate) fn run_goal_typing<B: BrowserRuntime>(
             let refusal = agent.policy_refusal();
             let kind = refusal.and_then(|(guard, _)| match guard {
                 GuardReason::NeedsConfirm => Some(BlockKind::NeedsConfirm),
+                // The page's host, or where a form submit would have gone.
                 GuardReason::DomainNotAllowed => Some(BlockKind::DomainNotAllowed {
-                    host: agent
-                        .browser()
-                        .page()
-                        .and_then(PageState::url)
-                        .and_then(ultra_instinct_guard::host_of),
+                    host: agent.policy_refusal_host(),
                 }),
                 _ => None,
             });

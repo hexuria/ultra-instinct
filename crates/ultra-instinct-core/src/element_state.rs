@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 /// Observed control state. Evidence only: it is NOT part of the region
 /// fingerprint, so a value change never makes a ticket stale.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -21,11 +23,19 @@ pub struct ElementState {
     /// A form control's form, as Enter would submit it: evidence only, read
     /// for INPUT / TEXTAREA / SELECT / BUTTON. `None`: not read.
     pub form: Option<FormSubmit>,
+    /// A submit button (`button` / `input type=submit|image` in a form):
+    /// where pressing it sends the form (its `formaction`, else the form's
+    /// `action`, resolved; an empty `action` is the page itself). `Some("")`:
+    /// a submit button whose target could not be read. `None`: no submit
+    /// button, or not read.
+    pub submit_action: Option<Arc<str>>,
 }
 
 /// The form a control belongs to, and the button implicit submission
 /// (Enter in a field) would press: the form's first submit button
-/// (`button` / `input type=submit|image`) in tree order.
+/// (`button` / `input type=submit|image`) in tree order. `action` is where
+/// that submission sends the form (as [`ElementState::submit_action`];
+/// `None`: not read). One form's strings are shared by all its controls.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FormSubmit {
     /// Enter here submits no form: the control is in none, or it is a
@@ -36,13 +46,24 @@ pub enum FormSubmit {
     NoSubmitButton,
     /// In a form with no submit button that Enter still submits (at most
     /// one field blocks implicit submission): no button names it.
-    Implicit,
-    /// That button's label (aria-label, else text, else value / alt / title).
-    Button(String),
+    Implicit { action: Option<Arc<str>> },
+    /// That button's accessible name (aria-labelledby, aria-label, then
+    /// text / value / alt / title).
+    Button {
+        label: Arc<str>,
+        action: Option<Arc<str>>,
+    },
 }
 
 impl ElementState {
     pub fn is_empty(&self) -> bool {
+        self.is_empty_but_form() && self.form.is_none() && self.submit_action.is_none()
+    }
+
+    /// Empty apart from the form evidence (`form`, `submit_action`): what a
+    /// remote request or a diary line decides on, so a control observe
+    /// found in no form still sends no `state`.
+    pub fn is_empty_but_form(&self) -> bool {
         self.value.is_none()
             && self.checked.is_none()
             && self.expanded.is_none()
@@ -50,6 +71,5 @@ impl ElementState {
             && self.options.is_empty()
             && self.input_type.is_none()
             && self.href.is_none()
-            && self.form.is_none()
     }
 }
