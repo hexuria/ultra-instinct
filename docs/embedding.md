@@ -1,10 +1,13 @@
 # Embedding ultra-instinct over a CDP pipe
 
 For a host that launches Chromium itself with `--remote-debugging-pipe` and
-no DevTools port, and drives it from its own process (ADR 0013). There is no
-stdio and no HTTP: the host hands the pipe ends to a `PipeBrowser`, wraps it
-in an `ultra_instinct_mcp::Server`, and calls `Server::call_tool` with the
-same `browser_*` tools the MCP server serves.
+no DevTools port, and drives it from its own process. There is no stdio and
+no HTTP: the host hands the pipe ends to a `PipeBrowser`, wraps it in an
+`ultra_instinct_mcp::Server`, and calls `Server::call_tool` with the same
+`browser_*` tools the MCP server serves ([`tools.md`](tools.md) lists them).
+
+This page tracks `main` (crates 0.1.0). The API is unstable until 1.0; error
+codes are only ever appended.
 
 ## Crates and features
 
@@ -28,10 +31,11 @@ use ultra_instinct_mcp::{Downloads, Policy, RunLimits, Server, ToolLimits, Uploa
 
 // `reader` is the end Chrome writes (its fd 4), `writer` the end it reads
 // (its fd 3): File, OwnedFd, PipeReader / PipeWriter, ChildStdout / ChildStdin.
+// The default frame cap is 64 MiB; keep it at 32 MiB or more (see Pipe mode).
 let browser = PipeBrowser::with_limits(
     reader,
     writer,
-    PipeLimits { max_frame_bytes: 32 << 20, ..PipeLimits::default() },
+    PipeLimits { call_deadline: Duration::from_secs(30), ..PipeLimits::default() },
 );
 let mut server = Server::with_pipe(browser)
     .require_snapshot(true)
@@ -91,7 +95,7 @@ exceeded`, a browser error) have `code: None`.
 One OS thread owns the `PipeBrowser`, every `PipePage`, and the `Server`.
 They share the connection through `Rc<RefCell<..>>`, so they are `!Send`:
 build them on the thread that uses them. There is no reader thread; a call
-pumps the pipe until its own answer arrives (AGENTS.md rule 10). Parallel
+pumps the pipe until its own answer arrives. Parallel
 screens mean separate threads, each with its own Chromium, pipe and server.
 
 Chromium exits about 1 s after the host's end of the pipe closes (dropping
@@ -107,8 +111,9 @@ browser should live.
 - Tab tools are `Target.getTargets` / `createTarget` / `activateTarget` /
   `closeTarget`. `Target.setDiscoverTargets` is turned on, so a tab that
   goes away answers `target_gone` instead of a timeout.
-- Set `PipeLimits::max_frame_bytes` to at least 32 MiB: a base64 full-page
-  screenshot gets big. A frame over the cap costs that call only: it
+- Keep `PipeLimits::max_frame_bytes` at 32 MiB or more (the default is
+  64 MiB): a base64 full-page screenshot gets big. `call_deadline` (default
+  30 s) bounds one call. A frame over the cap costs that call only: it
   answers `frame_too_large` and the pipe stays usable for the next call and
   every other tab (an oversize event, or a reply to a call that already
   gave up, is dropped and counted in `PipeBrowser::dropped_frames`).
@@ -140,8 +145,9 @@ A tool that runs another inside it needs that one on the list too
 (`RUNS_INSIDE`): `browser_download`'s press is a click, so it needs
 `browser_click`; `browser_search` is a navigation, so it needs
 `browser_navigate`. Without it the call refuses ``tool_not_allowed`` naming
-the inner tool (`tool: "browser_click"`) before any CDP call. The host sees
-the list through `BrowserHost::allows` (default: everything allowed).
+the inner tool (`tool: "browser_click"`) before any CDP call.
+`Server::allows(name)` answers whether a tool may run (no list set:
+everything is allowed), and `tools/list` shows only the allowed tools.
 
 `Server::run_goal` is not a tool, but an allow-list gates it by the name
 `run_goal`: with a list set and `run_goal` not on it, the run ends
@@ -297,8 +303,8 @@ codes are only ever appended.
 | `ticket_invalid` | `message` | the hard gate refused (disabled, hidden, occluded, …) or the ticket was spent |
 | `browser` | `message` | any other browser / CDP failure |
 | `unknown_snapshot`, `snapshot_evicted`, `bad_snapshot` | `id` / `oldest` / `value` | the `snapshot` argument names nothing usable (the ring keeps 16) |
-| `unknown_tool`, `missing_tool_name`, `goal_not_accepted`, `coordinates_not_accepted` | | the call itself is not accepted |
-| `io`, `fixture` | `path`, `message` | a local file failed |
+| `unknown_tool`, `missing_tool_name`, `goal_not_accepted`, `coordinates_not_accepted` | `name` (`unknown_tool`) | the call itself is not accepted |
+| `io`, `fixture` | `path` (`io`), `message` | a local file failed |
 
 The rest (`missing_fixture`, `missing_before`, `missing_after`,
 `duplicate_source`, `empty_text`, `unknown_region`, `unknown_role`,
@@ -310,7 +316,8 @@ The rest (`missing_fixture`, `missing_before`, `missing_after`,
 `act_needs_cdp`, `unknown_executor`, `not_implemented`,
 `browser_use_is_replay`, `browser_use_rejected`, `browser_use_script`,
 `cua_is_replay`, `cua_rejected`, `cua_script`, `verify_no_effect`) belong to
-observe / guard / verify and the legacy executors.
+observe / guard / verify, or to executors that are gone and kept their codes.
+The table and this list together are the 62 codes.
 
 ## Policy at runtime
 
