@@ -25,6 +25,7 @@
 //! went away since is reported, not silently swapped for its neighbour.
 
 use std::borrow::Cow;
+use std::rc::Rc;
 
 use serde_json::{json, Map, Value};
 
@@ -843,15 +844,16 @@ fn resolve(
     session: &mut LiveSession,
     snapshot: Option<u64>,
     index: usize,
-) -> Result<(InteractionManifold, RegionId), ToolError> {
+) -> Result<(Rc<InteractionManifold>, RegionId), ToolError> {
     let prior = session.fresh_manifold().map(interactive_index);
-    let manifold = session.observe().map_err(browser_err)?.clone();
+    let manifold = session.observe().map_err(browser_err)?;
     if snapshot.is_some() {
-        return bound::resolve(server, key, snapshot, &manifold, index)
-            .map(|(seen, id)| (seen.into_owned(), id));
+        return bound::resolve(server, key, snapshot, manifold, index)
+            .map(|(seen, id)| (seen.into_rc(), id));
     }
-    let order = prior.unwrap_or_else(|| interactive_index(&manifold));
-    Ok((manifold, at_index(&order, index)?))
+    let order = prior.unwrap_or_else(|| interactive_index(manifold));
+    let id = at_index(&order, index)?;
+    Ok((Rc::new(manifold.clone()), id))
 }
 
 /// The session's observation (taken by [`resolve`]).

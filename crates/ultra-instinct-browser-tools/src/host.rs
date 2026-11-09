@@ -11,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -165,16 +166,20 @@ pub trait BrowserHost {
     /// Mark a diagnostic domain bit as enabled for `key`.
     fn enable_domain(&mut self, key: &str, bit: u8);
 
-    /// Record an observation in the host's snapshot ring.
+    /// Record an observation in the host's snapshot ring. `shown`: how many
+    /// of its interactive elements the caller was shown (`browser_get_state`
+    /// lists at most `max_elements`); an index past it names nothing.
     fn record(
         &mut self,
         origin: &str,
-        manifold: InteractionManifold,
+        manifold: Rc<InteractionManifold>,
         page: PageState,
+        shown: usize,
     ) -> SnapshotId;
 
-    /// The origin and manifold of a snapshot the host recorded.
-    fn snapshot(&self, id: u64) -> Result<(&str, &InteractionManifold), ToolError> {
+    /// The origin, manifold and shown-element count of a snapshot the host
+    /// recorded.
+    fn snapshot(&self, id: u64) -> Result<(&str, &Rc<InteractionManifold>, usize), ToolError> {
         Err(ToolError::UnknownSnapshot(id))
     }
 

@@ -554,7 +554,7 @@ fn get_state(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, T
             .manifold()
             .cloned()
             .ok_or_else(|| browser_err(BrowserError::NotObserved))?;
-        Ok::<_, ToolError>((page, manifold))
+        Ok::<_, ToolError>((page, std::rc::Rc::new(manifold)))
     })();
     keep(server, &key, session);
     let (page, manifold) = observed?;
@@ -567,9 +567,10 @@ fn get_state(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, T
     let snapshot = server
         .record(
             &bound::origin(&key),
-            manifold.clone(),
+            std::rc::Rc::clone(&manifold),
             page.clone()
                 .unwrap_or_else(ultra_instinct_browser::PageState::blank),
+            order.len(),
         )
         .get();
     if text {

@@ -51,8 +51,11 @@ pub const ENV_CONFIRM_PRESS: &str = "ULTRA_INSTINCT_CONFIRM_PRESS";
 
 pub(crate) struct Snapshot {
     pub(crate) origin: String,
-    pub(crate) manifold: InteractionManifold,
+    /// Shared with the index presses that resolve in it (no copy per press).
+    pub(crate) manifold: Rc<InteractionManifold>,
     pub(crate) page: PageState,
+    /// Interactive elements `browser_get_state` showed (`max_elements`).
+    pub(crate) shown: usize,
 }
 
 /// Opens the CDP transport for one endpoint.
@@ -414,13 +417,15 @@ impl BrowserHost for Host<'_> {
     fn record(
         &mut self,
         origin: &str,
-        manifold: InteractionManifold,
+        manifold: Rc<InteractionManifold>,
         page: PageState,
+        shown: usize,
     ) -> SnapshotId {
         self.0.history.push(Snapshot {
             origin: origin.to_owned(),
             manifold,
             page,
+            shown,
         })
     }
 
@@ -527,10 +532,14 @@ impl BrowserHost for Host<'_> {
         *self.0.domains.entry(key.to_owned()).or_default() |= bit;
     }
 
-    fn snapshot(&self, id: u64) -> Result<(&str, &InteractionManifold), ToolError> {
-        self.0
-            .snapshot(id)
-            .map(|snapshot| (snapshot.origin.as_str(), &snapshot.manifold))
+    fn snapshot(&self, id: u64) -> Result<(&str, &Rc<InteractionManifold>, usize), ToolError> {
+        self.0.snapshot(id).map(|snapshot| {
+            (
+                snapshot.origin.as_str(),
+                &snapshot.manifold,
+                snapshot.shown,
+            )
+        })
     }
 
     fn require_snapshot(&self) -> bool {

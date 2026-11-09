@@ -284,3 +284,44 @@ fn require_snapshot_refuses_a_bare_index_before_any_cdp_call() {
     );
     assert_eq!(out["region"], "n101", "{out}");
 }
+
+/// get_state shows the first `max_elements` controls only: an index past
+/// them, read in that snapshot, names nothing the caller was shown and
+/// refuses `unknown_ref` with nothing pressed.
+#[test]
+fn a_snapshot_press_past_the_shown_elements_is_unknown() {
+    let controls: Vec<Control> = (0..1200)
+        .map(|i| {
+            let id = 10 + i64::from(i);
+            let y = 20.0 + f64::from(i % 20) * 30.0;
+            let x = 20.0 + f64::from(i / 20) * 10.0;
+            Control::button(id, 1000 + id, &format!("Item {i}"), (x, y, 8.0, 20.0))
+        })
+        .collect();
+    let many = PageSpec::of(&controls, "http://127.0.0.1/list", "List");
+    let (mut server, log) = replay(
+        ScriptBuilder::new()
+            .observe_compact(&many)
+            .observe_compact(&many),
+    );
+    let state = call(
+        &mut server,
+        "browser_get_state",
+        json!({"cdp": CDP, "format": "json"}),
+    );
+    assert_eq!(state["interactive_elements"], 1000, "{}", state["dropped_elements"]);
+    assert_eq!(state["dropped_elements"], 200);
+    let err = server
+        .call_tool(
+            "browser_click",
+            &json!({"cdp": CDP, "index": 1150, "snapshot": snapshot_of(&state)}),
+        )
+        .unwrap_err();
+    assert_eq!(err.code(), "unknown_ref", "{err:?}");
+    assert_eq!(
+        err.to_value()["indexed"],
+        1000,
+        "the caller was shown 1000: {err:?}"
+    );
+    assert!(presses(&log).is_empty(), "{:?}", presses(&log));
+}

@@ -6,6 +6,7 @@
 
 use std::fs;
 use std::path::Path;
+use std::rc::Rc;
 
 use serde_json::{json, Value};
 use ultra_instinct_browser::{
@@ -546,7 +547,7 @@ fn origin_key(origin: &Origin) -> String {
 fn observe_origin(
     server: &mut Server,
     origin: &Origin,
-) -> Result<(SnapshotId, InteractionManifold, PageState), ToolError> {
+) -> Result<(SnapshotId, Rc<InteractionManifold>, PageState), ToolError> {
     let (manifold, page) = match origin {
         Origin::Fixture(path) => load_observation(path)?,
         Origin::Cdp(url) => {
@@ -568,7 +569,14 @@ fn observe_origin(
             (manifold, page)
         }
     };
-    let id = Host(server).record(&origin_key(origin), manifold.clone(), page.clone());
+    let manifold = Rc::new(manifold);
+    // observe / guard / verify snapshots are not index-bound (`shown` is moot).
+    let id = Host(server).record(
+        &origin_key(origin),
+        Rc::clone(&manifold),
+        page.clone(),
+        usize::MAX,
+    );
     Ok((id, manifold, page))
 }
 

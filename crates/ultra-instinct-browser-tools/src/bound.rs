@@ -14,7 +14,8 @@
 //! Without `snapshot` an index resolves on a fresh observation, as before,
 //! unless the host requires snapshots ([`BrowserHost::require_snapshot`]).
 
-use std::borrow::Cow;
+use std::ops::Deref;
+use std::rc::Rc;
 
 use serde_json::Value;
 use ultra_instinct_core::{Action, InteractionManifold, RegionId};
@@ -100,30 +101,60 @@ pub(crate) fn at_index(order: &[RegionId], index: usize) -> Result<RegionId, Too
         })
 }
 
+/// The manifold an index press mints its ticket on: the fresh observation,
+/// borrowed, or a recorded snapshot, shared (the host keeps it in its ring
+/// while the press mutates the host: ledger, secrets).
+pub(crate) enum Seen<'a> {
+    Fresh(&'a InteractionManifold),
+    Snapshot(Rc<InteractionManifold>),
+}
+
+impl Seen<'_> {
+    /// The snapshot's shared manifold, or a copy of the fresh one.
+    pub(crate) fn into_rc(self) -> Rc<InteractionManifold> {
+        match self {
+            Self::Fresh(manifold) => Rc::new(manifold.clone()),
+            Self::Snapshot(manifold) => manifold,
+        }
+    }
+}
+
+impl Deref for Seen<'_> {
+    type Target = InteractionManifold;
+
+    fn deref(&self) -> &InteractionManifold {
+        match self {
+            Self::Fresh(manifold) => manifold,
+            Self::Snapshot(manifold) => manifold,
+        }
+    }
+}
+
 /// The manifold an index press mints its ticket on, and the region `index`
 /// names there: the snapshot's (which must be this tab's) when one is given,
-/// else `fresh`, borrowed. The snapshot's is a copy: it lives in the host,
-/// which the press mutates (ledger, secrets) while the ticket's manifold is
-/// still in use.
+/// else `fresh`. In a snapshot only the elements the caller was shown are
+/// indexed: one past them refuses [`ToolError::UnknownRef`].
 pub(crate) fn resolve<'a>(
     server: &dyn BrowserHost,
     key: &str,
     snapshot: Option<u64>,
     fresh: &'a InteractionManifold,
     index: usize,
-) -> Result<(Cow<'a, InteractionManifold>, RegionId), ToolError> {
+) -> Result<(Seen<'a>, RegionId), ToolError> {
     let Some(id) = snapshot else {
         let region = at_index(&interactive_index(fresh), index)?;
-        return Ok((Cow::Borrowed(fresh), region));
+        return Ok((Seen::Fresh(fresh), region));
     };
-    let (from, seen) = server.snapshot(id)?;
+    let (from, seen, shown) = server.snapshot(id)?;
     if from != origin(key) {
         return Err(ToolError::StaleRef {
             reason: "other-tab".into(),
         });
     }
-    let region = at_index(&interactive_index(seen), index)?;
-    Ok((Cow::Owned(seen.clone()), region))
+    let mut order = interactive_index(seen);
+    order.truncate(shown);
+    let region = at_index(&order, index)?;
+    Ok((Seen::Snapshot(Rc::clone(seen)), region))
 }
 
 /// A ticket error as the tool error: drift is a stale ref, the rest
