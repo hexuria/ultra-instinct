@@ -448,6 +448,52 @@ fn download_presses_through_the_ticket_and_waits_for_completed() {
     let _ = std::fs::remove_dir_all(out_dir);
 }
 
+/// The download's press is a click: with an allow-list, `browser_download`
+/// also needs `browser_click`, else `tool_not_allowed` (naming the click)
+/// before any CDP call. With the click allowed too, it downloads.
+#[test]
+fn download_needs_the_click_on_the_allow_list() {
+    let out_dir = scratch("download-allow");
+    let dest = out_dir.join("report.pdf");
+    let (server, calls) = server_with(ScriptBuilder::new(), Box::new(|_, _| Vec::new()));
+    let mut server = server.with_tool_allowlist(["browser_get_state", "browser_download"]);
+    let err = server
+        .call_tool(
+            "browser_download",
+            &json!({"cdp": CDP, "index": 2, "path": dest.to_str().unwrap()}),
+        )
+        .unwrap_err();
+    assert_eq!(
+        err,
+        ToolError::ToolNotAllowed {
+            tool: "browser_click".into()
+        }
+    );
+    assert!(calls.borrow().is_empty(), "{:?}", methods(&calls));
+
+    let dir_seen = Rc::new(RefCell::new(None));
+    let (server, calls) = server_with(
+        ScriptBuilder::new()
+            .call("Browser.setDownloadBehavior", json!({}))
+            .observe_compact(&page())
+            .observe_compact(&page())
+            .dom_click(11)
+            .call("Browser.getVersion", json!({}))
+            .call("Browser.setDownloadBehavior", json!({})),
+        download_hook(1, Rc::clone(&dir_seen)),
+    );
+    let mut server =
+        server.with_tool_allowlist(["browser_get_state", "browser_download", "browser_click"]);
+    let out = call(
+        &mut server,
+        "browser_download",
+        json!({"cdp": CDP, "index": 2, "path": dest.to_str().unwrap()}),
+    );
+    assert_eq!(out["bytes"], 5, "{out}");
+    assert_eq!(presses(&calls), 1);
+    let _ = std::fs::remove_dir_all(out_dir);
+}
+
 #[test]
 fn download_times_out_cleanly_and_restores_behavior() {
     let out_dir = scratch("download-timeout");

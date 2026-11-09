@@ -26,7 +26,7 @@ pub use browser_extra::EXTRA_TOOLS;
 pub use browser_state::STATE_TOOLS;
 pub use browser_tools::BROWSER_TOOLS;
 pub use error::ToolError;
-pub use host::{BrowserHost, Downloads, LiveSession, ToolLimits, ToolState};
+pub use host::{BrowserHost, Downloads, LiveSession, ToolLimits, ToolState, RUNS_INSIDE};
 pub use secrets::{sensitive, MASK, MAX_SENSITIVE_SECRETS};
 pub use ultra_instinct_cdp::{CdpConnector, HttpBackend, PageTab, TargetBackend};
 
@@ -37,20 +37,27 @@ use serde_json::{Map, Value};
 ///
 /// The result is not masked yet: the host runs every tool's result through
 /// [`ToolState::scrub_result`] at its one exit (the MCP `Server` does).
+///
+/// A tool in [`RUNS_INSIDE`] whose inner tool the host does not allow
+/// ([`BrowserHost::allows`]) refuses `tool_not_allowed` before any CDP call.
 pub fn call(
     host: &mut dyn BrowserHost,
     name: &str,
     arguments: &Value,
 ) -> Option<Result<Value, ToolError>> {
+    if !name.starts_with("browser_") {
+        return None;
+    }
+    if let Err(err) = host::inner_allowed(host, name) {
+        return Some(Err(err));
+    }
     let result = if ENV_TOOLS.contains(&name) {
         browser_env::call(host, name, arguments)
             .map_err(|err| browser_extra::dialog_error(host, arguments, err))
     } else if let Some(result) = browser_state::call(host, name, arguments) {
         result.map_err(|err| browser_extra::dialog_error(host, arguments, err))
-    } else if name.starts_with("browser_") {
-        browser_extra::call(host, name, arguments)
     } else {
-        return None;
+        browser_extra::call(host, name, arguments)
     };
     Some(result)
 }

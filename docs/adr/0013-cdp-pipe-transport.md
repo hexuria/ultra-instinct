@@ -189,6 +189,11 @@ surface.
   `tool_not_allowed: …` before any CDP call. One name, not the set of press
   tools the loop could use: the loop presses through its own executor and
   may click, type, select, hover, drag, scroll or press keys on any page.
+  A tool that runs another tool inside it needs that one listed too
+  (`RUNS_INSIDE`, checked through `BrowserHost::allows` before any CDP
+  call): `browser_download` needs `browser_click` (its press is a click),
+  `browser_search` needs `browser_navigate`; else `tool_not_allowed`
+  naming the inner tool.
 - **Runtime policy and the loop.** `Server::set_policy` between calls; a
   `confirm` lifts its own call only. `ultra_instinct_mcp::run_goal` runs the
   agent loop (InstinctPolicy, deterministic text, no model) under a guard

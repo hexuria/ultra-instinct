@@ -192,6 +192,14 @@ pub trait BrowserHost {
     /// The policy navigation and presses run under.
     fn policy(&self) -> Result<&Policy, ToolError>;
 
+    /// Whether the host's tool allow-list lets `tool` run. A tool that runs
+    /// another inside it (`browser_download`'s press is `browser_click`,
+    /// `browser_search` is `browser_navigate`) needs that one allowed too,
+    /// checked before any CDP call ([`RUNS_INSIDE`]). Default: all.
+    fn allows(&self, _tool: &str) -> bool {
+        true
+    }
+
     /// Where tabs come from (list / create / activate / close).
     fn backend(&mut self) -> &mut dyn TargetBackend;
 
@@ -255,6 +263,25 @@ pub(crate) fn best_effort<R>(
     let out = f(server);
     server.restore_cdp_failure(noted);
     out
+}
+
+/// Tools that run another tool inside them, and that tool: the press of
+/// `browser_download` is `browser_click`, `browser_search` is a
+/// `browser_navigate`. Each needs the inner one allowed too.
+pub const RUNS_INSIDE: [(&str, &str); 2] = [
+    ("browser_download", "browser_click"),
+    ("browser_search", "browser_navigate"),
+];
+
+/// The tool `name` runs inside it is allowed here (when it runs one), else
+/// `tool_not_allowed` naming that tool.
+pub(crate) fn inner_allowed(server: &dyn BrowserHost, name: &str) -> Result<(), ToolError> {
+    match RUNS_INSIDE.iter().find(|(outer, _)| *outer == name) {
+        Some((_, inner)) if !server.allows(inner) => Err(ToolError::ToolNotAllowed {
+            tool: (*inner).to_owned(),
+        }),
+        _ => Ok(()),
+    }
 }
 
 /// The `cdp` endpoint a call names, or the default one.

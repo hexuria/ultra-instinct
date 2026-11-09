@@ -122,6 +122,13 @@ snapshot, so it never answers `changed: false` from a stale state. With
 
 Allow the reading and pressing tools a task needs (the example above).
 
+A tool that runs another inside it needs that one on the list too
+(`RUNS_INSIDE`): `browser_download`'s press is a click, so it needs
+`browser_click`; `browser_search` is a navigation, so it needs
+`browser_navigate`. Without it the call refuses ``tool_not_allowed`` naming
+the inner tool (`tool: "browser_click"`) before any CDP call. The host sees
+the list through `BrowserHost::allows` (default: everything allowed).
+
 `Server::run_goal` is not a tool, but an allow-list gates it by the name
 `run_goal`: with a list set and `run_goal` not on it, the run ends
 `RunOutcome::Failed` with ``tool_not_allowed: tool `run_goal` is not allowed

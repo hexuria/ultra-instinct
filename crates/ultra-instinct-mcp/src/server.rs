@@ -189,6 +189,11 @@ impl Server {
 
     /// Only `names` run (any other gives `tool_not_allowed` before any CDP
     /// call) and `tools/list` lists only them. Default: every tool.
+    ///
+    /// A tool that runs another inside it needs that one on the list too,
+    /// else `tool_not_allowed` naming it, before any CDP call:
+    /// `browser_download` presses through `browser_click`, `browser_search`
+    /// navigates through `browser_navigate`.
     pub fn with_tool_allowlist<I, S>(mut self, names: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -568,6 +573,10 @@ impl BrowserHost for Host<'_> {
             .policy
             .as_ref()
             .map_err(|err| ToolError::InvalidArguments(err.clone()))
+    }
+
+    fn allows(&self, tool: &str) -> bool {
+        self.0.allows(tool)
     }
 
     fn take_cdp_failure(&mut self) -> Option<CdpError> {

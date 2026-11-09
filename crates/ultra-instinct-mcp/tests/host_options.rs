@@ -356,6 +356,24 @@ fn the_allow_list_refuses_other_tools_and_lists_only_its_own() {
     );
 }
 
+/// `browser_search` is a navigation: with an allow-list it also needs
+/// `browser_navigate`, else `tool_not_allowed` before any CDP call.
+#[test]
+fn search_needs_navigate_on_the_allow_list() {
+    let (server, log) = replay(ScriptBuilder::new());
+    let mut server = server.with_tool_allowlist(["browser_search"]);
+    let err = server
+        .call_tool("browser_search", &json!({"cdp": CDP, "query": "rust"}))
+        .unwrap_err();
+    assert_eq!(
+        err,
+        ToolError::ToolNotAllowed {
+            tool: "browser_navigate".into()
+        }
+    );
+    assert!(log.borrow().is_empty(), "{:?}", log.borrow());
+}
+
 /// Logs each `Runtime.evaluate` expression.
 struct Expressions {
     inner: ReplayTransport,
