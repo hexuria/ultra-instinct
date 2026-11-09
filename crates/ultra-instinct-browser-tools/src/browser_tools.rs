@@ -994,6 +994,11 @@ fn send_key(
     let endpoint = endpoint_of(arguments)?;
     let key_name = req_str(arguments, "key")?.to_owned();
     let key = session_key(server, &endpoint);
+    let policy = press_policy(server, arguments)?;
+    if !policy.is_empty() {
+        let now = crate::press::focus_now(server, &key, true)?;
+        crate::press::check_focused(&policy, &now, crate::press::presses_focus(&key_name))?;
+    }
     let mut session = take(server, &key)?;
     let outcome = session
         .key_event(&key_name, hold_ms)
@@ -1524,7 +1529,7 @@ fn index_prop() -> Value {
 }
 
 /// Schema of the `confirm` argument of a press.
-fn confirm_prop() -> Value {
+pub(crate) fn confirm_prop() -> Value {
     json!({"type": "string", "description": "The label of a press the user confirmed; lifts a needs-confirm refusal (ULTRA_INSTINCT_CONFIRM_PRESS) for that label only."})
 }
 
@@ -1664,15 +1669,17 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             props.insert("key".into(), json!({"type": "string"}));
             props.insert("index".into(), index_prop());
             props.insert("verify".into(), verify_prop());
+            props.insert("confirm".into(), confirm_prop());
             required.push("key");
-            "One key event (Enter, Tab, Escape, arrows, letters...) via Input.dispatchKeyEvent. With index: a ticketed KEY on that element (it must take keys; key is one of ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Home, End, PageUp, PageDown, Enter, Escape)."
+            "One key event (Enter, Tab, Escape, arrows, letters...) via Input.dispatchKeyEvent. With index: a ticketed KEY on that element (it must take keys; key is one of ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Home, End, PageUp, PageDown, Enter, Escape). Without index the key goes to the focus: off the domain allow-list it refuses, and Enter / Space on a focused control whose label needs a confirm needs `confirm`."
         }
         "browser_hold_key" => {
             props.insert("key".into(), json!({"type": "string"}));
             props.insert("seconds".into(), json!({"type": "number"}));
             props.insert("hold_ms".into(), json!({"type": "integer"}));
+            props.insert("confirm".into(), confirm_prop());
             required.push("key");
-            "Hold a key for a duration (seconds or hold_ms, capped 10s)."
+            "Hold a key for a duration (seconds or hold_ms, capped 10s). Off the domain allow-list it refuses; Enter / Space on a focused control whose label needs a confirm needs `confirm`."
         }
         "browser_file_upload" => {
             props.insert("index".into(), index_prop());

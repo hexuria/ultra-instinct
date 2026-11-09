@@ -359,13 +359,19 @@ fn build(verb: &'static str, flags: &mut Flags) -> Result<Request, CliError> {
             [index] => tool("browser_focus", json!({"index": index})),
             _ => usage("<ref>"),
         },
-        "keyboard" => match p[..] {
-            [mode @ ("type" | "insert"), ref text @ ..] if !text.is_empty() => tool(
-                "browser_keyboard",
-                json!({"text": text.join(" "), "mode": mode}),
-            ),
-            _ => usage("type|insert <text>"),
-        },
+        "keyboard" => {
+            let confirm = flags.one("--confirm")?;
+            match p[..] {
+                [mode @ ("type" | "insert"), ref text @ ..] if !text.is_empty() => {
+                    let mut arguments = json!({"text": text.join(" "), "mode": mode});
+                    if let Some(label) = confirm {
+                        arguments["confirm"] = json!(label);
+                    }
+                    tool("browser_keyboard", arguments)
+                }
+                _ => usage("type|insert <text> [--confirm <label>]"),
+            }
+        }
         "get" => match p[..] {
             [what @ ("value" | "label" | "role" | "box"), index] => {
                 tool("browser_get", json!({"index": index, "what": what}))
@@ -1091,6 +1097,13 @@ mod tests {
         assert_eq!(
             tool("keyboard", &["type", "hello"]),
             ("browser_keyboard", json!({"text": "hello", "mode": "type"}))
+        );
+        assert_eq!(
+            tool("keyboard", &["type", "\n", "--confirm", "Pay $18"]),
+            (
+                "browser_keyboard",
+                json!({"text": "\n", "mode": "type", "confirm": "Pay $18"})
+            )
         );
         assert_eq!(
             tool("keyboard", &["insert", "日本"]),

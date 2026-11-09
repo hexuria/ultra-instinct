@@ -530,21 +530,28 @@ fn keyboard(
             "`mode` must be type|insert, got `{mode}`"
         )));
     }
+    // The policy first (host, and a confirm for an Enter / Space on the
+    // focused control), on an observation taken now when one is set. Text
+    // with a Tab before an Enter / Space presses a control not known yet.
+    let policy = press_policy(server, arguments)?;
+    let tab_then_press = text
+        .find('\t')
+        .is_some_and(|tab| text[tab..].contains(['\n', ' ']));
+    if tab_then_press && !policy.confirm_press.is_empty() {
+        return Err(ToolError::InvalidArguments(
+            "with confirm patterns set, send the Enter / Space after a Tab in its own call".into(),
+        ));
+    }
+    let now = crate::press::focus_now(server, key, !policy.is_empty())?;
+    crate::press::check_focused(&policy, &now, text.contains(['\n', ' ']))?;
     // Fail closed: unless a current observation shows a focused field that
     // is not sensitive, this text is masked in every later output. One taken
     // before a press is stale (the press may have moved the focus): observe
     // again. No observation at all, or a failed one, counts as sensitive.
-    let focused_plain = server.take_session(key).map(|mut session| {
-        if session.is_stale() {
-            crate::host::best_effort(server, |_| session.observe().is_ok());
-        }
-        let plain = session
-            .fresh_manifold()
-            .and_then(|manifold| manifold.get(session.page()?.focused()?))
-            .is_some_and(|region| !crate::secrets::sensitive(region));
-        keep(server, key, session);
-        plain
-    })?;
+    let focused_plain = now
+        .1
+        .as_ref()
+        .is_some_and(|r| !crate::secrets::sensitive(r));
     if !focused_plain {
         server.tool_state_mut().secrets.remember(text, true)?;
     }
@@ -966,8 +973,9 @@ pub(crate) fn spec(name: &str) -> (String, Map<String, Value>, Vec<&'static str>
                 "mode".into(),
                 json!({"type": "string", "enum": ["type", "insert"]}),
             );
+            props.insert("confirm".into(), crate::browser_tools::confirm_prop());
             required.push("text");
-            "Type text at the focused element, no target: mode type (default) sends key events per char, insert sends one Input.insertText. Refuses when nothing is focused."
+            "Type text at the focused element, no target: mode type (default) sends key events per char, insert sends one Input.insertText. Refuses when nothing is focused, or off the domain allow-list; an Enter / Space on a focused control whose label needs a confirm needs `confirm`."
         }
         "browser_get" => {
             props.insert("index".into(), index());
