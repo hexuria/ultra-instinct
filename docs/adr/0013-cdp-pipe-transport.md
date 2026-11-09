@@ -209,12 +209,20 @@ surface.
   form control: its form's implicit-submission button. Observe records
   that as evidence (`ElementState::form`, not in the fingerprint): inside
   the existing compact walk, no new CDP call, the first submit button in
-  tree order (`button` / `input type=submit|image`) of `el.form`, by label;
-  a text area or select submits nothing. No form or no submit button:
-  nothing to confirm. Not read (the per-node fallback, a replayed or
-  fixture page) while confirm patterns are set: `needs_confirm` with the
-  label `(form submit)` (`FORM_SUBMIT_UNKNOWN`), lifted only by confirming
-  that label. Space in a field and other keys press nothing. One rule for
+  tree order (`button` / `input type=submit|image`) of `el.form`, by its
+  accessible name in the AX order (`aria-labelledby`, `aria-label`, text /
+  value), so it reads as the click check does; a text area or select
+  submits nothing. A button-less form that Enter still submits (HTML
+  implicit submission: at most one field that blocks it) and form evidence
+  not read (the per-node fallback, a replayed or fixture page) need, while
+  confirm patterns are set, a confirm of the label `(form submit)`
+  (`FORM_SUBMIT_UNKNOWN`); a button-less form with two or more blocking
+  fields, or no form: nothing to confirm. The keyboard tools refuse an
+  activating key to a focus no observation names with `(unobserved
+  focus)` (`UNOBSERVED_FOCUS`), so splitting a Tab and an Enter across two
+  calls gets nothing past the rule; `ultra_instinct_guard::is_activating_key`
+  is the one key list both use. Text typed after a Tab in `browser_keyboard`
+  is remembered as a secret (the Tab may have moved into a password field). Space in a field and other keys press nothing. One rule for
   the agent's pre-ticket check (a refusal ends `Blocked` with the button's
   label), `execute_ticketed_with`'s fresh re-check, the host's
   `consume_ticket_once_checked` and the `browser_*` tools; no second gate,

@@ -230,7 +230,9 @@ Whether typed text is a secret is decided on the page as the input lands:
 `browser_type` checks the field on the executor's own fresh observation as
 well as the one the caller saw (a text box that became a password input in
 between is a secret), and `browser_keyboard` reads the focus again when a
-press ran since the last observation (on every call when a policy is set). When neither can tell, the text is
+press ran since the last observation (on every call when a policy is set).
+A Tab inside `browser_keyboard` text moves the focus after it was read, so
+every piece typed after the first Tab is treated as a secret. When neither can tell, the text is
 treated as a secret.
 
 `Server::run_goal` remembers every TYPE / SELECT payload before it is
@@ -325,10 +327,12 @@ the page first and, before any `Input.*` call:
   URL with no host (`about:blank`, `data:`) passes;
 - runs the key on the focused control through the guard's press rule
   (below), as a ticketed KEY on that control would be. With confirm
-  patterns set, an unreadable focus refuses an Enter / Space, and
-  `browser_keyboard` text with an Enter / Space after a Tab refuses
-  `invalid_arguments` (the Tab moves the focus to a control not observed
-  yet): send it in its own call.
+  patterns set, an Enter / Space to a focus no observation names (no
+  observation, nothing focused, or focus in a cross-origin frame) refuses
+  `needs_confirm` with the label `(unobserved focus)`, lifted only by
+  confirming exactly that label; and `browser_keyboard` text with an Enter
+  / Space after a Tab refuses `invalid_arguments` (the Tab moves the focus
+  to a control not observed yet): send it in its own call.
 
 Keys are presses for the confirm rule, on every path (the agent loop and
 `Server::run_goal`, a ticketed `browser_send_key` with an index, and the
@@ -339,12 +343,16 @@ lands on:
   control (it can be clicked or toggled and takes no text) presses it: its
   label is checked.
 - Enter in a field (or another form control) submits its form, which
-  presses the form's first submit button: that button's label is checked,
-  and `needs_confirm` names it (`label: "Pay $18"`, though the target was
-  the field). Observe records the form evidence; a field in no form, a
-  form with no submit button, a text area and a select submit nothing.
-  When observe could not read it, any confirm pattern refuses with the
-  label `(form submit)`; confirm that label to send it.
+  presses the form's first submit button: that button's accessible name
+  (`aria-labelledby`, then `aria-label`, then its text or value, as the
+  click check reads it) is checked, and `needs_confirm` names it (`label:
+  "Pay $18"`, though the target was the field). Observe records the form
+  evidence. A form with no submit button still submits on Enter when at
+  most one of its fields blocks implicit submission (text, search, url,
+  tel, email, password, number, date / time inputs): that refuses with the
+  label `(form submit)`, as does form evidence observe could not read;
+  confirm that label to send it. A field in no form, a button-less form
+  with two or more such fields, a text area and a select submit nothing.
 - Space in a field is text, and other keys (Tab, arrows, Escape) press
   nothing.
 

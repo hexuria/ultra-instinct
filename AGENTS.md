@@ -67,9 +67,11 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    a press (`Policy::press_label`): the CLICK family on the target, an
 >    activating KEY (Enter / Space / NumpadEnter, any modifiers) on a
 >    button-like target, and Enter in a form control, which presses its
->    form's implicit-submission button (observe's `ElementState::form`
->    evidence; unread → `FORM_SUBMIT_UNKNOWN` refuses while any pattern is
->    set). Space in a field and other keys press nothing. One rule for the
+>    form's implicit-submission button by its accessible name (observe's
+>    `ElementState::form` evidence; a button-less form Enter still submits,
+>    or unread evidence → `FORM_SUBMIT_UNKNOWN` refuses while any pattern is
+>    set; an activating key to an unnamed focus in the keyboard tools →
+>    `UNOBSERVED_FOCUS`). Space in a field and other keys press nothing. One rule for the
 >    agent, the executor's fresh re-check and the host tools.
 > 5. **Stale ≠ spent.** `WorldChanged` / `TargetChanged` / `TargetGone` are
 >    stale → discard the prediction, re-observe, decide again (bounded by
