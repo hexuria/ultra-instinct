@@ -142,6 +142,13 @@ not a tty prompt; and `guard` matches the exact label (see Prune 1).
 - The `ultra-instinct-browser` and `ultra-instinct-mcp` line ceilings were
   raised for the ported tools, and `ultra-instinct` for the shell verbs
   (reasons in `scripts/crate-ceilings.txt`).
+  - Split done (2026-11-09): the `browser_*` tool families (`browser_tools`,
+    `browser_extra`, `browser_env`, `browser_state`, `page_text`) and
+    `ToolError` moved to the new crate `ultra-instinct-browser-tools`, which
+    runs them on a `BrowserHost` trait that the MCP `Server` implements.
+    Tool names, `TOOLS` order, specs and outputs are unchanged, and
+    `ultra_instinct_mcp` re-exports `ToolError` and the tool lists. The
+    `ultra-instinct-mcp` ceiling is back down to 2500.
 - `Network.setBlockedURLs` takes `urls`. On Chrome 156.0.8078.81 that
   blocks (the request never reaches the server), so there is no
   `urlPatterns` fallback; a future Chrome that drops `urls` would show up in

@@ -1,6 +1,7 @@
 # Browser-use parity
 
-`ultra-instinct mcp` exposes a `browser_*` tool surface mirroring
+`ultra-instinct mcp` exposes a `browser_*` tool surface (crate
+`ultra-instinct-browser-tools`) mirroring
 [browser-use](https://docs.browser-use.com) (toolsets-for-claude and the
 browser-use MCP server), plus ports from
 [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser)
