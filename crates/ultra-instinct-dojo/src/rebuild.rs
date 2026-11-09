@@ -58,6 +58,7 @@ pub fn element_state(state: &OfferedState) -> ElementState {
         options: state.options.clone(),
         input_type: state.input_type.clone(),
         href: None,
+        form: None,
     }
 }
 

@@ -529,6 +529,7 @@ mod tests {
                 options: vec!["UTC".to_owned()],
                 input_type: None,
                 href: None,
+                form: None,
             });
         manifold.replace(name);
         ActionSpace::from_manifold(&manifold)

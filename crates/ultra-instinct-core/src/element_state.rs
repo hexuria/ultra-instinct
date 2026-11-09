@@ -18,6 +18,23 @@ pub struct ElementState {
     /// A element's resolved `href`, ≤ 500 chars. Evidence only — two links
     /// with one label and one destination are the same choice.
     pub href: Option<String>,
+    /// A form control's form, as Enter would submit it: evidence only, read
+    /// for INPUT / TEXTAREA / SELECT / BUTTON. `None`: not read.
+    pub form: Option<FormSubmit>,
+}
+
+/// The form a control belongs to, and the button implicit submission
+/// (Enter in a field) would press: the form's first submit button
+/// (`button` / `input type=submit|image`) in tree order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FormSubmit {
+    /// Enter here submits no form: the control is in none, or it is a
+    /// text area or a select.
+    NotInForm,
+    /// In a form with no submit button.
+    NoSubmitButton,
+    /// That button's label (aria-label, else text, else value / alt / title).
+    Button(String),
 }
 
 impl ElementState {
@@ -29,5 +46,6 @@ impl ElementState {
             && self.options.is_empty()
             && self.input_type.is_none()
             && self.href.is_none()
+            && self.form.is_none()
     }
 }

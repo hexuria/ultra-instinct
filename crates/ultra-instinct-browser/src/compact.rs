@@ -38,7 +38,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
-use ultra_instinct_core::{ElementState, Rect};
+use ultra_instinct_core::{ElementState, FormSubmit, Rect};
 
 use ultra_instinct_cdp::CdpError;
 pub(crate) use ultra_instinct_cdp::HU_K_ATTR;
@@ -60,6 +60,24 @@ var ATTR='data-hu-k';
 var PROPS=['z-index','position','opacity','transform','filter','isolation','mix-blend-mode','will-change','pointer-events'];
 var nodes={};
 var next=0;
+// A form's implicit-submission button (its first submit button in tree
+// order), as its label; 1: the form has none. Once per form.
+var FORMS=new Map();
+function formSubmit(f){
+  if(FORMS.has(f))return FORMS.get(f);
+  var b=null,els=f.elements||[];
+  for(var i=0;i<els.length;i++){var e=els[i];if((e.nodeName==='BUTTON'||e.nodeName==='INPUT')&&String(e.type).toLowerCase()==='submit'){b=e;break;}}
+  var img=f.querySelector('input[type=image]');
+  if(img&&(!b||(img.compareDocumentPosition(b)&4)))b=img;
+  var out=1;
+  if(b){
+    var l=(b.getAttribute('aria-label')||b.innerText||b.textContent||b.value||b.getAttribute('alt')||b.getAttribute('title')||'').replace(/\s+/g,' ').trim();
+    if(!l&&b.nodeName==='INPUT'&&String(b.type).toLowerCase()==='submit')l='Submit';
+    out=Array.from(l).slice(0,200).join('');
+  }
+  FORMS.set(f,out);
+  return out;
+}
 function px(v){var n=parseFloat(v);return isFinite(n)?n:0;}
 // Offset of a document's origin in top-viewport coordinates, via the
 // frameElement chain (same-origin only).
@@ -219,6 +237,9 @@ function visit(el,doc,off){
       var name=el.nodeName.toUpperCase();
       var inputType=(el.getAttribute('type')||'text').toLowerCase();
       if(name==='INPUT')rec.it=inputType;
+      // Enter in a text area or a select submits no form: 0, as for no form.
+      if(name==='INPUT'||name==='BUTTON')rec.fm=el.form?formSubmit(el.form):0;
+      else if(name==='TEXTAREA'||name==='SELECT')rec.fm=0;
       // A destination only for real navigations: not `javascript:`, not `#`/`` back to this page.
       if(name==='A'&&el.href&&/^https?:$/.test(el.protocol)&&!(el.hash===''&&el.href.split('#')[0]===location.href.split('#')[0])){
         rec.hr=Array.from(String(el.href)).slice(0,500).join('');
@@ -461,6 +482,12 @@ fn parse_element_state(record: &Value) -> ElementState {
             .get("hr")
             .and_then(Value::as_str)
             .map(|href| truncate_chars(href, 500)),
+        form: match record.get("fm") {
+            Some(Value::Number(n)) if n.as_u64() == Some(0) => Some(FormSubmit::NotInForm),
+            Some(Value::Number(n)) if n.as_u64() == Some(1) => Some(FormSubmit::NoSubmitButton),
+            Some(Value::String(label)) => Some(FormSubmit::Button(truncate_chars(label, 200))),
+            _ => None,
+        },
     }
 }
 
@@ -499,7 +526,8 @@ mod tests {
                 "x":false,
                 "sel":"UTC, Asia/Manila",
                 "o":["UTC", "Asia/Manila"],
-                "hr":"https://example.com/a"
+                "hr":"https://example.com/a",
+                "fm":"Pay $18"
             }))
             .unwrap(),
             ElementState {
@@ -510,8 +538,15 @@ mod tests {
                 options: vec!["UTC".to_owned(), "Asia/Manila".to_owned()],
                 input_type: None,
                 href: Some("https://example.com/a".to_owned()),
+                form: Some(FormSubmit::Button("Pay $18".to_owned())),
             }
         );
+        // 0: in no form; 1: a form with no submit button; else unread.
+        let form = |fm: Value| parse_state(json!({ "fm": fm })).unwrap().form;
+        assert_eq!(form(json!(0)), Some(FormSubmit::NotInForm));
+        assert_eq!(form(json!(1)), Some(FormSubmit::NoSubmitButton));
+        assert_eq!(form(json!(2)), None);
+        assert_eq!(form(json!(true)), None);
     }
 
     #[test]

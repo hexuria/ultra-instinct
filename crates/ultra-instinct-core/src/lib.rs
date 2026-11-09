@@ -23,7 +23,7 @@ pub use action_space::{
     cell_center_fraction, ActionId, ActionKind, ActionSpace, DragDest, ObservedAction, KEY_NAMES,
     SURFACE_GRID,
 };
-pub use element_state::ElementState;
+pub use element_state::{ElementState, FormSubmit};
 pub use error::{CoreError, FixtureError};
 pub use fixture::{parse_fixture, write_fixture};
 pub use id::{RegionId, StateFingerprint, UnitInterval};
