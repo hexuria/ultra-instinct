@@ -193,7 +193,7 @@ pub fn request_json_with_evidence(
                 action["tried"] = json!({"times": times, "last": last});
             }
             let observed = a.state();
-            // Form evidence alone is no `state` (the wire shape it had).
+            // Form evidence alone is no `state`.
             if !observed.is_empty_but_form() {
                 let mut state = Map::new();
                 if let Some(value) = &observed.value {
@@ -625,7 +625,7 @@ mod tests {
     }
 
     /// Form evidence is not control state: a control observe found in no
-    /// form sends no `state` (paid tokens, and the wire shape it always had).
+    /// form sends no `state` (it would cost tokens and say nothing).
     #[test]
     fn form_evidence_alone_sends_no_state() {
         let mut manifold = parse_fixture(

@@ -5,7 +5,7 @@
 //! hidden, occluded, …) is filtered **before** Instinct sees candidates — never as
 //! score penalties.
 //!
-//! Pin: `instinct-*` `0.1.0` from crates.io (hexuria/instinct#35).
+//! Pin: `instinct-*` `0.1.0` from crates.io.
 
 #![forbid(unsafe_code)]
 
