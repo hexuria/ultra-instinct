@@ -53,7 +53,9 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    press at the region center (`Input::Click`); the DOM `this.click()` tiers
 >    are its CDP-refusal fallback and the retry (`Input::ScriptClick`) after a
 >    pointer click shows no visible change. The MCP host's
->    `browser_click` stays DOM-side unless called with `mouse: true`. The host
+>    `browser_click` (and `browser_check` / `browser_download`) presses the
+>    same trusted pointer by default; `mouse: false` sends the DOM script
+>    click. The host
 >    helper `consume_ticket_once` uses
 >    the same consume-before-press order. `Predicted` carries no fingerprint of
 >    its own; do not add a "pre-ticket check" that is not wired into a refusal.
@@ -201,7 +203,7 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 |---|---|
 | `ultra-instinct-core` | `InteractionManifold`, regions, `ActionSpace`, fixture grammar |
 | `ultra-instinct-cdp` | CDP transport trait, websocket, replay transport, replay script builder; unix `--remote-debugging-pipe` transport (`PipeBrowser` / `PipePage`, caller-owned fds, one thread); tab backends: `TargetBackend` (list / create / activate / close pages, connect a session key), `HttpBackend` (the `/json` endpoints + a connector, the default) and unix `PipeBackend` (`Target.*` on a `PipeBrowser`, keys `pipe:<targetId>`) |
-| `ultra-instinct-chrome` | Find / start a local Chrome (`find_chrome`, `launch`, `ChromeProcess` killed on drop); std only, re-exported as `ultra_instinct_browser::launch` |
+| `ultra-instinct-chrome` | Find / start a local Chrome (`find_chrome`, `launch`, `ChromeProcess` killed on drop; headless at `DEFAULT_WINDOW` 1440×900, headed maximized, `LaunchOptions::window_size` overrides); std only, re-exported as `ultra_instinct_browser::launch` |
 | `ultra-instinct-browser` | CDP observe (DOM/AX fusion, identity, stacking), raw CDP inputs; `launch` (re-export of `ultra-instinct-chrome`); `storage_state` (save / load cookies + storage, the 0600 state file and its parser) |
 | `ultra-instinct-observe` | Observation history and id diff |
 | `ultra-instinct-geometry` | Geometry helpers; `RegionState` (availability / visibility of a region) |
@@ -237,7 +239,9 @@ deliberate eval.
   the guard's `activating_keys_are_presses_of_the_target_or_its_form`.
 - Shell verbs and the session daemon: `verbs.rs` / `batch.rs` unit tests and
   the `daemon.rs` socket tests (round trip, spawn / stale socket, idle exit,
-  `--idle`, failed launch, session list). `browser_*` families over CDP
+  `--idle`, failed launch, session list; a press after the page changed
+  since `snap` refuses unpressed, a press before any snap refuses, and the
+  `LastSnap` bind / note units). `browser_*` families over CDP
   replay: `crates/ultra-instinct-mcp/tests/browser_tools.rs`,
   `browser_extra.rs`, `browser_state.rs`, `browser_env.rs`, and the
   `ultra-instinct-browser-tools` unit tests. A call that
@@ -364,7 +368,13 @@ return its `snapshot` id. Index arguments take `5`, `"5"` or `"@e5"`; an
 index press given `snapshot` resolves the index in that snapshot and mints
 its ticket there, so an element that moved, changed, or left refuses
 `stale_ref` and nothing is pressed (`Server::require_snapshot(true)` refuses
-a bare index, `snapshot_required`). A sensitive field (password / hidden /
+a bare index, `snapshot_required`). Over MCP the text format also carries
+the id in the result's `_meta.snapshot`, and a cut text keeps its
+`· snapshot N` line. Input tools (`STATE_AFTER`) take `state: true`: the
+reply adds the page after the input (`state`, text) and its `snapshot`,
+or `state_error` (the input still ran). The `aui` daemon binds every ref
+press to its latest look (`aui snap`, or a verb's `--snap`) and requires
+one (`snapshot_required` before any). A sensitive field (password / hidden /
 file, a secret label, or an unreadable type) never shows its value, and text
 typed into one is masked in every later output, error, and HAR. Every error
 carries a stable `code`; the table is in [`docs/embedding.md`](docs/embedding.md).

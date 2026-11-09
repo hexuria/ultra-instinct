@@ -142,6 +142,16 @@ the checked state from the page now, after the element still matches the
 snapshot, so it never answers `changed: false` from a stale state. With
 `require_snapshot(true)` a bare index refuses `snapshot_required`.
 
+An input tool given `state: true` answers with the page after the input as
+well: `state` (the `browser_get_state` text) and its `snapshot`, which the
+next press can pass without a `browser_get_state` call between. When that
+read fails the reply has `state_error` and the input still ran. Over MCP a
+text `browser_get_state` also carries the id in the result's
+`_meta.snapshot`.
+
+A click is a real pointer press at the element's center by default (like
+the agent loop); `mouse: false` sends a DOM script click.
+
 ## Which tools to allow-list
 
 Allow the reading and pressing tools a task needs (the example above).
