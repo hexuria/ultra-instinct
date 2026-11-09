@@ -18,9 +18,7 @@ use ultra_instinct_agent::{
     classify_delta, classify_value, execute_ticketed_with, BrowserRuntime, ExecError, Input,
 };
 use ultra_instinct_browser::BrowserError;
-use ultra_instinct_cdp::{
-    activate_target, close_target, create_target, page_targets, DEFAULT_CDP_HTTP,
-};
+use ultra_instinct_cdp::DEFAULT_CDP_HTTP;
 use ultra_instinct_core::{
     Action, ActionSpace, InteractionManifold, InteractionRegion, RegionId, Role,
 };
@@ -32,7 +30,7 @@ use ultra_instinct_protocol::GuardReason;
 
 use crate::bound::{self, at_index, ticket_error};
 use crate::error::ToolError;
-use crate::host::{endpoint_of, keep, session_key, BrowserHost};
+use crate::host::{endpoint_of, keep, session_key, BrowserHost, PageTab};
 
 /// Longest a `browser_wait` sleeps, whatever the argument says.
 const MAX_WAIT_SECS: u64 = 60;
@@ -116,7 +114,7 @@ pub(crate) fn call(
         "browser_search" => search(server, arguments),
         "browser_zoom" => zoom(server, arguments),
         "browser_find" => find(server, arguments),
-        "browser_list_tabs" => list_tabs(arguments),
+        "browser_list_tabs" => list_tabs(server, arguments),
         "browser_switch_tab" => switch_tab(server, arguments),
         "browser_close_tab" => close_tab(server, arguments),
         "browser_exec" | "browser_javascript_exec" => exec(server, arguments),
@@ -288,11 +286,14 @@ fn new_tab(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, Too
 
 /// Create the target, point this endpoint's session at it, keep it.
 fn new_tab_at(server: &mut dyn BrowserHost, endpoint: &str, url: &str) -> Result<Value, ToolError> {
-    let target = create_target(endpoint, url, true).map_err(browser_err)?;
-    server.set_current_tab(endpoint, &target.ws_url);
-    let mut session = take(server, &target.ws_url)?;
+    let target = server
+        .backend()
+        .create_page(endpoint, url)
+        .map_err(|err| ToolError::cdp(&err))?;
+    server.set_current_tab(endpoint, &target.key);
+    let mut session = take(server, &target.key)?;
     let _ = session.ready_state();
-    keep(server, &target.ws_url, session);
+    keep(server, &target.key, session);
     Ok(json!({
         "tab_id": target.target_id,
         "url": url,
@@ -1133,10 +1134,9 @@ fn zoom(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolEr
     outcome
 }
 
-fn list_tabs(arguments: &Value) -> Result<Value, ToolError> {
+fn list_tabs(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
-    let tabs: Vec<Value> = page_targets(&endpoint)
-        .map_err(browser_err)?
+    let tabs: Vec<Value> = pages(server, &endpoint)?
         .iter()
         .map(|t| {
             json!({
@@ -1149,13 +1149,18 @@ fn list_tabs(arguments: &Value) -> Result<Value, ToolError> {
     Ok(json!({"tabs": tabs}))
 }
 
+/// The backend's page tabs for `endpoint`.
+fn pages(server: &mut dyn BrowserHost, endpoint: &str) -> Result<Vec<PageTab>, ToolError> {
+    server
+        .backend()
+        .list_pages(endpoint)
+        .map_err(|err| ToolError::cdp(&err))
+}
+
 /// Resolve `tab_id` to exactly one target: an exact id match, else a
 /// non-empty prefix that matches exactly one tab. `""` and ambiguous
 /// prefixes refuse rather than silently picking the first tab.
-fn find_tab<'a>(
-    targets: &'a [ultra_instinct_cdp::PageTarget],
-    tab_id: &str,
-) -> Result<&'a ultra_instinct_cdp::PageTarget, ToolError> {
+fn find_tab<'a>(targets: &'a [PageTab], tab_id: &str) -> Result<&'a PageTab, ToolError> {
     if let Some(t) = targets.iter().find(|t| t.target_id == tab_id) {
         return Ok(t);
     }
@@ -1175,28 +1180,34 @@ fn find_tab<'a>(
 fn switch_tab(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let tab_id = req_str(arguments, "tab_id")?;
-    let targets = page_targets(&endpoint).map_err(browser_err)?;
+    let targets = pages(server, &endpoint)?;
     let target = find_tab(&targets, tab_id)?;
-    activate_target(&endpoint, &target.target_id).map_err(browser_err)?;
-    server.set_current_tab(&endpoint, &target.ws_url);
+    server
+        .backend()
+        .activate_page(&endpoint, &target.target_id)
+        .map_err(|err| ToolError::cdp(&err))?;
+    server.set_current_tab(&endpoint, &target.key);
     Ok(json!({"active_tab": target.target_id, "url": target.url}))
 }
 
 fn close_tab(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let tab_id = req_str(arguments, "tab_id")?;
-    let targets = page_targets(&endpoint).map_err(browser_err)?;
+    let targets = pages(server, &endpoint)?;
     let target = find_tab(&targets, tab_id)?;
-    let closed = close_target(&endpoint, &target.target_id).map_err(browser_err)?;
-    // The closed tab's ws state is dead regardless of binding: drop its
-    // session, ledger, events, and domain bits.
-    server.drop_session(&target.ws_url);
+    let closed = server
+        .backend()
+        .close_page(&endpoint, &target.target_id)
+        .map_err(|err| ToolError::cdp(&err))?;
+    // The closed tab's session state is dead regardless of binding: drop
+    // its session, ledger, events, and domain bits.
+    server.drop_session(&target.key);
     // If the closed tab was bound, fall back to any remaining page target.
-    if server.current_tab(&endpoint) == Some(target.ws_url.as_str()) {
-        match page_targets(&endpoint)
-            .map_err(browser_err)?
-            .first()
-            .map(|t| t.ws_url.clone())
+    if server.current_tab(&endpoint) == Some(target.key.as_str()) {
+        match pages(server, &endpoint)?
+            .into_iter()
+            .find(|t| t.target_id != target.target_id)
+            .map(|t| t.key)
         {
             Some(next) => server.set_current_tab(&endpoint, &next),
             None => server.clear_current_tab(&endpoint),

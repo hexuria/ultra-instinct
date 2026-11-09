@@ -24,7 +24,9 @@ pub use browser_extra::EXTRA_TOOLS;
 pub use browser_state::STATE_TOOLS;
 pub use browser_tools::BROWSER_TOOLS;
 pub use error::{ToolError, ERROR_CODES};
-pub use host::{BrowserHost, LiveSession, ToolState};
+pub use host::{
+    BrowserHost, CdpConnector, HttpBackend, LiveSession, PageTab, TargetBackend, ToolState,
+};
 
 use serde_json::{Map, Value};
 

@@ -6,18 +6,26 @@
 //! no reconnect loop; the next call opens a fresh socket. Fixture origins do
 //! not keep a transport between calls. Nothing is written to disk.
 //!
-//! A [`CdpConnector`] opens the transport for a `cdp` endpoint. The default
-//! is [`WebSocketTransport::connect`]. Tests pass a connector that returns a
-//! [`ultra_instinct_browser::ReplayTransport`], so the live-session paths (reuse,
-//! stale observation, eviction, a dropped session) run without Chrome.
+//! A [`TargetBackend`] lists, opens, switches and closes tabs and opens a
+//! session's transport. The default is [`HttpBackend`]: Chrome's `/json`
+//! endpoints plus a [`CdpConnector`] ([`WebSocketTransport::connect`] unless
+//! [`Server::with_connector`] names another). Tests pass a connector that
+//! returns a [`ultra_instinct_browser::ReplayTransport`], so the live-session
+//! paths (reuse, stale observation, eviction, a dropped session) run without
+//! Chrome. [`Server::with_pipe`] drives a caller-owned `--remote-debugging-pipe`
+//! instead (`crate::PipeBackend`, ADR 0013): no HTTP endpoint at all.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use serde_json::Value;
 use ultra_instinct_browser::{
     BrowserSession, CdpError, CdpTransport, PageState, WebSocketTransport,
 };
-use ultra_instinct_browser_tools::{BrowserHost, LiveSession, ToolState};
+use ultra_instinct_browser_tools::{
+    BrowserHost, HttpBackend, LiveSession, TargetBackend, ToolState,
+};
 use ultra_instinct_cdp::CdpEvent;
 use ultra_instinct_core::InteractionManifold;
 use ultra_instinct_guard::{Policy, TicketLedger};
@@ -51,7 +59,10 @@ pub(crate) struct Snapshot {
 pub type CdpConnector = Box<dyn FnMut(&str) -> Result<Box<dyn CdpTransport>, CdpError>>;
 
 pub struct Server {
-    connector: CdpConnector,
+    backend: Box<dyn TargetBackend>,
+    /// The last typed CDP failure (pipe closed, timeout, target gone, …) a
+    /// session transport hit during the current call.
+    cdp_failure: Rc<RefCell<Option<CdpError>>>,
     sessions: BTreeMap<String, LiveSession>,
     session_order: Vec<String>,
     history: SnapshotRing<Snapshot>,
@@ -117,8 +128,15 @@ impl Server {
     pub fn with_connector(
         connector: impl FnMut(&str) -> Result<Box<dyn CdpTransport>, CdpError> + 'static,
     ) -> Self {
+        Self::with_backend(HttpBackend::new(connector))
+    }
+
+    /// A server whose tabs and sessions come from `backend`, under an empty
+    /// policy (allow all).
+    pub fn with_backend(backend: impl TargetBackend + 'static) -> Self {
         Self {
-            connector: Box::new(connector),
+            backend: Box::new(backend),
+            cdp_failure: Rc::new(RefCell::new(None)),
             sessions: BTreeMap::new(),
             session_order: Vec::new(),
             history: SnapshotRing::default(),
@@ -143,6 +161,17 @@ impl Server {
         self
     }
 
+    /// A server that drives the browser at the other end of a caller-owned
+    /// `--remote-debugging-pipe` (ADR 0013), under an empty policy. No HTTP
+    /// endpoint is used: tabs are `Target.*` calls, sessions are flat
+    /// [`ultra_instinct_cdp::PipePage`]s, and every call's `cdp` argument is
+    /// ignored (session keys are `pipe:<targetId>`). The first call binds the
+    /// first page tab. One thread owns the server and the pipe.
+    #[cfg(unix)]
+    pub fn with_pipe(browser: ultra_instinct_cdp::PipeBrowser) -> Self {
+        Self::with_backend(crate::PipeBackend::new(browser))
+    }
+
     /// One inbound JSON-RPC line. `None` means the client must not be answered.
     pub fn handle_line(&mut self, line: &str) -> Option<String> {
         crate::rpc::handle_line_with(self, line)
@@ -150,7 +179,47 @@ impl Server {
 
     /// Run one tool against this server's state.
     pub fn call_tool(&mut self, name: &str, arguments: &Value) -> Result<Value, ToolError> {
-        crate::tools::dispatch(self, name, arguments)
+        self.cdp_failure.borrow_mut().take();
+        let fixed = self.fixed_arguments(name, arguments);
+        let result = crate::tools::dispatch(self, name, fixed.as_ref().unwrap_or(arguments));
+        let seen = self.cdp_failure.borrow_mut().take();
+        result.map_err(|err| err.or_cdp(seen.as_ref()))
+    }
+
+    /// With a fixed-endpoint backend (the pipe): `cdp` names that endpoint
+    /// for `browser_*` tools and the bound tab for observe / guard / verify
+    /// (unless they read a fixture), and an unbound endpoint is bound to the
+    /// first page tab. `None`: use the arguments as given.
+    fn fixed_arguments(&mut self, name: &str, arguments: &Value) -> Option<Value> {
+        let endpoint = self.backend.endpoint()?.to_owned();
+        let mut fixed = match arguments {
+            Value::Object(map) => map.clone(),
+            Value::Null => serde_json::Map::new(),
+            _ => return None,
+        };
+        if !self.tab_binding.contains_key(&endpoint) {
+            // Errors surface on the call itself (a dead pipe, no tab).
+            if let Some(first) = self
+                .backend
+                .list_pages(&endpoint)
+                .ok()
+                .and_then(|tabs| tabs.into_iter().next())
+            {
+                self.tab_binding.insert(endpoint.clone(), first.key);
+            }
+        }
+        let cdp = if name.starts_with("browser_") {
+            Some(endpoint.clone())
+        } else if fixed.get("fixture").is_some_and(|f| !f.is_null()) {
+            None
+        } else {
+            Some(self.tab_binding.get(&endpoint).cloned().unwrap_or(endpoint))
+        };
+        fixed.remove("cdp");
+        if let Some(cdp) = cdp {
+            fixed.insert("cdp".into(), Value::String(cdp));
+        }
+        Some(Value::Object(fixed))
     }
 
     pub(crate) fn snapshot(&self, id: u64) -> Result<&Snapshot, ToolError> {
@@ -230,9 +299,14 @@ impl BrowserHost for Host<'_> {
             server.session_order.retain(|key| key != url);
             return Ok(session);
         }
-        let transport =
-            (server.connector)(url).map_err(|err| ToolError::Browser(err.to_string()))?;
-        Ok(BrowserSession::new(transport))
+        let transport = server
+            .backend
+            .connect(url)
+            .map_err(|err| ToolError::cdp(&err))?;
+        Ok(BrowserSession::new(Box::new(Recorded {
+            inner: transport,
+            seen: Rc::clone(&server.cdp_failure),
+        })))
     }
 
     /// Keep `session` for the next call on `url`, evicting the oldest key
@@ -338,8 +412,37 @@ impl BrowserHost for Host<'_> {
         &self.0.tools
     }
 
+    fn backend(&mut self) -> &mut dyn TargetBackend {
+        &mut *self.0.backend
+    }
+
     fn tool_state_mut(&mut self) -> &mut ToolState {
         &mut self.0.tools
+    }
+}
+
+/// A session transport that notes the typed CDP failures it hits (pipe
+/// closed, frame too large, target gone, timeout, dialog opened), so a call
+/// whose error reached the tool as text (the agent path reports executor
+/// failures as strings) still answers with the typed code.
+struct Recorded {
+    inner: Box<dyn CdpTransport>,
+    seen: Rc<RefCell<Option<CdpError>>>,
+}
+
+impl CdpTransport for Recorded {
+    fn call(&mut self, method: &str, params_json: &str) -> Result<String, CdpError> {
+        let result = self.inner.call(method, params_json);
+        if let Err(err) = &result {
+            if ToolError::from_cdp(err).is_some() {
+                *self.seen.borrow_mut() = Some(err.clone());
+            }
+        }
+        result
+    }
+
+    fn drain_events(&mut self) -> Vec<CdpEvent> {
+        self.inner.drain_events()
     }
 }
 
