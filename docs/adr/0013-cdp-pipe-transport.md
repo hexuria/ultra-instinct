@@ -58,11 +58,69 @@ ignored live test `tests/pipe_live.rs`, which launches Chrome through
 `/bin/sh` to place the pipes at fds 3 / 4 (std cannot remap fds without a
 `pre_exec` hook).
 
-## Phase 2 (not in this change)
+## Phase 2: embedding over the pipe
 
-A tab backend in the tool layer that drives `PipePage`s in place of the
-websocket tabs, and a new `ultra-instinct-embed` crate the daemon links to
-hand its pipe ends to the agent on its own thread.
+A host that runs one OS thread per screen owns a `PipeBrowser` and an
+`ultra_instinct_mcp::Server` on that thread and calls `Server::call_tool`
+directly; there is no stdio and no DevTools port. How to embed:
+[`docs/embedding.md`](../embedding.md). The `ultra-instinct-embed` crate the
+first draft named is not needed: `ultra-instinct-mcp` is the embedding
+surface.
+
+- **Tab backend.** `ultra-instinct-cdp` gains `TargetBackend` (list /
+  create / activate / close pages, connect a session key). `HttpBackend`
+  is the old path (Chrome's `/json` endpoints plus a connector) and stays
+  the default; `PipeBackend` drives `Target.*` on a `PipeBrowser` and
+  attaches flat `PipePage`s keyed `pipe:<targetId>` (focus emulation on, as
+  the websocket connect does). It turns on `Target.setDiscoverTargets` once,
+  so `Target.targetDestroyed` reaches pages, and hands browser-level
+  `Browser.download*` events to the tab that drains. `Server::with_pipe`
+  (`with_backend` for others): `cdp` is ignored in pipe mode (an internal
+  re-call passes it, so refusing it would break those), the first call binds
+  the first page, and observe / guard / verify read the bound tab.
+  `drain_events` stays per session, so dialog, console, network, HAR and
+  download readers work unchanged.
+- **Snapshot-bound presses.** `browser_get_state` records what it printed
+  (both formats) and returns `snapshot`. An index press given `snapshot`
+  resolves the index in that snapshot and mints its ticket there; the
+  existing boundary then refuses on the fresh observation
+  (`execute_ticketed`'s observe + `revalidate`, or `revalidate` + the hard
+  gate before `consume_ticket_once`), as `stale_ref`, with nothing pressed.
+  Focus is the one world fact taken from the page now: the caller's own
+  typing moves it. A bare index keeps the old behaviour (fresh observation)
+  unless `Server::require_snapshot(true)`, which refuses it
+  (`snapshot_required`). No new check: the refusal is `revalidate`'s.
+- **Error codes.** Every `ToolError` value carries a stable snake_case
+  `code`. Policy refusals, stale refs, unknown indexes and CDP pipe /
+  timeout / target-gone / dialog failures are typed variants (the code comes
+  from the type, never from parsing text); their `variant` and `message`
+  are what they were. `CdpError::Timeout` replaces the timeout's free-text
+  `Transport` error (same wording). The agent path reports executor
+  failures as text, so the server's session transports note the typed CDP
+  failure they hit and the call's generic `browser` error is swapped for it.
+- **Secrets.** A field is `sensitive` when it is a password / hidden / file
+  input, its label names a secret (AGENTS.md 7a, `is_secret_field`), or its
+  type could not be read. Its value is never printed; text typed into it is
+  masked (`••••`) in every later output, error and HAR. `browser_get_html`
+  drops text inputs' `value` attributes. Observe no longer names a text area
+  by its own text (its value).
+- **Limits.** `Server::with_limits(ToolLimits)`: state text 100 000 chars,
+  1 000 elements, 16 MiB screenshots (one JPEG retry, then
+  `output_too_large`), 60 s waits.
+- **Paths.** Screenshot, PDF, state, download and HAR paths must be
+  absolute (`path_not_absolute`); nothing invents a default.
+  `Server::with_downloads(Anywhere | Off | Dir)`.
+- **Allow-list.** `Server::with_tool_allowlist`: other tools refuse
+  `tool_not_allowed` and `tools/list` shows only the allowed ones.
+- **Runtime policy and the loop.** `Server::set_policy` between calls; a
+  `confirm` lifts its own call only. `ultra_instinct_mcp::run_goal` runs the
+  agent loop (InstinctPolicy, deterministic text, no model) under a guard
+  `Policy`, with a step cap and a deadline checked between steps
+  (`AgentBuilder::deadline`).
+
+Owners: `crates/ultra-instinct-mcp/tests/pipe_mode.rs`, `snapshot_refs.rs`,
+`secrets.rs`, `host_options.rs`, `run_goal.rs`, the ignored live
+`pipe_live.rs`; `crates/ultra-instinct-browser-tools/tests/error_codes.rs`.
 
 ## Consequences
 

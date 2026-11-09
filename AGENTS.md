@@ -129,7 +129,8 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    `point` only with click evidence), scrollable boxes (claim `scroll`), popup owners (claim
 >    `hover`), and drag-marked elements (claim `drag`). Icon-only controls
 >    are named by title / alt / class or id words plus their row's rendered
->    text; unrendered text names nothing. Observe
+>    text; unrendered text names nothing, and neither does a text area's
+>    own text (its value). Observe
 >    also records control state (value, checked,
 >    expanded, select options) as evidence only: it is not in the region
 >    fingerprint, and password values are never read. Do not claim cross-origin
@@ -181,16 +182,16 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 | Crate | Owns |
 |---|---|
 | `ultra-instinct-core` | `InteractionManifold`, regions, `ActionSpace`, fixture grammar |
-| `ultra-instinct-cdp` | CDP transport trait, websocket, replay transport, replay script builder; unix `--remote-debugging-pipe` transport (`PipeBrowser` / `PipePage`, caller-owned fds, one thread, ADR 0013) |
+| `ultra-instinct-cdp` | CDP transport trait, websocket, replay transport, replay script builder; unix `--remote-debugging-pipe` transport (`PipeBrowser` / `PipePage`, caller-owned fds, one thread, ADR 0013); tab backends: `TargetBackend` (list / create / activate / close pages, connect a session key), `HttpBackend` (the `/json` endpoints + a connector, the default) and unix `PipeBackend` (`Target.*` on a `PipeBrowser`, keys `pipe:<targetId>`) |
 | `ultra-instinct-browser` | CDP observe (DOM/AX fusion, identity, stacking), raw CDP inputs; `launch.rs` (find / start a local Chrome, `ChromeProcess` killed on drop); `storage_state` (save / load cookies + storage, the 0600 state file and its parser) |
 | `ultra-instinct-observe` | Observation history and id diff |
 | `ultra-instinct-geometry` | Geometry helpers; `RegionState` (availability / visibility of a region) |
 | `ultra-instinct-policy` | `BrowserPolicy` + `PolicyContext` (`set_situation`, default no-op), `InstinctPolicy` (`instinct-*` 0.1.0 from crates.io) + `TRUST_CAP_MILLIS`/`set_evidence_adjustments` (bounded learned-trust evidence), `TextResolver`, `ModelTextResolver` (feature `model-text`), `RemotePolicy` (feature `remote`), multi-step clause split |
 | `ultra-instinct-guard` | Hard `gate`, `ActionTicket` issue / `revalidate`, `TicketLedger`, `consume_ticket_once` / `consume_ticket_once_checked`, front layer + `WorldSnapshot`; the user's `Policy` (`HostPattern` allowed domains, `LabelGlob` confirm-before-press); exact-label `guard()` for MCP / CLI preflight |
-| `ultra-instinct-agent` | `Agent` state machine, `execute_ticketed` / `execute_ticketed_with` (policy), `AgentBuilder::guard_policy`, `BrowserRuntime`, verification mapping, `MockBrowser` |
+| `ultra-instinct-agent` | `Agent` state machine, `execute_ticketed` / `execute_ticketed_with` (policy), `AgentBuilder::guard_policy`, `AgentBuilder::deadline` (checked between steps), `BrowserRuntime`, verification mapping, `MockBrowser` |
 | `ultra-instinct-protocol` | Guard / ticket / verify wire types |
-| `ultra-instinct-browser-tools` | The `browser_*` host surface as MCP tool families (`call` / `spec`, the tool-name lists, `ToolError`) over a `BrowserHost` trait (sessions, tab binding, ledgers, events, snapshot record, `Policy`, the tools' own `ToolState`): browser-use names, `browser_wait` conditions, `browser_extra` (dialog, forward / reload, check, focus, keyboard, get / is / count, annotate, `max_chars`), `browser_state` (state save / load, cookies, storage), `browser_env` (set, download, network) |
-| `ultra-instinct-mcp` | Optional JSON-RPC adapter (observe / guard / verify), `TOOLS`, and the `Server` that keeps sessions and the snapshot ring and serves the `browser_*` tools through a crate-private `BrowserHost` adapter (`Server` itself does not implement it); re-exports `ToolError` and the tool-name lists |
+| `ultra-instinct-browser-tools` | The `browser_*` host surface as MCP tool families (`call` / `spec`, the tool-name lists, `ToolError` with a stable `code` on every variant) over a `BrowserHost` trait (sessions, tab binding, ledgers, events, snapshot record and lookup, `require_snapshot`, `Policy`, the tab `backend`, `ToolLimits`, `Downloads`, the tools' own `ToolState`): snapshot-bound index refs (`bound.rs`), secret masking (`secrets.rs`: `sensitive`, typed secrets scrubbed from every output), browser-use names, `browser_wait` conditions, `browser_extra` (dialog, forward / reload, check, focus, keyboard, get / is / count, annotate, `max_chars`), `browser_state` (state save / load, cookies, storage), `browser_env` (set, download, network) |
+| `ultra-instinct-mcp` | Optional JSON-RPC adapter (observe / guard / verify), `TOOLS`, and the `Server` that keeps sessions and the snapshot ring and serves the `browser_*` tools through a crate-private `BrowserHost` adapter (`Server` itself does not implement it); host options (`with_pipe` / `with_backend`, `require_snapshot`, `set_policy`, `with_limits`, `with_downloads`, `with_tool_allowlist`); `run_goal` / `run_goal_on` / `Server::run_goal` (the agent loop with InstinctPolicy and the deterministic resolver, no model); re-exports `ToolError`, `Policy` and the tool-name lists ([`docs/embedding.md`](docs/embedding.md)) |
 | `ultra-instinct-remote` | Remote decision transports and the HTTP text model, the only crate with a model SDK / HTTP client: `typesafe` (feature `jev`), `clef` (feature `clef`), `http_text` (feature `model-text`); re-exported by `ultra-instinct` |
 | `ultra-instinct` | `ultra-instinct run` (agent loop, `--policy instinct|jev|clef|clef-flash`, `--diary <dir>`); `replay --diary` (offline arena: agree / would-abstain / regress per recorded decision); `observe` / `guard` / `verify` preflight commands; `mcp` (stdio); the shell verbs over the session daemon (`verbs.rs`, `daemon.rs`), `batch`, `session`, `skills`, `doctor`, `install`; `run --launch/--load-state/--save-state/--allow-domain/--confirm-press/--confirm`; `TypesafeTransport` (feature `jev`: JEV-primary over the closed remote wire); `ClefTransport` (feature `clef`: Cloudflare Workers AI Clef / Clef-Flash over the same wire through `typesafe-sdk`'s Clef provider, one decision call, single-candidate heads answered locally) |
 | `ultra-instinct-dojo` | Battle diary schema v1 (`DiaryLine` JSONL), `DiaryWriter` / `read_diary`, site + situation keys, decision→`ActionSpace` rebuild for the replay arena; versioned `LessonStore` (words / places / moves / trust, keyed per situation, carrying proving diary ids); lessons only adjust evidence inside the finite `ActionSpace` |
@@ -240,6 +241,15 @@ deliberate eval.
   limits): `crates/ultra-instinct-cdp/tests/pipe.rs` against a fake Chrome on
   `std::io::pipe()`, with the frame-splitter chunking proptests; the
   `pipe_frame` fuzz target; live Chrome in `tests/pipe_live.rs` (`#[ignore]`).
+- Embedding over a pipe (ADR 0013 phase 2, [`docs/embedding.md`](docs/embedding.md)):
+  `crates/ultra-instinct-mcp/tests/pipe_mode.rs` (`Server::with_pipe` against
+  a fake Chrome: tabs as `Target.*`, `target_gone`, `pipe_closed`),
+  `snapshot_refs.rs` (a shifted page refuses `stale_ref` with no press;
+  `require_snapshot`), `secrets.rs` (a typed password appears in no output,
+  error, or HAR), `host_options.rs` (runtime policy, confirm not sticky,
+  limits, absolute paths, downloads, allow-list), `run_goal.rs`; the code
+  table: `crates/ultra-instinct-browser-tools/tests/error_codes.rs`; live
+  Chrome: `crates/ultra-instinct-mcp/tests/pipe_live.rs` (`#[ignore]`).
 - Observe protocol cost: `crates/ultra-instinct-browser/tests/call_budget.rs`
   pins the CDP call count per observe as a regression tripwire.
 - Repo rules (toolchain pin, `forbid(unsafe_code)`, crate ceilings, pinned
@@ -316,17 +326,30 @@ press runs; `browser_hover`, `browser_drag` (index→index), `browser_zoom`,
 `browser_search`, `browser_form_input` (type alias).
 
 `browser_get_state` defaults to text: a title / url line, then one line per
-control, `@eN role "label"  state`; `format:"json"` returns `elements[]`.
-Index arguments take `5`, `"5"` or `"@e5"`.
+control, `@eN role "label"  state`; `format:"json"` returns `elements[]`
+(with `input_type` and `sensitive`). Both formats record the observation and
+return its `snapshot` id. Index arguments take `5`, `"5"` or `"@e5"`; an
+index press given `snapshot` resolves the index in that snapshot and mints
+its ticket there, so an element that moved, changed, or left refuses
+`stale_ref` and nothing is pressed (`Server::require_snapshot(true)` refuses
+a bare index, `snapshot_required`). A sensitive field (password / hidden /
+file, a secret label, or an unreadable type) never shows its value, and text
+typed into one is masked in every later output, error, and HAR. Every error
+carries a stable `code`; the table is in [`docs/embedding.md`](docs/embedding.md).
+`Server::with_pipe` serves the same tools over a caller-owned pipe (no HTTP
+endpoint; `cdp` is ignored); `with_tool_allowlist`, `with_limits`,
+`with_downloads` and `set_policy` are the host's knobs. File paths
+(screenshot, PDF, state, download, HAR) must be absolute.
 
 `browser_wait` with `text` / `url` / `control` / `gone` (no control has that
 exact label) / `load` (`domcontentloaded` | `load` on `document.readyState`,
 never network idle) observes about every 200 ms until every given condition
-holds or `seconds` (default 10, cap 60) runs out; it never acts.
+holds or `seconds` (default 10, cap `ToolLimits::max_wait`, 60 s) runs out; it never acts.
 
 Policy: `ULTRA_INSTINCT_ALLOW_DOMAINS` / `ULTRA_INSTINCT_CONFIRM_PRESS`
 (comma lists) set the server's `Policy`; a press tool's `confirm` argument
-names the label the user confirmed. Ticketed inputs return `ticket`;
+names the label the user confirmed, for that call only (`Server::set_policy`
+replaces the policy between calls). Ticketed inputs return `ticket`;
 `verify:true` adds `verification`. `browser_send_key` with `index` is a
 ticketed KEY.
 
@@ -335,7 +358,9 @@ ticketed KEY.
 `browser_keyboard`, `browser_get`, `browser_is`, `browser_count`,
 `browser_screenshot` `annotate`, and `max_chars` on the text tools. Index
 tools read the index from the tab's last observation when no input ran
-since, and act on that region in a fresh observation. Page is enabled once
+since (or from `snapshot` when given), and act on that region in a fresh
+observation. `browser_check` and `browser_focus` run under the policy and a
+per-call `confirm` like `browser_click`. Page is enabled once
 per tab outside observe for dialog tracking; a failing call while a dialog
 is open says so. A call that opens one (a press whose handler calls
 `alert()`) stops waiting at `Page.javascriptDialogOpening` and fails at once
