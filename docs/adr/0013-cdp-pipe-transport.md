@@ -149,7 +149,11 @@ surface.
   64 a new one refuses `secrets_full` before it is typed. `run_goal`
   remembers each payload before dispatch (non-sensitive ones from 4
   chars) and returns them in `RunReport::typed` (must not be logged).
-  `browser_get_html` drops text inputs' `value` attributes. Observe no
+  `browser_get_html` drops text inputs' `value` attributes.
+  `browser_get_state` JSON with `values: true` (opt-in, added later) carries
+  the value / checked / expanded observe read, never for a sensitive
+  element, cut at the state / text limit (`value_truncated`), masked at the
+  one exit like the rest. Observe no
   longer names a text area by its own text (its value). Whether typed
   text is secret is read off the observation the input lands on: the
   executor's own fresh one for `browser_type` (the field the caller saw,

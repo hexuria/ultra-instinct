@@ -218,6 +218,35 @@ fn get_state_text_carries_control_state_and_never_a_password() {
     assert!(!text.contains("hunter2"), "{text}");
 }
 
+/// `values: true`: a select's value is its selected option, and a value
+/// past the state / text limit is cut and marked.
+#[test]
+fn get_state_values_carry_select_checked_and_cut_values() {
+    let mut page = page();
+    page.dom[0] = page.dom[0]
+        .clone()
+        .with_compact_state(json!({"it": "email", "v": "kid@example.com"}));
+    page.dom[2] = page.dom[2].clone().with_compact_state(
+        json!({"it": "select-one", "o": ["Canada", "France"], "sel": "Canada"}),
+    );
+    let (server_, _log) = server(ScriptBuilder::new().observe_compact(&page));
+    let mut server = server_.with_limits(ultra_instinct_mcp::ToolLimits {
+        max_text_chars: 3,
+        ..Default::default()
+    });
+    let out = call(
+        &mut server,
+        "browser_get_state",
+        json!({"cdp": CDP, "format": "json", "values": true}),
+    );
+    let elements = &out["elements"];
+    assert_eq!(elements[0]["value"], "kid… [truncated 12 chars]", "{out}");
+    assert_eq!(elements[0]["value_truncated"], true);
+    assert!(elements[1].get("value").is_none(), "{out}");
+    assert_eq!(elements[2]["value"], "Can… [truncated 3 chars]", "{out}");
+    assert_eq!(elements[0]["label"], "Email");
+}
+
 #[test]
 fn get_state_rejects_an_unknown_format() {
     let (mut server, _log) = server(ScriptBuilder::new());

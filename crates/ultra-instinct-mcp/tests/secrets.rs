@@ -797,3 +797,50 @@ fn a_refused_capture_puts_back_the_fields_it_already_hid() {
         "no style before: none after"
     );
 }
+
+/// `values: true` on `browser_get_state` JSON: a plain field's value, none
+/// for the password field (even with the typed secret reported back), and a
+/// secret the page copied into a plain field masked like every output.
+/// Without `values` no element carries one.
+#[test]
+fn get_state_values_never_carry_a_secret() {
+    let mut echoed = page();
+    echoed.dom[0] = echoed.dom[0]
+        .clone()
+        .with_compact_state(json!({"it": "email", "v": format!("me+{SECRET}@shop.example")}));
+    echoed.dom[1] = echoed.dom[1]
+        .clone()
+        .with_compact_state(json!({"it": "password", "v": SECRET}));
+    let mut server = typed_server(page(), 2, SECRET, |s| {
+        s.observe_compact(&echoed)
+            .observe_compact(&page())
+            .observe_compact(&page())
+            .observe_compact(&page())
+    });
+    let state = |server: &mut Server, values: Option<bool>| {
+        let mut arguments = json!({"cdp": CDP, "format": "json"});
+        if let Some(values) = values {
+            arguments["values"] = json!(values);
+        }
+        server.call_tool("browser_get_state", &arguments).unwrap()
+    };
+    let out = state(&mut server, Some(true));
+    assert!(!out.to_string().contains(SECRET), "{out}");
+    let elements = &out["elements"];
+    assert_eq!(
+        elements[0]["value"],
+        format!("me+{MASK}@shop.example"),
+        "{out}"
+    );
+    assert_eq!(elements[1]["sensitive"], true);
+    assert!(elements[1].get("value").is_none(), "{out}");
+    let out = state(&mut server, Some(true));
+    assert_eq!(out["elements"][0]["value"], "me@shop.example", "{out}");
+    assert!(out["elements"][1].get("value").is_none(), "{out}");
+    for values in [None, Some(false)] {
+        let out = state(&mut server, values);
+        let elements = out["elements"].as_array().unwrap();
+        assert!(elements.iter().all(|e| e.get("value").is_none()), "{out}");
+        assert_eq!(elements[0]["label"], "Email");
+    }
+}

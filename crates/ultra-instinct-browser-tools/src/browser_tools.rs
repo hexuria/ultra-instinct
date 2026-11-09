@@ -443,6 +443,28 @@ fn element_json(index: usize, region: &InteractionRegion) -> Value {
     element
 }
 
+/// `values: true`: the state observe already read, never for a sensitive
+/// field: `value` (a select's selected option), `checked`, `expanded`. A
+/// value past `max` chars is cut with the marker and `value_truncated`.
+fn add_values(element: &mut Value, region: &InteractionRegion, max: usize) {
+    let state = region.state();
+    if crate::secrets::sensitive(region) {
+        return;
+    }
+    if let Some(value) = state.value.as_deref().or(state.selected.as_deref()) {
+        let cut = crate::browser_extra::truncate_output(value, max);
+        if cut.len() != value.len() {
+            element["value_truncated"] = json!(true);
+        }
+        element["value"] = json!(cut);
+    }
+    for (key, on) in [("checked", state.checked), ("expanded", state.expanded)] {
+        if let Some(on) = on {
+            element[key] = json!(on);
+        }
+    }
+}
+
 fn get_state(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let text = match opt_str(arguments, "format")?.unwrap_or("text") {
@@ -454,6 +476,7 @@ fn get_state(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, T
             )))
         }
     };
+    let values = opt_bool(arguments, "values")? == Some(true);
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
     let observed = (|| {
@@ -502,7 +525,15 @@ fn get_state(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, T
     let elements: Vec<Value> = order
         .iter()
         .enumerate()
-        .filter_map(|(i, id)| manifold.get(id).map(|r| element_json(i + 1, r)))
+        .filter_map(|(i, id)| {
+            let region = manifold.get(id)?;
+            let mut element = element_json(i + 1, region);
+            if values {
+                let max = limits.max_state_chars.min(limits.max_text_chars);
+                add_values(&mut element, region, max);
+            }
+            Some(element)
+        })
         .collect();
     let mut out = json!({
         "url": page.as_ref().and_then(|p| p.url().map(str::to_owned)),
@@ -1575,6 +1606,10 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             props.insert(
                 "format".into(),
                 json!({"type": "string", "enum": ["text", "json"], "description": "text (default): one line per control, `@eN role \"label\"  state`; json: the elements[] body"}),
+            );
+            props.insert(
+                "values".into(),
+                json!({"type": "boolean", "description": "json only: each element also carries the state observe read (`value`, a select's selected option as `value`, `checked`, `expanded`); never for a `sensitive` element; masked like every output; a value cut at the state / text limit has `value_truncated`. Default false."}),
             );
             "Page title, url, and interactive elements as 1-based indexes in reading order (@e1, @e2, …) — the refs browser_click/browser_type take. Default format text: one short line per control with its value / checked / expanded / selected state; format json returns elements[]."
         }

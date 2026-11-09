@@ -186,7 +186,15 @@ absolutize against the shell's before they call).
 ## Secrets
 
 `browser_get_state` JSON elements carry `input_type` (when observe read it)
-and `sensitive`. A field is sensitive when it is a password, hidden or file
+and `sensitive`. With `values: true` (default false) each element that is
+not sensitive also carries the state observe read: `value` (a text-like
+input's or text area's value, or a select's selected option), `checked`
+and `expanded`. A sensitive element never carries any of them. A value
+longer than `max_state_chars` / `max_text_chars` (the smaller) is cut with
+`… [truncated N chars]` and `value_truncated: true`; observe itself reads
+at most 200 chars of a value. Values are masked like every output (below),
+and labels are never taken from values. The text format already prints
+non-sensitive values and is unchanged. A field is sensitive when it is a password, hidden or file
 input, when its label names a secret (password, passcode, PIN, CVV, CVC,
 OTP, SSN, card, security, one-time), or when its input type could not be
 read. A sensitive field's value is never shown, and text typed into one
