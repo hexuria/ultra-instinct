@@ -1,7 +1,8 @@
 //! Label folding (ADR 0014): a label and the control it names are one
 //! region, observed through the real session over a compact replay.
 
-use ultra_instinct_browser::script::{PageSpec, ScriptBuilder};
+use serde_json::json;
+use ultra_instinct_browser::script::{AxSpec, DomSpec, PageSpec, ScriptBuilder};
 use ultra_instinct_browser::{BrowserSession, ReplayTransport};
 use ultra_instinct_core::{Action, ActionKind, ActionSpace, InteractionManifold, Role};
 
@@ -104,4 +105,37 @@ fn a_covered_text_field_keeps_its_label() {
     let manifold = observe(&[PageSpec::labelled_form(false).cover(101, 116)]).remove(0);
     assert!(manifold.get_str("n100").is_some());
     assert!(manifold.get_str("n101").is_some());
+}
+
+fn el(node: i64, tag: &'static str, text: &str, rect: (f64, f64, f64, f64)) -> DomSpec {
+    DomSpec::button(node, node + 100, text, rect).with_tag(tag)
+}
+
+fn input(node: i64, kind: &str, rect: (f64, f64, f64, f64)) -> DomSpec {
+    el(node, "INPUT", "", rect).with_attr("type", kind)
+}
+
+#[test]
+fn a_pointer_cursor_text_named_by_aria_labelledby_keeps_its_click() {
+    // The span's CLICK comes from its own pointer cursor (compact `ck`),
+    // which observe adds after extract linked it.
+    let dom = vec![
+        el(10, "SPAN", "Nickname", (20.0, 20.0, 60.0, 20.0))
+            .with_attr("id", "nm")
+            .with_compact_state(json!({"ck": 1})),
+        input(11, "checkbox", (90.0, 24.0, 13.0, 13.0)).with_attr("aria-labelledby", "nm"),
+    ];
+    let ax = vec![AxSpec::new(
+        111,
+        "checkbox",
+        "Nickname",
+        (90.0, 24.0, 13.0, 13.0),
+    )];
+    let manifold = observe(&[PageSpec::new(dom, ax, "http://127.0.0.1/", "T")]).remove(0);
+    assert_eq!(ids(&manifold), ["n110", "n111"]);
+    assert!(manifold
+        .get_str("n110")
+        .unwrap()
+        .actions()
+        .contains(&Action::Click));
 }

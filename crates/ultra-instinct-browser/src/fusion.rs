@@ -32,6 +32,7 @@
 //! the same DOM node is left over; it is not deleted. Two AX-only nodes that
 //! share a backend id are kept as `ax{id}` and `ax{id}-{k}`.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use ultra_instinct_core::{
@@ -151,7 +152,7 @@ pub(crate) fn fuse(
     ax_nodes: &[RawNode],
 ) -> Result<(InteractionManifold, BTreeMap<RegionId, NodeBinding>), BrowserError> {
     let (dom_nodes, ax_nodes) = fold_labels(viewport, dom_nodes, ax_nodes);
-    let (dom_nodes, ax_nodes) = (dom_nodes.as_slice(), ax_nodes.as_slice());
+    let (dom_nodes, ax_nodes) = (&*dom_nodes, &*ax_nodes);
     let mut used = vec![false; ax_nodes.len()];
     // backend id -> ax indices, so the deterministic pass-1 join is a map
     // lookup, not a linear scan per dom node.
@@ -292,41 +293,62 @@ fn merge(dom: &RawNode, ax: &RawNode) -> RawNode {
 ///
 /// Inner targets of a label (a link in its text) are their own nodes and
 /// are never dropped. The only visible clickable box is never dropped.
-fn fold_labels(
+fn fold_labels<'a>(
     viewport: Rect,
-    dom_nodes: &[RawNode],
-    ax_nodes: &[RawNode],
-) -> (Vec<RawNode>, Vec<RawNode>) {
+    dom_nodes: &'a [RawNode],
+    ax_nodes: &'a [RawNode],
+) -> (Cow<'a, [RawNode]>, Cow<'a, [RawNode]>) {
     use ultra_instinct_core::Action;
-    let mut dom: Vec<RawNode> = dom_nodes.to_vec();
+    let unchanged = (Cow::Borrowed(dom_nodes), Cow::Borrowed(ax_nodes));
+    if dom_nodes.iter().all(|node| node.labels.is_none()) {
+        return unchanged;
+    }
+    let clicks = |node: &RawNode| node.actions.contains(&Action::Click);
+    let mut index = BTreeMap::new();
+    // Kept ancestor → (nodes under it, click targets under it).
+    let mut held: BTreeMap<i64, (usize, usize)> = BTreeMap::new();
+    for (i, node) in dom_nodes.iter().enumerate() {
+        if let Some(backend) = node.backend_node_id {
+            index.entry(backend).or_insert(i);
+        }
+        for ancestor in &node.ancestors {
+            let entry = held.entry(*ancestor).or_default();
+            entry.0 += 1;
+            entry.1 += usize::from(clicks(node));
+        }
+    }
+    let ax_disabled: BTreeSet<i64> = ax_nodes
+        .iter()
+        .filter(|ax| ax.disabled)
+        .filter_map(|ax| ax.backend_node_id)
+        .collect();
     let mut dropped = BTreeSet::new();
-    let mut reversed = BTreeSet::new();
-    let ax_disabled = |backend: i64| {
-        ax_nodes
-            .iter()
-            .any(|ax| ax.backend_node_id == Some(backend) && ax.disabled)
-    };
-    for index in 0..dom.len() {
-        let (Some(target), Some(label)) = (dom[index].labels.clone(), dom[index].backend_node_id)
-        else {
+    let mut reversed = BTreeMap::new();
+    let mut reversed_controls = BTreeSet::<i64>::new();
+    for (i, node) in dom_nodes.iter().enumerate() {
+        let (Some(target), Some(label)) = (&node.labels, node.backend_node_id) else {
             continue;
         };
-        if target.off || ax_disabled(target.control) {
+        if target.off || ax_disabled.contains(&target.control) {
             continue;
         }
-        let control = dom
-            .iter()
-            .find(|node| node.backend_node_id == Some(target.control));
+        let control = index.get(&target.control).map(|&j| &dom_nodes[j]);
+        // What the label holds besides its own control.
+        let inside = control.is_some_and(|c| c.ancestors.contains(&label));
+        let (all, click_targets) = held.get(&label).copied().unwrap_or_default();
+        let others = all - usize::from(inside);
+        let other_clicks = click_targets - usize::from(inside && control.is_some_and(clicks));
+        // Text named by `aria-labelledby` folds only when it is plain text:
+        // nothing inside, and no click of its own (markup, a listener, or
+        // its own pointer cursor, all on the node by now).
+        if !target.label_element && (others > 0 || clicks(node)) {
+            continue;
+        }
         let offered = control.is_some_and(|c| {
             !c.disabled
                 && !c.hidden
                 && !c.rect.is_zero_area()
                 && !is_fully_offscreen(c.rect, viewport)
-        });
-        let holds_target = dom.iter().any(|node| {
-            node.backend_node_id != Some(target.control)
-                && node.ancestors.contains(&label)
-                && node.actions.contains(&Action::Click)
         });
         match target.sight {
             Sight::Visible if offered => {
@@ -335,29 +357,44 @@ fn fold_labels(
             Sight::Faint
                 if target.label_element
                     && target.role == Role::Checkbox
-                    && !holds_target
-                    && reversed.insert(target.control) =>
+                    && other_clicks == 0
+                    && !reversed
+                        .values()
+                        .any(|t: &&LabelTarget| t.control == target.control) =>
             {
-                let node = &mut dom[index];
+                reversed.insert(i, target);
+                dropped.insert(target.control);
+            }
+            _ => {}
+        }
+    }
+    if dropped.is_empty() {
+        return unchanged;
+    }
+    let kept = |node: &&RawNode| {
+        !node
+            .backend_node_id
+            .is_some_and(|backend| dropped.contains(&backend))
+    };
+    let dom = dom_nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| kept(node))
+        .map(|(i, node)| {
+            let mut node = node.clone();
+            if let Some(target) = reversed.get(&i) {
                 node.role = target.role;
                 for action in &target.actions {
                     if !node.actions.contains(action) {
                         node.actions.push(*action);
                     }
                 }
-                dropped.insert(target.control);
             }
-            _ => {}
-        }
-    }
-    let kept = |node: &RawNode| {
-        !node
-            .backend_node_id
-            .is_some_and(|backend| dropped.contains(&backend))
-    };
-    dom.retain(kept);
-    let ax = ax_nodes.iter().filter(|n| kept(n)).cloned().collect();
-    (dom, ax)
+            node
+        })
+        .collect();
+    let ax = ax_nodes.iter().filter(kept).cloned().collect();
+    (Cow::Owned(dom), Cow::Owned(ax))
 }
 
 fn compatible(dom: &RawNode, ax: &RawNode) -> bool {
@@ -713,6 +750,30 @@ mod tests {
             assert!(merged.get_str("n50").is_some(), "{:?}", ids(&merged));
             assert_eq!(merged.get_str("n50").unwrap().role(), Role::Generic);
         }
+    }
+
+    #[test]
+    fn labelledby_text_folds_only_when_it_is_plain_text() {
+        let text = || {
+            let mut node = label(50, 100, Role::TextField, Sight::Visible);
+            node.labels.as_mut().unwrap().label_element = false;
+            node.actions = vec![Action::Focus];
+            node
+        };
+        let field = || dom("", Role::TextField, 400.0);
+        assert_eq!(ids(&fold(&[text(), field()], &[])), ["n100"]);
+        // Its own click (a pointer cursor, a listener) keeps it a target.
+        let mut clickable = text();
+        clickable.actions.push(Action::Click);
+        assert_eq!(ids(&fold(&[clickable, field()], &[])), ["n100", "n50"]);
+        // So does another node inside it.
+        let mut inner = with_backend(dom("more", Role::Generic, 150.0), 52);
+        inner.ancestors = vec![50];
+        inner.actions = vec![Action::Focus];
+        assert_eq!(
+            ids(&fold(&[text(), field(), inner], &[])),
+            ["n100", "n50", "n52"]
+        );
     }
 
     #[test]

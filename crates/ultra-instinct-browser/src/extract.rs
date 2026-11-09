@@ -220,8 +220,8 @@ fn is_labelable(node: &Value) -> bool {
 /// Give each text element that labels exactly one kept control its
 /// [`crate::fusion::LabelTarget`]. A `<label>` names its `for` target or the
 /// control it wraps; a generic element names the controls whose
-/// `aria-labelledby` points at it, when it holds no other kept element and
-/// takes no click of its own. Fusion decides whether to fold.
+/// `aria-labelledby` points at it. Fusion decides whether to fold, from the
+/// final claims (a pointer cursor's CLICK is added after this).
 fn link_labels(facts: &LabelFacts, out: &mut DomDocument) {
     use std::collections::BTreeMap;
     // Text backend → control backend → named by a `<label>` element.
@@ -266,14 +266,6 @@ fn link_labels(facts: &LabelFacts, out: &mut DomDocument) {
         let c = &out.elements[*index.get(&control)?];
         if text.role != Role::Generic {
             return None;
-        }
-        if !label_element {
-            let holds_other = out.elements.iter().any(|e| {
-                e.backend_node_id != control && e.ancestors.contains(&text.backend_node_id)
-            });
-            if holds_other || text.actions.contains(&Action::Click) {
-                return None;
-            }
         }
         Some(crate::fusion::LabelTarget {
             control,
@@ -1726,7 +1718,9 @@ mod pierce_tests {
                 (4, 5, true, false),
                 (6, 8, true, false),
                 (9, 10, false, false),
-                (11, 12, true, true)
+                (11, 12, true, true),
+                // Linked here; fusion keeps it, because it takes a click.
+                (18, 19, false, false)
             ]
         );
     }
