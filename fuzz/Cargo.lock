@@ -568,6 +568,7 @@ dependencies = [
  "ultra-instinct-core",
  "ultra-instinct-guard",
  "ultra-instinct-observe",
+ "ultra-instinct-policy",
  "ultra-instinct-protocol",
 ]
 
@@ -627,6 +628,7 @@ name = "ultra-instinct-mcp"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "ultra-instinct-agent",
  "ultra-instinct-browser",
  "ultra-instinct-browser-tools",
  "ultra-instinct-cdp",
@@ -634,6 +636,7 @@ dependencies = [
  "ultra-instinct-geometry",
  "ultra-instinct-guard",
  "ultra-instinct-observe",
+ "ultra-instinct-policy",
  "ultra-instinct-protocol",
 ]
 
