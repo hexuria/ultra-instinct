@@ -76,7 +76,8 @@ jobs:
         run: |
           # The workspace lint forbids unsafe_code; this keeps the Miri skip honest if a crate ever
           # opts out. Any hit means Miri must be added (AGENTS.md anti-drift #10).
-          if grep -rnwE 'unsafe' --include='*.rs' crates fuzz 2>/dev/null | grep -v 'forbid(unsafe_code)' | grep -v '^\s*//' ; then
+          # `grep -rn` prefixes each hit with `path:line:`, so the comment filter skips that prefix.
+          if grep -rnwE 'unsafe' --include='*.rs' crates fuzz 2>/dev/null | grep -v 'forbid(unsafe_code)' | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' ; then
             echo "unsafe found: add a Miri job before merging"; exit 1
           fi
 
