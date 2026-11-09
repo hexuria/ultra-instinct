@@ -1,4 +1,4 @@
-//! `ultra-instinct` command line. Locate, observe, act, diff, verify, and `mcp`.
+//! `ultra-instinct` command line.
 
 #![forbid(unsafe_code)]
 
