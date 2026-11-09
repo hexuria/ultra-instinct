@@ -522,6 +522,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ultra-instinct-browser-tools"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde_json",
+ "ultra-instinct-agent",
+ "ultra-instinct-browser",
+ "ultra-instinct-cdp",
+ "ultra-instinct-core",
+ "ultra-instinct-guard",
+ "ultra-instinct-observe",
+ "ultra-instinct-protocol",
+]
+
+[[package]]
 name = "ultra-instinct-cdp"
 version = "0.1.0"
 dependencies = [
@@ -574,10 +589,9 @@ dependencies = [
 name = "ultra-instinct-mcp"
 version = "0.1.0"
 dependencies = [
- "base64",
  "serde_json",
- "ultra-instinct-agent",
  "ultra-instinct-browser",
+ "ultra-instinct-browser-tools",
  "ultra-instinct-cdp",
  "ultra-instinct-core",
  "ultra-instinct-geometry",

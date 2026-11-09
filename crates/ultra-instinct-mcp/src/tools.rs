@@ -20,8 +20,10 @@ use ultra_instinct_guard::{guard, with_front_layer, FrontLayer, GuardRequest, Wo
 use ultra_instinct_observe::{diff, history::SnapshotId};
 use ultra_instinct_protocol::GuardDecision;
 
-use crate::error::ToolError;
+use ultra_instinct_browser_tools::BrowserHost as _;
+
 use crate::server::Server;
+use crate::ToolError;
 
 const PRODUCT: &str = "ultra-instinct";
 
@@ -87,14 +89,8 @@ pub(crate) fn dispatch(
     {
         return Err(ToolError::CoordinatesNotAccepted);
     }
-    if crate::browser_env::ENV_TOOLS.contains(&name) {
-        return crate::browser_env::call(server, name, arguments);
-    }
-    if let Some(result) = crate::browser_state::call(server, name, arguments) {
+    if let Some(result) = ultra_instinct_browser_tools::call(server, name, arguments) {
         return result;
-    }
-    if name.starts_with("browser_") {
-        return crate::browser_extra::call(server, name, arguments);
     }
     match name {
         "navigate" => Err(ToolError::GoalNotAccepted),

@@ -7,20 +7,19 @@
 //! get_state, click, type, scroll, screenshot, tabs). Target-bound input still
 //! goes through gate → ticket → `execute_ticketed`, so a stale page refuses
 //! instead of clicking the wrong element; page-level calls are plain CDP.
+//! They live in `ultra-instinct-browser-tools` and run on [`Server`] through
+//! its `BrowserHost` impl.
 
 #![forbid(unsafe_code)]
 
-mod browser_env;
-mod error;
-mod page_text;
 mod rpc;
 mod server;
 mod tools;
 
-pub use error::ToolError;
 pub use rpc::{handle_line, serve_stdio};
 pub use server::{CdpConnector, Server, ENV_ALLOW_DOMAINS, ENV_CONFIRM_PRESS, MAX_LIVE_SESSIONS};
 pub use tools::call_tool;
+pub use ultra_instinct_browser_tools::ToolError;
 
 pub const TOOL_OBSERVE: &str = "observe";
 pub const TOOL_GUARD: &str = "guard";
@@ -87,13 +86,7 @@ pub const TOOLS: [&str; 56] = [
 
 pub const PRODUCT_TOOLS: [&str; 3] = [TOOL_OBSERVE, TOOL_GUARD, TOOL_VERIFY];
 
-mod browser_extra;
-mod browser_state;
-mod browser_tools;
-pub use browser_env::ENV_TOOLS;
-pub use browser_extra::EXTRA_TOOLS;
-pub use browser_state::STATE_TOOLS;
-pub use browser_tools::BROWSER_TOOLS;
+pub use ultra_instinct_browser_tools::{BROWSER_TOOLS, ENV_TOOLS, EXTRA_TOOLS, STATE_TOOLS};
 
 /// Tool name for a legacy protocol phase. The locate, inspect and diff tools
 /// are removed, so their phases map onto the product tool that now covers
@@ -124,14 +117,11 @@ mod tests {
         assert!(!PRODUCT_TOOLS.contains(&"act"));
         // The `browser_*` host surface sits beside the firewall tools; it
         // never enters PRODUCT_TOOLS.
-        for name in crate::browser_tools::BROWSER_TOOLS
-            .into_iter()
-            .chain(crate::browser_extra::EXTRA_TOOLS)
-        {
+        for name in crate::BROWSER_TOOLS.into_iter().chain(crate::EXTRA_TOOLS) {
             assert!(TOOLS.contains(&name));
             assert!(!PRODUCT_TOOLS.contains(&name));
         }
-        for name in crate::browser_env::ENV_TOOLS {
+        for name in crate::ENV_TOOLS {
             assert!(TOOLS.contains(&name));
             assert!(!PRODUCT_TOOLS.contains(&name));
         }

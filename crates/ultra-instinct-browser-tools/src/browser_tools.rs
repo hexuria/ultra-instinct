@@ -30,7 +30,7 @@ use ultra_instinct_guard::{
 use ultra_instinct_protocol::GuardReason;
 
 use crate::error::ToolError;
-use crate::server::Server;
+use crate::host::BrowserHost;
 
 /// Longest a `browser_wait` sleeps, whatever the argument says.
 const MAX_WAIT_SECS: u64 = 60;
@@ -76,12 +76,16 @@ pub const BROWSER_TOOLS: [&str; 37] = [
     "browser_read_network",
 ];
 
-/// Diagnostic-domain bits in `Server::enabled_domains`.
+/// Diagnostic-domain bits in `BrowserHost::enabled_domains`.
 const CONSOLE_BIT: u8 = 0b01;
 const NETWORK_BIT: u8 = 0b10;
 
 /// Run one `browser_*` tool against this server's state.
-pub(crate) fn call(server: &mut Server, name: &str, arguments: &Value) -> Result<Value, ToolError> {
+pub(crate) fn call(
+    server: &mut dyn BrowserHost,
+    name: &str,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
     match name {
         "browser_navigate" => navigate(server, arguments),
         "browser_new_tab" => new_tab(server, arguments),
@@ -242,7 +246,7 @@ fn refused(reason: GuardReason, label_or_url: &str) -> ToolError {
 }
 
 /// The server's policy plus this call's `confirm` label, if any.
-fn press_policy(server: &Server, arguments: &Value) -> Result<Policy, ToolError> {
+fn press_policy(server: &dyn BrowserHost, arguments: &Value) -> Result<Policy, ToolError> {
     let policy = server.policy()?.clone();
     Ok(match opt_str(arguments, "confirm")? {
         Some(label) => policy.with_confirmed(label),
@@ -251,7 +255,7 @@ fn press_policy(server: &Server, arguments: &Value) -> Result<Policy, ToolError>
 }
 
 /// Refuse a navigation the policy does not allow, before any CDP call.
-fn check_navigation(server: &Server, url: &str) -> Result<(), ToolError> {
+fn check_navigation(server: &dyn BrowserHost, url: &str) -> Result<(), ToolError> {
     server
         .policy()?
         .check_url(url)
@@ -259,7 +263,7 @@ fn check_navigation(server: &Server, url: &str) -> Result<(), ToolError> {
 }
 
 /// The page-websocket key a `cdp` endpoint currently drives.
-fn session_key(server: &Server, endpoint: &str) -> String {
+fn session_key(server: &dyn BrowserHost, endpoint: &str) -> String {
     server
         .current_tab(endpoint)
         .map(str::to_owned)
@@ -267,11 +271,11 @@ fn session_key(server: &Server, endpoint: &str) -> String {
 }
 
 /// Borrow-free take/keep: the session for `key`, reconnected when absent.
-fn take(server: &mut Server, key: &str) -> Result<crate::server::LiveSession, ToolError> {
+fn take(server: &mut dyn BrowserHost, key: &str) -> Result<crate::host::LiveSession, ToolError> {
     server.take_session(key)
 }
 
-fn keep(server: &mut Server, key: &str, mut session: crate::server::LiveSession) {
+fn keep(server: &mut dyn BrowserHost, key: &str, mut session: crate::host::LiveSession) {
     // Events that arrived during the call are buffered for the diagnostics
     // tools (browser_read_console / browser_read_network).
     let events = session.transport_mut().drain_events();
@@ -281,7 +285,7 @@ fn keep(server: &mut Server, key: &str, mut session: crate::server::LiveSession)
     server.keep_session(key, session);
 }
 
-fn navigate(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn navigate(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let url = req_str(arguments, "url")?;
     check_navigation(server, url)?;
@@ -299,7 +303,7 @@ fn navigate(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> 
     outcome.map_err(browser_err)
 }
 
-fn new_tab(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn new_tab(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let url = opt_str(arguments, "url")?.unwrap_or("about:blank");
     check_navigation(server, url)?;
@@ -307,7 +311,7 @@ fn new_tab(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
 }
 
 /// Create the target, point this endpoint's session at it, keep it.
-fn new_tab_at(server: &mut Server, endpoint: &str, url: &str) -> Result<Value, ToolError> {
+fn new_tab_at(server: &mut dyn BrowserHost, endpoint: &str, url: &str) -> Result<Value, ToolError> {
     let target = create_target(endpoint, url, true).map_err(browser_err)?;
     server.set_current_tab(endpoint, &target.ws_url);
     let mut session = take(server, &target.ws_url)?;
@@ -320,7 +324,7 @@ fn new_tab_at(server: &mut Server, endpoint: &str, url: &str) -> Result<Value, T
     }))
 }
 
-fn go_back(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn go_back(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
@@ -410,7 +414,7 @@ impl WaitFor {
     /// a `text` part was given. Returns (holds, current url).
     fn look(
         &self,
-        session: &mut crate::server::LiveSession,
+        session: &mut crate::host::LiveSession,
     ) -> Result<(bool, Option<String>), ToolError> {
         session.observe().map_err(browser_err)?;
         let url = session.page().and_then(|p| p.url().map(str::to_owned));
@@ -473,7 +477,7 @@ fn collapse_label(label: &str) -> String {
 /// With no condition: sleep `seconds` (default 3). With `text`, `url`,
 /// `control`, `gone`, or `load`: observe about every 200 ms until the condition holds or
 /// `seconds` (default 10) runs out. Both are capped at 60 s. Never acts.
-fn wait(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn wait(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let until = WaitFor::parse(arguments)?;
     let default = if until.is_some() { 10.0 } else { 3.0 };
     let seconds = opt_f64(arguments, "seconds")?.unwrap_or(default);
@@ -548,7 +552,7 @@ fn element_json(index: usize, region: &InteractionRegion) -> Value {
     })
 }
 
-fn get_state(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn get_state(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let text = match opt_str(arguments, "format")?.unwrap_or("text") {
         "text" => true,
@@ -597,7 +601,7 @@ fn get_state(server: &mut Server, arguments: &Value) -> Result<Value, ToolError>
     }))
 }
 
-fn get_html(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn get_html(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
@@ -609,7 +613,7 @@ fn get_html(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> 
     outcome
 }
 
-fn get_text(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn get_text(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
@@ -621,7 +625,7 @@ fn get_text(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> 
     outcome
 }
 
-fn screenshot(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn screenshot(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
@@ -650,7 +654,7 @@ fn save_artifact(mut body: Value, field: &str, path: Option<&str>) -> Result<Val
     Ok(body)
 }
 
-fn scroll(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn scroll(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let down = opt_bool(arguments, "down")?.unwrap_or(true);
     let pages = opt_f64(arguments, "pages")?.unwrap_or(1.0);
@@ -675,7 +679,7 @@ fn scroll(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
 /// a page that drifted between get_state and this call refuses, it does not
 /// click the wrong element.
 fn gated_input(
-    server: &mut Server,
+    server: &mut dyn BrowserHost,
     arguments: &Value,
     input_kind: &str,
 ) -> Result<Value, ToolError> {
@@ -777,7 +781,7 @@ fn refusal_for(reason: GuardReason, label: &str, url: Option<&str>) -> ToolError
 /// `verify: true`: settle, observe again, and name what the input did
 /// (the agent's verification mapping: a typed value is read back).
 fn verify_after(
-    session: &mut crate::server::LiveSession,
+    session: &mut crate::host::LiveSession,
     done: &ultra_instinct_agent::Executed,
     input: &Input,
 ) -> Result<&'static str, ToolError> {
@@ -800,11 +804,11 @@ fn verify_after(
     Ok(kind.as_str())
 }
 
-fn click(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn click(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     gated_input(server, arguments, "click")
 }
 
-fn type_text(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn type_text(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     gated_input(server, arguments, "type")
 }
 
@@ -817,9 +821,9 @@ fn type_text(server: &mut Server, arguments: &Value) -> Result<Value, ToolError>
 /// press (no I/O), strictly smaller than the executor's mint→re-observe
 /// window. A second observe would buy executor parity at ~2× observe cost.
 fn gated_press_at(
-    server: &mut Server,
+    server: &mut dyn BrowserHost,
     arguments: &Value,
-    mut press: impl FnMut(&mut crate::server::LiveSession, &RegionId) -> Result<(), BrowserError>,
+    mut press: impl FnMut(&mut crate::host::LiveSession, &RegionId) -> Result<(), BrowserError>,
 ) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let index = opt_index(arguments, "index")?
@@ -874,7 +878,7 @@ fn gated_press_at(
 }
 
 fn gated_press(
-    server: &mut Server,
+    server: &mut dyn BrowserHost,
     arguments: &Value,
     button: &'static str,
     count: u32,
@@ -886,7 +890,7 @@ fn gated_press(
 
 /// Hover resolves the index on the fresh manifold and moves the pointer —
 /// no press, so no ticket (it reveals state but commits no mutation).
-fn hover(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn hover(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let index = opt_index(arguments, "index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".into()))?;
@@ -914,7 +918,7 @@ fn hover(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
 }
 
 /// Element-to-element drag by index (`from_index` → `to_index`).
-fn drag(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn drag(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let from = opt_index(arguments, "from_index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `from_index`".into()))?;
@@ -999,7 +1003,11 @@ fn drag(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     outcome
 }
 
-fn send_key(server: &mut Server, arguments: &Value, hold_ms: u64) -> Result<Value, ToolError> {
+fn send_key(
+    server: &mut dyn BrowserHost,
+    arguments: &Value,
+    hold_ms: u64,
+) -> Result<Value, ToolError> {
     // With an index the key goes to that element as a ticketed KEY.
     if hold_ms == 0 && arguments.get("index").is_some_and(|v| !v.is_null()) {
         return gated_input(server, arguments, "key");
@@ -1016,7 +1024,7 @@ fn send_key(server: &mut Server, arguments: &Value, hold_ms: u64) -> Result<Valu
     outcome
 }
 
-fn hold_key(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn hold_key(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let hold_ms = opt_usize(arguments, "hold_ms")?
         .map(|ms| ms as u64)
         .or_else(|| {
@@ -1029,7 +1037,7 @@ fn hold_key(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> 
     send_key(server, arguments, hold_ms)
 }
 
-fn file_upload(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn file_upload(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let mut files: Vec<String> = Vec::new();
     if let Some(path) = opt_str(arguments, "path")? {
         files.push(path.to_owned());
@@ -1056,7 +1064,7 @@ fn file_upload(server: &mut Server, arguments: &Value) -> Result<Value, ToolErro
     })
 }
 
-fn save_as_pdf(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn save_as_pdf(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let landscape = opt_bool(arguments, "landscape")?.unwrap_or(false);
     let print_background = opt_bool(arguments, "print_background")?.unwrap_or(false);
@@ -1071,7 +1079,10 @@ fn save_as_pdf(server: &mut Server, arguments: &Value) -> Result<Value, ToolErro
     save_artifact(outcome?, "data", opt_str(arguments, "path")?)
 }
 
-fn get_dropdown_options(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn get_dropdown_options(
+    server: &mut dyn BrowserHost,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let index = opt_index(arguments, "index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".into()))?;
@@ -1109,7 +1120,7 @@ fn get_dropdown_options(server: &mut Server, arguments: &Value) -> Result<Value,
     outcome
 }
 
-fn search(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn search(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let query = req_str(arguments, "query")?;
     let encoded: String = query
         .bytes()
@@ -1126,7 +1137,7 @@ fn search(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     navigate(server, &args)
 }
 
-fn zoom(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn zoom(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let factor = match opt_f64(arguments, "factor")? {
         Some(f) => f,
@@ -1190,7 +1201,7 @@ fn find_tab<'a>(
     }
 }
 
-fn switch_tab(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn switch_tab(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let tab_id = req_str(arguments, "tab_id")?;
     let targets = page_targets(&endpoint).map_err(browser_err)?;
@@ -1200,7 +1211,7 @@ fn switch_tab(server: &mut Server, arguments: &Value) -> Result<Value, ToolError
     Ok(json!({"active_tab": target.target_id, "url": target.url}))
 }
 
-fn close_tab(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn close_tab(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let tab_id = req_str(arguments, "tab_id")?;
     let targets = page_targets(&endpoint).map_err(browser_err)?;
@@ -1225,7 +1236,7 @@ fn close_tab(server: &mut Server, arguments: &Value) -> Result<Value, ToolError>
 
 /// `browser_exec` / `browser_javascript_exec`: Runtime.evaluate, awaitPromise,
 /// returnByValue — the raw CDP escape hatch browser-use exposes.
-fn exec(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn exec(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let expression = opt_str(arguments, "script")?
         .or(opt_str(arguments, "expression")?)
@@ -1258,7 +1269,7 @@ const EXTRACT_JS: &str = r#"(() => {
   return out.join('\n').slice(0, 30000);
 })()"#;
 
-fn extract_content(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn extract_content(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
@@ -1271,7 +1282,7 @@ fn extract_content(server: &mut Server, arguments: &Value) -> Result<Value, Tool
 }
 
 /// Scroll the element at `index` into view via its `data-hu-k` identity.
-fn scroll_to(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn scroll_to(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let index = opt_index(arguments, "index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".to_owned()))?;
@@ -1299,7 +1310,7 @@ fn scroll_to(server: &mut Server, arguments: &Value) -> Result<Value, ToolError>
 }
 
 /// Filter the interactive index by label text and/or role.
-fn find(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn find(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let text = opt_str(arguments, "text")?
         .or(opt_str(arguments, "query")?)
@@ -1340,9 +1351,9 @@ fn find(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
 
 /// Lazily enable a diagnostic domain on the session's tab.
 fn enable_diagnostics(
-    server: &mut Server,
+    server: &mut dyn BrowserHost,
     key: &str,
-    session: &mut crate::server::LiveSession,
+    session: &mut crate::host::LiveSession,
     bit: u8,
     domains: &[&str],
 ) -> Result<(), ToolError> {
@@ -1360,7 +1371,7 @@ fn enable_diagnostics(
 }
 
 /// Console + log entries buffered since the last read (drains the buffer).
-fn read_console(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn read_console(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
@@ -1442,7 +1453,7 @@ fn console_entry(event: &ultra_instinct_cdp::CdpEvent) -> Option<Value> {
 }
 
 /// Network entries buffered since the last read, aggregated by requestId.
-fn read_network(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn read_network(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
