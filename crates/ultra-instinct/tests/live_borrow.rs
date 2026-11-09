@@ -664,13 +664,16 @@ fn network_block_unblock_and_a_redacted_har() {
         .flatten()
         .filter_map(|h| h["name"].as_str().map(str::to_ascii_lowercase))
         .collect();
-    // Authorization is listed, masked. Chrome's `requestWillBeSent` carries
-    // no Cookie header (only `requestWillBeSentExtraInfo` does, which the
-    // HAR does not read), so the cookie is absent rather than masked; the
-    // text check above proves its value never reaches the file.
+    // Authorization comes from `requestWillBeSent`; Cookie only from
+    // `requestWillBeSentExtraInfo`, which the HAR merges in. Both are
+    // listed, and the loop above proves both are masked.
     assert!(
         names.iter().any(|n| n == "authorization"),
         "the authorization header is listed (masked): {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n == "cookie"),
+        "the cookie header is listed (masked): {names:?}"
     );
     // The server did get the real values.
     let sent = server.requests("/net?har");

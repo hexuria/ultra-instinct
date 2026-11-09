@@ -54,10 +54,14 @@ const SECRET_HEADERS: [&str; 4] = [
 ];
 const REDACTED: &str = "•••";
 
-/// Network events a HAR is built from.
-const HAR_METHODS: [&str; 4] = [
+/// Network events a HAR is built from. The `*ExtraInfo` events carry the
+/// headers Chrome adds on the wire (`Cookie`, `Set-Cookie`), which the main
+/// events leave out; they are merged in and masked like the rest.
+const HAR_METHODS: [&str; 6] = [
     "Network.requestWillBeSent",
+    "Network.requestWillBeSentExtraInfo",
     "Network.responseReceived",
+    "Network.responseReceivedExtraInfo",
     "Network.loadingFinished",
     "Network.loadingFailed",
 ];
@@ -912,6 +916,10 @@ struct Pending {
     encoded_length: Option<f64>,
     error: Option<String>,
     resource_type: Option<String>,
+    /// Headers from `requestWillBeSentExtraInfo` (the wire set, with `Cookie`).
+    extra_request_headers: Option<Value>,
+    /// Headers from `responseReceivedExtraInfo` (the wire set, with `Set-Cookie`).
+    extra_response_headers: Option<Value>,
 }
 
 /// HAR 1.2 from buffered `Network.*` events. Bodies are left out; cookie
@@ -919,6 +927,14 @@ struct Pending {
 fn build_har(events: &[CdpEvent]) -> Value {
     let mut done: Vec<Pending> = Vec::new();
     let mut open: BTreeMap<String, usize> = BTreeMap::new();
+    // Every hop of a requestId (redirects reuse it), and the ExtraInfo
+    // header sets in arrival order. Chrome may send an ExtraInfo event
+    // before or after its main event, so they are paired by position once
+    // all events are read: the n-th request / response ExtraInfo of an id
+    // belongs to its n-th hop.
+    let mut hops: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    let mut request_extra: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    let mut response_extra: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     for event in events {
         let params = &event.params;
         let Some(id) = params.get("requestId").and_then(Value::as_str) else {
@@ -948,6 +964,21 @@ fn build_har(events: &[CdpEvent]) -> Value {
                     ..Pending::default()
                 });
                 open.insert(id.to_owned(), done.len() - 1);
+                hops.entry(id.to_owned()).or_default().push(done.len() - 1);
+            }
+            "Network.requestWillBeSentExtraInfo" => {
+                let headers = params.get("headers").cloned().unwrap_or(Value::Null);
+                request_extra
+                    .entry(id.to_owned())
+                    .or_default()
+                    .push(headers);
+            }
+            "Network.responseReceivedExtraInfo" => {
+                let headers = params.get("headers").cloned().unwrap_or(Value::Null);
+                response_extra
+                    .entry(id.to_owned())
+                    .or_default()
+                    .push(headers);
             }
             "Network.responseReceived" => {
                 if let Some(&slot) = open.get(id) {
@@ -977,6 +1008,16 @@ fn build_har(events: &[CdpEvent]) -> Value {
             _ => {}
         }
     }
+    for (id, slots) in &hops {
+        let requests = request_extra.remove(id).unwrap_or_default();
+        let responses = response_extra.remove(id).unwrap_or_default();
+        for (&slot, headers) in slots.iter().zip(requests) {
+            done[slot].extra_request_headers = Some(headers);
+        }
+        for (&slot, headers) in slots.iter().zip(responses) {
+            done[slot].extra_response_headers = Some(headers);
+        }
+    }
     let entries: Vec<Value> = done.iter().map(har_entry).collect();
     json!({
         "log": {
@@ -999,7 +1040,12 @@ fn har_entry(p: &Pending) -> Value {
     let response = p.response.as_ref().unwrap_or(&Value::Null);
     let http_version = http_version(response.get("protocol").and_then(Value::as_str));
     let status = response.get("status").and_then(Value::as_i64).unwrap_or(0);
-    let response_headers = har_headers(response.get("headers"));
+    let response_headers = har_headers(
+        with_wire_headers(response.get("headers"), p.extra_response_headers.as_ref()).as_ref(),
+    );
+    let request_headers = har_headers(
+        with_wire_headers(p.request.get("headers"), p.extra_request_headers.as_ref()).as_ref(),
+    );
     let redirect_url = response_headers
         .iter()
         .find(|h| {
@@ -1018,7 +1064,7 @@ fn har_entry(p: &Pending) -> Value {
             "url": url,
             "httpVersion": http_version,
             "cookies": [],
-            "headers": har_headers(p.request.get("headers")),
+            "headers": request_headers,
             "queryString": query_string(url),
             "headersSize": -1,
             "bodySize": -1,
@@ -1062,6 +1108,25 @@ fn http_version(protocol: Option<&str>) -> String {
         Some(p) if p.to_ascii_lowercase().starts_with("http/") => p.to_ascii_uppercase(),
         Some(p) => p.to_owned(),
     }
+}
+
+/// The main event's headers plus each ExtraInfo header whose name
+/// (case-insensitive) the main event lacks, such as `Cookie` and
+/// `Set-Cookie`. A main-event header is never replaced.
+fn with_wire_headers(main: Option<&Value>, wire: Option<&Value>) -> Option<Value> {
+    let Some(Value::Object(wire)) = wire else {
+        return main.cloned();
+    };
+    let mut merged = match main {
+        Some(Value::Object(map)) => map.clone(),
+        _ => serde_json::Map::new(),
+    };
+    for (name, value) in wire {
+        if !merged.keys().any(|k| k.eq_ignore_ascii_case(name)) {
+            merged.insert(name.clone(), value.clone());
+        }
+    }
+    Some(Value::Object(merged))
 }
 
 /// CDP `{name: value}` headers as HAR `[{name, value}]`, one entry per line
@@ -1194,6 +1259,130 @@ mod tests {
         assert_eq!(iso_8601(0.0), "1970-01-01T00:00:00.000Z");
         assert_eq!(iso_8601(1_700_000_000.123), "2023-11-14T22:13:20.123Z");
         assert_eq!(iso_8601(951_782_400.0), "2000-02-29T00:00:00.000Z");
+    }
+
+    fn ev(method: &str, params: Value) -> CdpEvent {
+        CdpEvent {
+            method: method.to_owned(),
+            params,
+        }
+    }
+
+    /// Record `events` through a running HAR tap, then build the HAR.
+    fn har_of(events: &[CdpEvent]) -> Value {
+        let mut env = EnvState::default();
+        env.har.insert("k".to_owned(), HarTap::default());
+        env.tee("k", events);
+        build_har(&env.har["k"].events)
+    }
+
+    fn values(headers: &Value, name: &str) -> Vec<String> {
+        headers
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|h| h["name"].as_str().unwrap().eq_ignore_ascii_case(name))
+            .map(|h| h["value"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn extra_info_cookie_headers_are_listed_masked() {
+        let events = [
+            // Chrome may send the request ExtraInfo before its main event.
+            ev(
+                "Network.requestWillBeSentExtraInfo",
+                json!({"requestId": "r1", "headers": {
+                    "cookie": "sid=wire-secret", "accept": "*/*", "host": "a.test"
+                }}),
+            ),
+            ev(
+                "Network.requestWillBeSent",
+                json!({"requestId": "r1", "timestamp": 1.0, "wallTime": 1.0,
+                    "request": {"url": "https://a.test/", "method": "GET",
+                        "headers": {"Accept": "text/html"}}}),
+            ),
+            ev(
+                "Network.responseReceived",
+                json!({"requestId": "r1", "timestamp": 1.1,
+                    "response": {"status": 200, "headers": {"Content-Type": "text/html"}}}),
+            ),
+            // ... and the response ExtraInfo after its main event.
+            ev(
+                "Network.responseReceivedExtraInfo",
+                json!({"requestId": "r1", "headers": {
+                    "set-cookie": "sid=new-secret\ntheme=dark", "content-type": "text/html"
+                }}),
+            ),
+        ];
+        let har = har_of(&events);
+        let text = har.to_string();
+        assert!(
+            !text.contains("wire-secret")
+                && !text.contains("new-secret")
+                && !text.contains("theme=dark")
+        );
+        let entry = &har["log"]["entries"][0];
+        let request = &entry["request"]["headers"];
+        assert_eq!(values(request, "cookie"), ["•••"]);
+        // The main event's header wins; the wire duplicate is not added.
+        assert_eq!(values(request, "accept"), ["text/html"]);
+        assert_eq!(values(request, "host"), ["a.test"]);
+        let response = &entry["response"]["headers"];
+        assert_eq!(values(response, "set-cookie"), ["•••", "•••"]);
+        assert_eq!(values(response, "content-type"), ["text/html"]);
+    }
+
+    #[test]
+    fn extra_info_pairs_with_redirect_hops_in_order() {
+        let req = |url: &str, ts: f64, redirect: Option<Value>| {
+            let mut params = json!({"requestId": "r", "timestamp": ts, "wallTime": ts,
+                "request": {"url": url, "method": "GET", "headers": {}}});
+            if let Some(r) = redirect {
+                params["redirectResponse"] = r;
+            }
+            ev("Network.requestWillBeSent", params)
+        };
+        let req_extra = |cookie: &str| {
+            ev(
+                "Network.requestWillBeSentExtraInfo",
+                json!({"requestId": "r", "headers": {"cookie": cookie, "x-hop": cookie}}),
+            )
+        };
+        let resp_extra = |hop: &str| {
+            ev(
+                "Network.responseReceivedExtraInfo",
+                json!({"requestId": "r", "headers": {"set-cookie": "s=1", "x-hop": hop}}),
+            )
+        };
+        let events = [
+            req("https://a.test/old", 1.0, None),
+            req_extra("one"),
+            resp_extra("one"),
+            req(
+                "https://a.test/new",
+                2.0,
+                Some(json!({"status": 302, "headers": {"Location": "/new"}})),
+            ),
+            req_extra("two"),
+            ev(
+                "Network.responseReceived",
+                json!({"requestId": "r", "timestamp": 2.5,
+                    "response": {"status": 200, "headers": {}}}),
+            ),
+            resp_extra("two"),
+        ];
+        let har = har_of(&events);
+        let entries = har["log"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        for (entry, hop) in entries.iter().zip(["one", "two"]) {
+            assert_eq!(values(&entry["request"]["headers"], "x-hop"), [hop]);
+            assert_eq!(values(&entry["request"]["headers"], "cookie"), ["•••"]);
+            assert_eq!(values(&entry["response"]["headers"], "x-hop"), [hop]);
+            assert_eq!(values(&entry["response"]["headers"], "set-cookie"), ["•••"]);
+        }
+        assert_eq!(entries[0]["response"]["status"], 302);
+        assert_eq!(entries[0]["response"]["redirectURL"], "/new");
     }
 
     #[test]
