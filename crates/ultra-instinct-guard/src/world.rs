@@ -2,8 +2,7 @@
 //!
 //! A text/role match is not enough to allow a click. A "Delete" button under
 //! an open modal matches "Delete" as well as it did before the modal opened,
-//! and a script click (`element.click()`, which Browser Use, CUA wrappers,
-//! and our own fixture press all reach for) fires on it anyway. A person could
+//! and a script click (`element.click()`) fires on it anyway. A person could
 //! not click it. This module decides which regions the front layer blocks.
 //!
 //! Signals, all already in the manifold:
@@ -34,7 +33,7 @@
 //! custom backdrops therefore refuse as `occluded` rather than as dialog
 //! `front-layer`.
 //!
-//! Known gaps (see docs/DECISIONS.md): stacking compares each kept region's
+//! Known gaps: stacking compares each kept region's
 //! own style, not the full ancestor stacking-context chain through non-kept
 //! nodes; canvas / cross-origin iframes / closed shadows are invisible; a
 //! native `<dialog>` opened with `showModal()` without `aria-modal` is modal
@@ -92,7 +91,7 @@ impl FrontLayer {
 ///
 /// Compared fields:
 ///
-/// - [`Self::focused`]: accessibility focus (cargo-runner cursor);
+/// - [`Self::focused`]: accessibility focus;
 /// - [`Self::front_layer`]: open dialogs;
 /// - [`Self::clickable`]: clickable region ids present;
 /// - [`Self::occluded`]: regions already marked occluded by observe (hit-test

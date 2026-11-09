@@ -1,11 +1,4 @@
 //! Issue and revalidate [`ActionTicket`]s.
-//!
-//! Hard-gate direction (not fully landed): treat occluded / front-layer /
-//! disabled / hidden / wrong ancestry / stale ticket as *impossible* before
-//! ranking, keep blocked candidates as evidence, and rank only the viable set.
-//! Until that split lands, [`crate::guard`] still mixes some safety into
-//! ranking (including `buried_better_label`); the ticket is still the lease
-//! the executor must consume.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -187,8 +180,7 @@ impl TicketLedger {
     }
 }
 
-/// Host boundary, one-shot. Same order as `ultra_instinct_agent::execute_ticketed`
-/// (ADR 0003 §1, ADR 0005):
+/// Host boundary, one-shot. Same order as `ultra_instinct_agent::execute_ticketed`:
 ///
 /// 1. refuse a ticket the ledger already consumed (`ticket-consumed`);
 /// 2. [`revalidate`] against `manifold` (the host's observation **now**);
@@ -380,7 +372,7 @@ mod tests {
         ticket
     }
 
-    /// R1 regression: a press that fails after the lease was taken must not be
+    /// A press that fails after the lease was taken must not be
     /// retryable with the same ticket (consume happens before press).
     #[test]
     fn consume_ticket_once_marks_consumed_before_press_so_failed_press_cannot_retry() {

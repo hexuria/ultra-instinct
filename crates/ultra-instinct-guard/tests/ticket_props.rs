@@ -1,6 +1,6 @@
 //! Property / adversarial tests for the agent ticket world (`of_target`).
 //!
-//! Owners (impeccable audit R5, baseline `87ffc2d`):
+//! This file owns:
 //!
 //! - the neighborhood radius boundary (`NEIGHBOR_RADIUS_PX` = 160, inclusive);
 //! - focus is global in the target-scoped world: a focus-only change always

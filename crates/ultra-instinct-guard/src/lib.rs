@@ -1,4 +1,4 @@
-//! Action firewall decisions for ultra-instinct.
+//! Hard gate, tickets, and host guard decisions for ultra-instinct.
 //!
 //! [`gate()`](fn@crate::gate) is the one hard gate: the agent path and every
 //! MCP / CLI preflight call refuse disabled, readonly, hidden, occluded,
@@ -63,7 +63,7 @@ pub use world::{
 /// Most matches a decision lists as candidates.
 const MAX_CANDIDATES: usize = 5;
 
-/// What the host asked to do. Click is the only action the guard evaluates today.
+/// What the host asked to do. Click is the only action the guard evaluates.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GuardRequest {
     action: Action,
@@ -145,8 +145,8 @@ impl GuardRequest {
 pub enum GuardError {
     Confidence(ultra_instinct_protocol::ProtocolError),
     UnsupportedAction(Action),
-    /// The query used a field only the removed matcher understood (`near` or
-    /// `position`).
+    /// The query used a field the exact-label guard does not support (`near`
+    /// or `position`).
     RemovedQueryField(&'static str),
 }
 
