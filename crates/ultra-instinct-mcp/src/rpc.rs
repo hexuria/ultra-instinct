@@ -8,8 +8,8 @@ use std::io::{self, BufRead, Write};
 
 use serde_json::{json, Value};
 
-use crate::error::ToolError;
 use crate::server::Server;
+use crate::ToolError;
 use crate::TOOLS;
 
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -169,11 +169,7 @@ fn tools_list() -> Value {
 
 fn tool_spec(name: &str) -> Value {
     if name.starts_with("browser_") {
-        let (description, properties, required) = if crate::browser_env::ENV_TOOLS.contains(&name) {
-            crate::browser_env::spec(name)
-        } else {
-            crate::browser_state::spec(name).unwrap_or_else(|| crate::browser_extra::spec(name))
-        };
+        let (description, properties, required) = ultra_instinct_browser_tools::spec(name);
         return json!({
             "name": name,
             "description": description,

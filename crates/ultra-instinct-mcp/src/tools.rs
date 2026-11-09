@@ -20,8 +20,10 @@ use ultra_instinct_guard::{guard, with_front_layer, FrontLayer, GuardRequest, Wo
 use ultra_instinct_observe::{diff, history::SnapshotId};
 use ultra_instinct_protocol::GuardDecision;
 
-use crate::error::ToolError;
-use crate::server::Server;
+use ultra_instinct_browser_tools::BrowserHost as _;
+
+use crate::server::{Host, Server};
+use crate::ToolError;
 
 const PRODUCT: &str = "ultra-instinct";
 
@@ -87,14 +89,8 @@ pub(crate) fn dispatch(
     {
         return Err(ToolError::CoordinatesNotAccepted);
     }
-    if crate::browser_env::ENV_TOOLS.contains(&name) {
-        return crate::browser_env::call(server, name, arguments);
-    }
-    if let Some(result) = crate::browser_state::call(server, name, arguments) {
+    if let Some(result) = ultra_instinct_browser_tools::call(&mut Host(server), name, arguments) {
         return result;
-    }
-    if name.starts_with("browser_") {
-        return crate::browser_extra::call(server, name, arguments);
     }
     match name {
         "navigate" => Err(ToolError::GoalNotAccepted),
@@ -535,17 +531,17 @@ fn observe_origin(
     let (manifold, page) = match origin {
         Origin::Fixture(path) => load_observation(path)?,
         Origin::Cdp(url) => {
-            let mut session = server.take_session(url)?;
+            let mut session = Host(server).take_session(url)?;
             let manifold = session
                 .observe()
                 .cloned()
                 .map_err(|err| ToolError::Browser(err.to_string()))?;
             let page = session.page().cloned().unwrap_or_else(PageState::blank);
-            server.keep_session(url, session);
+            Host(server).keep_session(url, session);
             (manifold, page)
         }
     };
-    let id = server.record(&origin_key(origin), manifold.clone(), page.clone());
+    let id = Host(server).record(&origin_key(origin), manifold.clone(), page.clone());
     Ok((id, manifold, page))
 }
 

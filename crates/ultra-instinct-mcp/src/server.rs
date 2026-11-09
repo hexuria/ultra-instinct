@@ -17,6 +17,7 @@ use serde_json::Value;
 use ultra_instinct_browser::{
     BrowserSession, CdpError, CdpTransport, PageState, WebSocketTransport,
 };
+use ultra_instinct_browser_tools::{BrowserHost, LiveSession, ToolState};
 use ultra_instinct_cdp::CdpEvent;
 use ultra_instinct_core::InteractionManifold;
 use ultra_instinct_guard::{Policy, TicketLedger};
@@ -24,7 +25,7 @@ use ultra_instinct_observe::history::{
     detect, HistoryError, SignedSnapshot, SnapshotId, SnapshotRing, StateSignature, TemporalSignal,
 };
 
-use crate::error::ToolError;
+use crate::ToolError;
 
 /// Live sessions kept at once. Opening another drops the oldest key.
 pub const MAX_LIVE_SESSIONS: usize = 4;
@@ -49,8 +50,6 @@ pub(crate) struct Snapshot {
 /// Opens the CDP transport for one endpoint.
 pub type CdpConnector = Box<dyn FnMut(&str) -> Result<Box<dyn CdpTransport>, CdpError>>;
 
-pub(crate) type LiveSession = BrowserSession<Box<dyn CdpTransport>>;
-
 pub struct Server {
     connector: CdpConnector,
     sessions: BTreeMap<String, LiveSession>,
@@ -66,10 +65,9 @@ pub struct Server {
     dropped: BTreeMap<String, u64>,
     /// Session key → diagnostic domains already enabled (bit0 console, bit1 network).
     domains: BTreeMap<String, u8>,
-    /// Session key → HAR tap and blocked URLs (`browser_env`).
-    pub(crate) env: crate::browser_env::EnvState,
-    /// Session key → the JavaScript dialog open on that tab (`browser_dialog`).
-    dialogs: BTreeMap<String, crate::browser_extra::Dialog>,
+    /// Session key → state the `browser_*` tools own (HAR taps, blocked
+    /// URLs, open dialogs).
+    tools: ToolState,
     /// The user's policy for navigation and presses, or why the configured
     /// one is invalid (then every navigate and press refuses).
     policy: Result<Policy, String>,
@@ -112,13 +110,6 @@ impl Server {
         self
     }
 
-    /// The policy navigation and presses run under.
-    pub(crate) fn policy(&self) -> Result<&Policy, ToolError> {
-        self.policy
-            .as_ref()
-            .map_err(|err| ToolError::InvalidArguments(err.clone()))
-    }
-
     /// A server whose `cdp` endpoints are opened by `connector`. Used by the
     /// mock environment tests; the stdio binary uses [`Server::new`].
     pub fn with_connector(
@@ -134,8 +125,7 @@ impl Server {
             events: BTreeMap::new(),
             dropped: BTreeMap::new(),
             domains: BTreeMap::new(),
-            env: Default::default(),
-            dialogs: BTreeMap::new(),
+            tools: ToolState::default(),
             policy: Ok(Policy::default()),
         }
     }
@@ -148,19 +138,6 @@ impl Server {
     /// Run one tool against this server's state.
     pub fn call_tool(&mut self, name: &str, arguments: &Value) -> Result<Value, ToolError> {
         crate::tools::dispatch(self, name, arguments)
-    }
-
-    pub(crate) fn record(
-        &mut self,
-        origin: &str,
-        manifold: InteractionManifold,
-        page: PageState,
-    ) -> SnapshotId {
-        self.history.push(Snapshot {
-            origin: origin.to_owned(),
-            manifold,
-            page,
-        })
     }
 
     pub(crate) fn snapshot(&self, id: u64) -> Result<&Snapshot, ToolError> {
@@ -196,40 +173,13 @@ impl Server {
             .map(|(id, _)| id)
     }
 
-    /// The kept session for `url`, or a fresh connection.
-    pub(crate) fn take_session(&mut self, url: &str) -> Result<LiveSession, ToolError> {
-        if let Some(session) = self.sessions.remove(url) {
-            self.session_order.retain(|key| key != url);
-            return Ok(session);
-        }
-        let transport = (self.connector)(url).map_err(|err| ToolError::Browser(err.to_string()))?;
-        Ok(BrowserSession::new(transport))
-    }
-
     /// Endpoints with a kept live session, oldest first.
     pub fn live_sessions(&self) -> &[String] {
         &self.session_order
     }
 
-    /// Keep `session` for the next call on `url`.
-    pub(crate) fn keep_session(&mut self, url: &str, session: LiveSession) {
-        if self.sessions.len() >= MAX_LIVE_SESSIONS && !self.sessions.contains_key(url) {
-            let oldest = self.session_order.remove(0);
-            self.drop_keyed_state(&oldest);
-        }
-        self.session_order.retain(|key| key != url);
-        self.session_order.push(url.to_owned());
-        self.sessions.insert(url.to_owned(), session);
-    }
-
-    /// Drop a kept session without keeping a replacement. Also clears the
-    /// key's ticket ledger, buffered events, and diagnostic-domain bits —
-    /// they describe the dropped transport and must not outlive it.
-    pub(crate) fn drop_session(&mut self, url: &str) {
-        self.drop_keyed_state(url);
-    }
-
-    /// Remove `url` from the sessions map/order and every per-key state map.
+    /// Remove `url` from the sessions map/order and every per-key host state
+    /// map. [`ToolState`] is the trait's to drop (`BrowserHost::drop_session`).
     fn drop_keyed_state(&mut self, url: &str) {
         self.sessions.remove(url);
         self.session_order.retain(|key| key != url);
@@ -237,79 +187,136 @@ impl Server {
         self.events.remove(url);
         self.domains.remove(url);
         self.dropped.remove(url);
-        self.env.remove(url);
-        self.dialogs.remove(url);
+    }
+}
+
+/// The [`BrowserHost`] the `browser_*` tools run on: a crate-private view of
+/// a [`Server`]. `Server` itself does not implement the trait, so its ledger,
+/// event and session mutators stay out of the public API (one-shot ledger,
+/// anti-drift #4).
+pub(crate) struct Host<'a>(pub(crate) &'a mut Server);
+
+impl BrowserHost for Host<'_> {
+    fn record(
+        &mut self,
+        origin: &str,
+        manifold: InteractionManifold,
+        page: PageState,
+    ) -> SnapshotId {
+        self.0.history.push(Snapshot {
+            origin: origin.to_owned(),
+            manifold,
+            page,
+        })
+    }
+
+    /// The kept session for `url`, or a fresh connection.
+    fn take_session(&mut self, url: &str) -> Result<LiveSession, ToolError> {
+        let server = &mut *self.0;
+        if let Some(session) = server.sessions.remove(url) {
+            server.session_order.retain(|key| key != url);
+            return Ok(session);
+        }
+        let transport =
+            (server.connector)(url).map_err(|err| ToolError::Browser(err.to_string()))?;
+        Ok(BrowserSession::new(transport))
+    }
+
+    /// Keep `session` for the next call on `url`, evicting the oldest key
+    /// past [`MAX_LIVE_SESSIONS`].
+    fn keep_session_raw(&mut self, url: &str, session: LiveSession) -> Option<String> {
+        let server = &mut *self.0;
+        let mut evicted = None;
+        if server.sessions.len() >= MAX_LIVE_SESSIONS && !server.sessions.contains_key(url) {
+            let oldest = server.session_order.remove(0);
+            server.drop_keyed_state(&oldest);
+            evicted = Some(oldest);
+        }
+        server.session_order.retain(|key| key != url);
+        server.session_order.push(url.to_owned());
+        server.sessions.insert(url.to_owned(), session);
+        evicted
+    }
+
+    /// Drop a kept session without keeping a replacement. Also clears the
+    /// key's ticket ledger, buffered events, and diagnostic-domain bits —
+    /// they describe the dropped transport and must not outlive it.
+    fn drop_session_raw(&mut self, url: &str) {
+        self.0.drop_keyed_state(url);
     }
 
     /// Page-websocket url `browser_*` tools drive for `endpoint`, when bound.
-    pub(crate) fn current_tab(&self, endpoint: &str) -> Option<&str> {
-        self.tab_binding.get(endpoint).map(String::as_str)
+    fn current_tab(&self, endpoint: &str) -> Option<&str> {
+        self.0.tab_binding.get(endpoint).map(String::as_str)
     }
 
     /// Point `browser_*` calls on `endpoint` at this tab's websocket.
-    pub(crate) fn set_current_tab(&mut self, endpoint: &str, ws_url: &str) {
-        self.tab_binding
+    fn set_current_tab(&mut self, endpoint: &str, ws_url: &str) {
+        self.0
+            .tab_binding
             .insert(endpoint.to_owned(), ws_url.to_owned());
     }
 
     /// Unbind `endpoint` (falls back to the endpoint's default page target).
-    pub(crate) fn clear_current_tab(&mut self, endpoint: &str) {
-        self.tab_binding.remove(endpoint);
+    fn clear_current_tab(&mut self, endpoint: &str) {
+        self.0.tab_binding.remove(endpoint);
     }
 
     /// The ticket ledger for a session key, fresh when absent.
-    pub(crate) fn take_ledger(&mut self, key: &str) -> TicketLedger {
-        self.ledgers.remove(key).unwrap_or_default()
+    fn take_ledger(&mut self, key: &str) -> TicketLedger {
+        self.0.ledgers.remove(key).unwrap_or_default()
     }
 
     /// Put the ledger back after a ticketed input.
-    pub(crate) fn keep_ledger(&mut self, key: &str, ledger: TicketLedger) {
-        self.ledgers.insert(key.to_owned(), ledger);
+    fn keep_ledger(&mut self, key: &str, ledger: TicketLedger) {
+        self.0.ledgers.insert(key.to_owned(), ledger);
     }
 
-    /// Buffer events drained from a session's transport under `key`.
-    pub(crate) fn push_events(&mut self, key: &str, events: Vec<CdpEvent>) {
-        self.env.tee(key, &events);
-        let buffer = self.events.entry(key.to_owned()).or_default();
+    /// Buffer events under `key`, oldest dropped past the cap.
+    fn push_events_raw(&mut self, key: &str, events: Vec<CdpEvent>) {
+        let server = &mut *self.0;
+        let buffer = server.events.entry(key.to_owned()).or_default();
         buffer.extend(events);
         if buffer.len() > MAX_BUFFERED_EVENTS {
             let drop = buffer.len() - MAX_BUFFERED_EVENTS;
             buffer.drain(..drop);
-            *self.dropped.entry(key.to_owned()).or_default() += drop as u64;
+            *server.dropped.entry(key.to_owned()).or_default() += drop as u64;
         }
     }
 
     /// Events dropped for `key` by the buffer cap so far.
-    pub(crate) fn dropped_events(&self, key: &str) -> u64 {
-        self.dropped.get(key).copied().unwrap_or(0)
+    fn dropped_events(&self, key: &str) -> u64 {
+        self.0.dropped.get(key).copied().unwrap_or(0)
     }
 
     /// Drain all buffered events for `key`.
-    pub(crate) fn take_events(&mut self, key: &str) -> Vec<CdpEvent> {
-        self.events.remove(key).unwrap_or_default()
+    fn take_events(&mut self, key: &str) -> Vec<CdpEvent> {
+        self.0.events.remove(key).unwrap_or_default()
     }
 
     /// Diagnostic domains already enabled for `key` (bit0 console, bit1 network).
-    pub(crate) fn enabled_domains(&self, key: &str) -> u8 {
-        self.domains.get(key).copied().unwrap_or(0)
-    }
-
-    /// The JavaScript dialog open on `key`'s tab, when one is.
-    pub(crate) fn dialog(&self, key: &str) -> Option<&crate::browser_extra::Dialog> {
-        self.dialogs.get(key)
-    }
-
-    /// Record (`Some`) or clear (`None`) the dialog open on `key`'s tab.
-    pub(crate) fn set_dialog(&mut self, key: &str, dialog: Option<crate::browser_extra::Dialog>) {
-        match dialog {
-            Some(dialog) => self.dialogs.insert(key.to_owned(), dialog),
-            None => self.dialogs.remove(key),
-        };
+    fn enabled_domains(&self, key: &str) -> u8 {
+        self.0.domains.get(key).copied().unwrap_or(0)
     }
 
     /// Mark a diagnostic domain bit as enabled for `key`.
-    pub(crate) fn enable_domain(&mut self, key: &str, bit: u8) {
-        *self.domains.entry(key.to_owned()).or_default() |= bit;
+    fn enable_domain(&mut self, key: &str, bit: u8) {
+        *self.0.domains.entry(key.to_owned()).or_default() |= bit;
+    }
+
+    fn policy(&self) -> Result<&Policy, ToolError> {
+        self.0
+            .policy
+            .as_ref()
+            .map_err(|err| ToolError::InvalidArguments(err.clone()))
+    }
+
+    fn tool_state(&self) -> &ToolState {
+        &self.0.tools
+    }
+
+    fn tool_state_mut(&mut self) -> &mut ToolState {
+        &mut self.0.tools
     }
 }
 

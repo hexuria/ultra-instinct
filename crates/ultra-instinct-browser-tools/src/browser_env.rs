@@ -15,7 +15,7 @@
 //! `completed` among the buffered transport events.
 //!
 //! HAR recording is a tap on the server's one event buffer
-//! ([`EnvState::tee`], called from `Server::push_events`): the tap copies
+//! ([`EnvState::tee`], called from `BrowserHost::push_events`): the tap copies
 //! Network events as they are buffered, and `browser_read_network` drains
 //! the buffer itself, so neither steals events from the other.
 
@@ -27,12 +27,12 @@ use serde_json::{json, Map, Value};
 use ultra_instinct_cdp::{CdpEvent, DEFAULT_CDP_HTTP};
 
 use crate::error::ToolError;
-use crate::server::{LiveSession, Server};
+use crate::host::{endpoint_of, keep, session_key, BrowserHost, LiveSession};
 
 /// Tool names this module serves.
 pub const ENV_TOOLS: [&str; 3] = ["browser_set", "browser_download", "browser_network"];
 
-/// Network-domain bit in `Server::enabled_domains`. Must equal
+/// Network-domain bit in `BrowserHost::enabled_domains`. Must equal
 /// `browser_tools::NETWORK_BIT`, so `Network.enable` runs once per session
 /// whichever of `browser_read_network` / these tools comes first.
 const NETWORK_BIT: u8 = 0b10;
@@ -134,7 +134,7 @@ fn normalize_name(name: &str) -> String {
 struct HarTap {
     events: Vec<CdpEvent>,
     /// Hashes of events already copied. Readers that drain the buffer put
-    /// the events they do not consume back through `Server::push_events`
+    /// the events they do not consume back through `BrowserHost::push_events`
     /// (console / network / download readers); a re-pushed event is the
     /// same event and is copied once.
     seen: BTreeSet<u64>,
@@ -149,7 +149,7 @@ fn event_hash(event: &CdpEvent) -> u64 {
     hasher.finish()
 }
 
-/// Per-session-key state for these tools. Lives on `Server` and is dropped
+/// Per-session-key state for these tools. Lives on the host and is dropped
 /// with the session key, like ledgers and buffered events.
 #[derive(Default)]
 pub(crate) struct EnvState {
@@ -187,7 +187,11 @@ impl EnvState {
 }
 
 /// Run one of [`ENV_TOOLS`].
-pub(crate) fn call(server: &mut Server, name: &str, arguments: &Value) -> Result<Value, ToolError> {
+pub(crate) fn call(
+    server: &mut dyn BrowserHost,
+    name: &str,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
     match name {
         "browser_set" => set(server, arguments),
         "browser_download" => download(server, arguments),
@@ -262,29 +266,6 @@ fn str_list(arguments: &Value, key: &str) -> Result<Option<Vec<String>>, ToolErr
 
 // ---- session plumbing (same take / keep contract as browser_tools) ---------
 
-fn endpoint_of(arguments: &Value) -> Result<String, ToolError> {
-    Ok(opt_str(arguments, "cdp")?
-        .unwrap_or(DEFAULT_CDP_HTTP)
-        .to_owned())
-}
-
-fn session_key(server: &Server, endpoint: &str) -> String {
-    server
-        .current_tab(endpoint)
-        .map(str::to_owned)
-        .unwrap_or_else(|| endpoint.to_owned())
-}
-
-/// Keep the session, buffering any events its transport saw (the buffer —
-/// and through it the HAR tap — sees every event exactly once).
-fn keep(server: &mut Server, key: &str, mut session: LiveSession) {
-    let events = session.transport_mut().drain_events();
-    if !events.is_empty() {
-        server.push_events(key, events);
-    }
-    server.keep_session(key, session);
-}
-
 /// One CDP command with JSON params (payloads are CDP arguments, never
 /// spliced into script source).
 fn send(session: &mut LiveSession, method: &str, params: Value) -> Result<String, ToolError> {
@@ -297,7 +278,7 @@ fn send(session: &mut LiveSession, method: &str, params: Value) -> Result<String
 /// `Network.enable` once per session key (lazily, shared with
 /// `browser_read_network`).
 fn ensure_network(
-    server: &mut Server,
+    server: &mut dyn BrowserHost,
     key: &str,
     session: &mut LiveSession,
 ) -> Result<(), ToolError> {
@@ -311,9 +292,9 @@ fn ensure_network(
 
 /// Take the session for `arguments`' endpoint, run `body`, keep it.
 fn with_session<R>(
-    server: &mut Server,
+    server: &mut dyn BrowserHost,
     arguments: &Value,
-    body: impl FnOnce(&mut Server, &str, &mut LiveSession) -> Result<R, ToolError>,
+    body: impl FnOnce(&mut dyn BrowserHost, &str, &mut LiveSession) -> Result<R, ToolError>,
 ) -> Result<R, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let key = session_key(server, &endpoint);
@@ -342,7 +323,7 @@ fn dimension(arguments: &Value, key: &str) -> Result<u64, ToolError> {
     Ok(value)
 }
 
-fn set(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn set(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let what = req_str(arguments, "what")?;
     match what {
         "viewport" => {
@@ -578,7 +559,7 @@ fn is_download_event(method: &str) -> bool {
 
 /// Move download events out of `key`'s buffer into `seen`; every other
 /// event goes back untouched (console / network readers still get them).
-fn scan_downloads(server: &mut Server, key: &str, seen: &mut DownloadSeen) {
+fn scan_downloads(server: &mut dyn BrowserHost, key: &str, seen: &mut DownloadSeen) {
     let mut rest = Vec::new();
     for event in server.take_events(key) {
         if !is_download_event(&event.method) {
@@ -643,7 +624,7 @@ fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::remove_file(from)
 }
 
-fn download(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn download(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     // 5, "5" or "@e5", like every other index tool.
     let index = crate::browser_extra::index_arg(arguments)? as u64;
@@ -690,7 +671,7 @@ fn download(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> 
 /// Allow downloads into `dir`, press through `browser_click`, wait for
 /// `completed`. Returns the downloaded file and its suggested name.
 fn download_into(
-    server: &mut Server,
+    server: &mut dyn BrowserHost,
     endpoint: &str,
     index: u64,
     mouse: bool,
@@ -770,7 +751,7 @@ fn download_into(
 /// request until the next call arrives. Every matching request would hang
 /// the page (and any wait on it) until then. `setBlockedURLs` makes Chrome
 /// fail matching requests itself, with nothing for us to answer.
-fn network(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
+fn network(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let action = req_str(arguments, "action")?;
     match action {
         "block" => {
@@ -778,7 +759,13 @@ fn network(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
                 .filter(|p| !p.is_empty())
                 .ok_or_else(|| bad("missing required `patterns`"))?;
             with_session(server, arguments, |server, key, session| {
-                let mut list = server.env.blocked.get(key).cloned().unwrap_or_default();
+                let mut list = server
+                    .tool_state()
+                    .env
+                    .blocked
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_default();
                 for pattern in patterns {
                     if !list.contains(&pattern) {
                         list.push(pattern);
@@ -794,6 +781,7 @@ fn network(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
                     // No patterns: lift every block.
                     None => Vec::new(),
                     Some(drop) => server
+                        .tool_state()
                         .env
                         .blocked
                         .get(key)
@@ -808,7 +796,7 @@ fn network(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
         }
         "har_start" => with_session(server, arguments, |server, key, session| {
             ensure_network(server, key, session)?;
-            if server.env.har.contains_key(key) {
+            if server.tool_state().env.har.contains_key(key) {
                 return Ok(json!({"recording": true, "already": true}));
             }
             // Events already buffered predate the recording. Mark them seen
@@ -822,7 +810,7 @@ fn network(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
                 seen: buffered.iter().map(event_hash).collect(),
                 ..HarTap::default()
             };
-            server.env.har.insert(key.to_owned(), tap);
+            server.tool_state_mut().env.har.insert(key.to_owned(), tap);
             if !buffered.is_empty() {
                 server.push_events(key, buffered);
             }
@@ -838,12 +826,17 @@ fn network(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
             }
             let endpoint = endpoint_of(arguments)?;
             let key = session_key(server, &endpoint);
-            if !server.env.har.contains_key(&key) {
+            if !server.tool_state().env.har.contains_key(&key) {
                 return Err(bad("no HAR recording on this tab; call har_start first"));
             }
             // Flush the transport so the tap sees everything up to now.
             with_session(server, arguments, |_, _, _| Ok(()))?;
-            let tap = server.env.har.remove(&key).unwrap_or_default();
+            let tap = server
+                .tool_state_mut()
+                .env
+                .har
+                .remove(&key)
+                .unwrap_or_default();
             let har = build_har(&tap.events);
             let entries = har["log"]["entries"].as_array().map_or(0, Vec::len);
             let text = serde_json::to_vec_pretty(&har)
@@ -866,7 +859,7 @@ fn network(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
 }
 
 fn apply_blocked(
-    server: &mut Server,
+    server: &mut dyn BrowserHost,
     key: &str,
     session: &mut LiveSession,
     list: Vec<String>,
@@ -875,9 +868,13 @@ fn apply_blocked(
     send(session, "Network.setBlockedURLs", json!({"urls": list}))?;
     let body = json!({"blocked": list});
     if list.is_empty() {
-        server.env.blocked.remove(key);
+        server.tool_state_mut().env.blocked.remove(key);
     } else {
-        server.env.blocked.insert(key.to_owned(), list);
+        server
+            .tool_state_mut()
+            .env
+            .blocked
+            .insert(key.to_owned(), list);
     }
     Ok(body)
 }
