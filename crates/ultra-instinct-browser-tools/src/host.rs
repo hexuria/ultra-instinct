@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 use ultra_instinct_browser::{BrowserSession, CdpTransport, PageState};
-use ultra_instinct_cdp::{CdpEvent, TargetBackend, DEFAULT_CDP_HTTP};
+use ultra_instinct_cdp::{CdpError, CdpEvent, TargetBackend, DEFAULT_CDP_HTTP};
 use ultra_instinct_core::InteractionManifold;
 use ultra_instinct_guard::{Policy, TicketLedger};
 use ultra_instinct_observe::history::SnapshotId;
@@ -205,6 +205,16 @@ pub trait BrowserHost {
         Downloads::Anywhere
     }
 
+    /// Take the typed CDP failure (timeout, pipe closed, …) the host noted
+    /// during this call, which it puts in place of a generic `browser`
+    /// error ([`ToolError::or_cdp`]). Default: the host notes none.
+    fn take_cdp_failure(&mut self) -> Option<CdpError> {
+        None
+    }
+
+    /// Put back the note [`Self::take_cdp_failure`] took.
+    fn restore_cdp_failure(&mut self, _failure: Option<CdpError>) {}
+
     /// The tools' own state, stored on the host.
     fn tool_state(&self) -> &ToolState;
 
@@ -232,6 +242,19 @@ pub trait BrowserHost {
         self.tool_state_mut().tee(key, &events);
         self.push_events_raw(key, events);
     }
+}
+
+/// Run `f`, whose CDP errors the caller discards (a best-effort restore):
+/// a typed failure it hits is not what the call reports, so the host's note
+/// is left as it was before.
+pub(crate) fn best_effort<R>(
+    server: &mut dyn BrowserHost,
+    f: impl FnOnce(&mut dyn BrowserHost) -> R,
+) -> R {
+    let noted = server.take_cdp_failure();
+    let out = f(server);
+    server.restore_cdp_failure(noted);
+    out
 }
 
 /// The `cdp` endpoint a call names, or the default one.

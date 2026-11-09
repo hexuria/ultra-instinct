@@ -117,6 +117,10 @@ surface.
   `Transport` error (same wording). The agent path reports executor
   failures as text, so the server's session transports note the typed CDP
   failure they hit and the call's generic `browser` error is swapped for it.
+  A best-effort call whose error the tool discards (`browser_download`'s
+  restore of the download behaviour, `browser_keyboard`'s focus re-read)
+  runs under `best_effort`, which leaves the note as it was: a download
+  that failed on its own reports its own error, not the restore's timeout.
 - **Secrets.** A field is `sensitive` when it is a password / hidden / file
   input, its label names a secret (AGENTS.md 7a, `is_secret_field`), or its
   type could not be read. Its value is never printed; text typed into it

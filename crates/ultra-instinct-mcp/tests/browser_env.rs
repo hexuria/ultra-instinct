@@ -827,3 +827,83 @@ fn env_tools_are_listed_with_schemas() {
             .is_empty());
     }
 }
+
+/// A [`Wire`] whose `n`-th `method` call times out (typed) instead.
+struct TimesOutOn {
+    wire: Wire,
+    method: &'static str,
+    n: usize,
+}
+
+impl CdpTransport for TimesOutOn {
+    fn call(&mut self, method: &str, params_json: &str) -> Result<String, CdpError> {
+        if method == self.method {
+            self.n -= 1;
+            if self.n == 0 {
+                return Err(CdpError::Timeout {
+                    method: method.to_owned(),
+                    after: std::time::Duration::from_secs(30),
+                });
+            }
+        }
+        self.wire.call(method, params_json)
+    }
+
+    fn drain_events(&mut self) -> Vec<CdpEvent> {
+        self.wire.drain_events()
+    }
+}
+
+/// The download fails on its own (canceled) and the best-effort restore
+/// after it times out: the call reports the download's own error, not the
+/// restore's typed timeout.
+#[test]
+fn a_failed_download_reports_its_own_error_when_the_restore_times_out() {
+    let out_dir = scratch("download-canceled");
+    let dest = out_dir.join("never.pdf");
+    let script = ScriptBuilder::new()
+        .call("Browser.setDownloadBehavior", json!({}))
+        .observe_compact(&page())
+        .observe_compact(&page())
+        .dom_click(11)
+        .call("Browser.getVersion", json!({}));
+    let hook: Hook = Box::new(|method, _| match method {
+        "Runtime.callFunctionOn" => vec![event(
+            "Browser.downloadWillBegin",
+            json!({"guid": "g-1", "url": "http://127.0.0.1/r.pdf", "suggestedFilename": "r.pdf"}),
+        )],
+        "Browser.getVersion" => vec![event(
+            "Browser.downloadProgress",
+            json!({"guid": "g-1", "state": "canceled"}),
+        )],
+        _ => Vec::new(),
+    });
+    let mut parts = Some((script, hook));
+    let mut server = Server::with_connector(move |_url| {
+        let (script, hook) = parts.take().ok_or_else(|| CdpError::Transport {
+            message: "one connect per test".into(),
+        })?;
+        Ok(Box::new(TimesOutOn {
+            wire: Wire {
+                inner: ReplayTransport::parse(&script.to_json())?,
+                calls: Rc::default(),
+                pending: Vec::new(),
+                hook,
+            },
+            method: "Browser.setDownloadBehavior",
+            n: 2,
+        }) as Box<dyn CdpTransport>)
+    });
+    let err = server
+        .call_tool(
+            "browser_download",
+            &json!({"cdp": CDP, "index": 2, "path": dest.to_str().unwrap(), "timeout_ms": 200}),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&err, ToolError::Browser(m) if m == "download was canceled"),
+        "{err:?}"
+    );
+    assert_eq!(err.code(), "browser");
+    let _ = std::fs::remove_dir_all(out_dir);
+}

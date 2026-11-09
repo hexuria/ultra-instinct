@@ -655,13 +655,15 @@ fn download(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, To
     }
     let outcome = download_into(server, &endpoint, &press, timeout_ms, &dir);
     // Back to Chrome's default so later clicks do not land in a temp dir.
-    // Best effort: the download result stands either way.
-    let restore = with_session(server, &json!({"cdp": endpoint}), |_, _, session| {
-        send(
-            session,
-            "Browser.setDownloadBehavior",
-            json!({"behavior": "default"}),
-        )
+    // Best effort: the download result (or its own error) stands either way.
+    let restore = crate::host::best_effort(server, |server| {
+        with_session(server, &json!({"cdp": endpoint}), |_, _, session| {
+            send(
+                session,
+                "Browser.setDownloadBehavior",
+                json!({"behavior": "default"}),
+            )
+        })
     });
     let moved = outcome.and_then(|(source, suggested_name)| {
         check_destination(&path, overwrite)?;

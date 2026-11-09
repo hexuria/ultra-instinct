@@ -561,6 +561,14 @@ impl BrowserHost for Host<'_> {
             .map_err(|err| ToolError::InvalidArguments(err.clone()))
     }
 
+    fn take_cdp_failure(&mut self) -> Option<CdpError> {
+        self.0.cdp_failure.borrow_mut().take()
+    }
+
+    fn restore_cdp_failure(&mut self, failure: Option<CdpError>) {
+        *self.0.cdp_failure.borrow_mut() = failure;
+    }
+
     fn tool_state(&self) -> &ToolState {
         &self.0.tools
     }

@@ -533,7 +533,7 @@ fn keyboard(
     // again. No observation at all, or a failed one, counts as sensitive.
     let focused_plain = server.take_session(key).map(|mut session| {
         if session.is_stale() {
-            let _ = session.observe();
+            crate::host::best_effort(server, |_| session.observe().is_ok());
         }
         let plain = session
             .fresh_manifold()
