@@ -212,13 +212,164 @@ impl BrowserRuntime for TypingInto<'_> {
             let secret = BrowserRuntime::last_observation(self.session)
                 .and_then(|fresh| fresh.get(target))
                 .is_none_or(sensitive);
-            if let Err(err) = secret.then(|| self.secrets.remember(text, true)).transpose() {
+            if let Err(err) = secret
+                .then(|| self.secrets.remember(text, true))
+                .transpose()
+            {
                 self.refused = Some(err);
                 return Err(AgentError::InputRejected("secrets_full".into()));
             }
         }
         BrowserRuntime::dispatch(self.session, target, input)
     }
+}
+
+/// Hide each field (its own arguments) for a capture: `-webkit-text-security:
+/// disc` inline, `!important`. Returns each `style` attribute as it was.
+const HIDE_FUNCTION: &str = "function(){var prev=[];for(var i=0;i<arguments.length;i++){var e=arguments[i];prev.push(e.getAttribute('style'));e.style.setProperty('-webkit-text-security','disc','important');}return prev;}";
+
+/// Put each field's `style` attribute back exactly (absent stays absent).
+const RESTORE_FUNCTION: &str = "function(prev){for(var i=1;i<arguments.length;i++){var e=arguments[i],p=prev[i-1];if(p===null){e.removeAttribute('style');}else{e.setAttribute('style',p);}}return true;}";
+
+/// The CDP object group the hidden fields' handles live in.
+const HIDE_GROUP: &str = "ultra-instinct-capture";
+
+/// Fields hidden for one capture; [`Hidden::restore`] puts them back.
+pub(crate) struct Hidden {
+    objects: Vec<Value>,
+    prev: Value,
+}
+
+impl Secrets {
+    /// This server typed a value it treats as a secret.
+    pub(crate) fn any_pinned(&self) -> bool {
+        !self.pinned.is_empty()
+    }
+}
+
+fn call_json(session: &mut LiveSession, method: &str, params: &Value) -> Result<Value, String> {
+    let body = session
+        .transport_mut()
+        .call(method, &params.to_string())
+        .map_err(|err| err.to_string())?;
+    serde_json::from_str(&body).map_err(|err| err.to_string())
+}
+
+/// Before a screenshot / PDF: observe, and hide the shown value of every
+/// sensitive text field (by the observe rule, [`sensitive`]; password and
+/// hidden inputs show none) with one `Runtime.callFunctionOn` whose fields
+/// are its object arguments, never script text. Only the inline style
+/// changes, never a value. `None`: no such field. A field that cannot be
+/// resolved or hidden refuses ([`ToolError::SecretOnScreen`]).
+pub(crate) fn hide_for_capture(session: &mut LiveSession) -> Result<Option<Hidden>, ToolError> {
+    let manifold = session
+        .observe()
+        .map_err(|err| ToolError::Browser(err.to_string()))?
+        .clone();
+    let fields = manifold.regions().filter(|region| {
+        let shown = !matches!(
+            region.state().input_type.as_deref(),
+            Some("password" | "hidden")
+        );
+        shown && region.actions().contains(&Action::Type) && sensitive(region)
+    });
+    let refuse = |message: String| ToolError::SecretOnScreen { message };
+    let mut objects = Vec::new();
+    for region in fields {
+        let node = match session.node_ids(region.id()) {
+            Ok((Some(id), _)) => serde_json::json!({"nodeId": id, "objectGroup": HIDE_GROUP}),
+            Ok((None, Some(id))) => {
+                serde_json::json!({"backendNodeId": id, "objectGroup": HIDE_GROUP})
+            }
+            _ => return Err(release(session, refuse("a field has no DOM node".into()))),
+        };
+        let resolved = call_json(session, "DOM.resolveNode", &node).map_err(&refuse);
+        match resolved.map(|r| r["object"]["objectId"].clone()) {
+            Ok(Value::String(id)) => objects.push(serde_json::json!({"objectId": id})),
+            Ok(_) => return Err(release(session, refuse("no objectId".into()))),
+            Err(err) => return Err(release(session, err)),
+        }
+    }
+    let Some(first) = objects.first() else {
+        return Ok(None);
+    };
+    let hide = serde_json::json!({
+        "objectId": first["objectId"],
+        "functionDeclaration": HIDE_FUNCTION,
+        "arguments": objects,
+        "returnByValue": true,
+    });
+    match call_json(session, "Runtime.callFunctionOn", &hide) {
+        Ok(reply)
+            if reply.get("exceptionDetails").is_none() && reply["result"]["value"].is_array() =>
+        {
+            let prev = reply["result"]["value"].clone();
+            Ok(Some(Hidden { objects, prev }))
+        }
+        Ok(reply) => Err(release(
+            session,
+            refuse(format!("hide failed: {}", reply["exceptionDetails"])),
+        )),
+        Err(err) => Err(release(session, refuse(err))),
+    }
+}
+
+/// Free the hidden fields' handles (best effort) and give back `err`.
+fn release(session: &mut LiveSession, err: ToolError) -> ToolError {
+    let group = serde_json::json!({"objectGroup": HIDE_GROUP});
+    let _ = call_json(session, "Runtime.releaseObjectGroup", &group);
+    err
+}
+
+impl Hidden {
+    /// Put every hidden field's `style` back as it was, then free the
+    /// handles. Runs after the capture whatever it returned.
+    pub(crate) fn restore(self, session: &mut LiveSession) -> Result<(), String> {
+        let mut arguments = vec![serde_json::json!({"value": self.prev})];
+        arguments.extend(self.objects.iter().cloned());
+        let restore = serde_json::json!({
+            "objectId": self.objects[0]["objectId"],
+            "functionDeclaration": RESTORE_FUNCTION,
+            "arguments": arguments,
+            "returnByValue": true,
+        });
+        let restored = call_json(session, "Runtime.callFunctionOn", &restore).and_then(|reply| {
+            match reply.get("exceptionDetails") {
+                None => Ok(()),
+                Some(details) => Err(format!("restore failed: {details}")),
+            }
+        });
+        let group = serde_json::json!({"objectGroup": HIDE_GROUP});
+        let released = call_json(session, "Runtime.releaseObjectGroup", &group).map(|_| ());
+        restored.and(released)
+    }
+}
+
+/// A capture (`Page.captureScreenshot` / `printToPDF` inside `capture`)
+/// with the page's sensitive field values hidden around it once this
+/// server has typed a secret. The restore always runs after `capture`,
+/// also when it failed; a failed restore is noted as `restore_error` on a
+/// successful body (best effort: the capture's own result stands).
+pub(crate) fn capture_hidden(
+    server: &mut dyn crate::host::BrowserHost,
+    session: &mut LiveSession,
+    capture: impl FnOnce(&mut LiveSession) -> Result<Value, ToolError>,
+) -> Result<Value, ToolError> {
+    if !server.tool_state().secrets.any_pinned() {
+        return capture(session);
+    }
+    let hidden = hide_for_capture(session)?;
+    let captured = capture(session);
+    let Some(hidden) = hidden else {
+        return captured;
+    };
+    let restored = crate::host::best_effort(server, |_| hidden.restore(session));
+    captured.map(|mut body| {
+        if let Err(err) = restored {
+            body["restore_error"] = Value::String(err);
+        }
+        body
+    })
 }
 
 /// `text` with each whole-token occurrence of `secret` masked: one with no

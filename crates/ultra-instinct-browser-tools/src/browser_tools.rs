@@ -673,7 +673,8 @@ fn screenshot(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, 
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
     // Over the byte cap: once more as a JPEG, then `output_too_large`.
-    let outcome = (|| {
+    // Sensitive field values are hidden around it (`capture_hidden`).
+    let outcome = crate::secrets::capture_hidden(server, &mut session, |session| {
         let png = session.screenshot_png().map_err(browser_err)?;
         if decoded_len(&png) <= limit {
             return Ok(json!({"format": "png", "base64": png}));
@@ -688,7 +689,7 @@ fn screenshot(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, 
                 bytes: decoded_len(other.as_deref().unwrap_or(&png)),
             }),
         }
-    })();
+    });
     keep(server, &key, session);
     save_artifact(outcome?, "base64", path)
 }
@@ -1158,10 +1159,12 @@ fn save_as_pdf(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value,
         .transpose()?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
-    let outcome = session
-        .save_pdf(landscape, print_background, scale)
-        .map(|data| json!({"data": data}))
-        .map_err(browser_err);
+    let outcome = crate::secrets::capture_hidden(server, &mut session, |session| {
+        session
+            .save_pdf(landscape, print_background, scale)
+            .map(|data| json!({"data": data}))
+            .map_err(browser_err)
+    });
     keep(server, &key, session);
     save_artifact(outcome?, "data", path)
 }

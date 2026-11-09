@@ -146,7 +146,29 @@ surface.
   remembers each payload before dispatch (non-sensitive ones from 4
   chars) and returns them in `RunReport::typed` (must not be logged).
   `browser_get_html` drops text inputs' `value` attributes. Observe no
-  longer names a text area by its own text (its value).
+  longer names a text area by its own text (its value). Whether typed
+  text is secret is read off the observation the input lands on: the
+  executor's own fresh one for `browser_type` (the field the caller saw,
+  or the one now, sensitive), a fresh focus read for `browser_keyboard`
+  after a press; none available counts as sensitive.
+- **Captures hide what masking cannot** (revised; the first draft only
+  exempted the binary fields from masking, so a CVV / PIN typed into a
+  `type=text` field was readable in the image). Once the server has typed
+  a sensitive value, `browser_screenshot` and `browser_save_as_pdf`
+  observe first, resolve every sensitive text field on the page by the
+  observe rule (password and hidden inputs show no value and are skipped)
+  and set `-webkit-text-security: disc !important` on its inline style
+  through one `Runtime.callFunctionOn` whose fields are object arguments,
+  never script text. After the capture, whatever it returned, a second
+  call puts each `style` attribute back exactly as it was (absent stays
+  absent) and the handles are released; a failed restore is reported as
+  `restore_error` on a successful body. Field values are never touched;
+  only the inline style flips for the capture's duration (a page's
+  `MutationObserver` can see it). A field that cannot be resolved or
+  hidden refuses `secret_on_screen` with nothing captured. Not covered:
+  cross-origin iframes and closed shadow roots (observe does not see them),
+  and values the page itself mirrors into other text. With no sensitive
+  value typed, a capture is the one CDP call it was.
 - **Limits.** `Server::with_limits(ToolLimits)`: state text 100 000 chars,
   1 000 elements (observe's regions too), 16 MiB screenshots (one JPEG
   retry, then `output_too_large`), 60 s waits, 1 000 000 chars of

@@ -831,11 +831,15 @@ fn browser_level_download_events_reach_the_tab_that_began_them() {
     let mut backend = PipeBackend::new(browser.clone());
     let mut a = backend.connect("pipe:TA").expect("tab A");
     let mut b = backend.connect("pipe:TB").expect("tab B");
-    a.call("Runtime.evaluate", r#"{"expression":"1"}"#).expect("A's call");
+    a.call("Runtime.evaluate", r#"{"expression":"1"}"#)
+        .expect("A's call");
     let methods = |events: Vec<ultra_instinct_cdp::CdpEvent>| {
         events.into_iter().map(|e| e.method).collect::<Vec<_>>()
     };
-    assert!(a.drain_events().is_empty(), "A drained first; nothing is A's");
+    assert!(
+        a.drain_events().is_empty(),
+        "A drained first; nothing is A's"
+    );
     let ours = b.drain_events();
     assert_eq!(
         methods(ours.clone()),

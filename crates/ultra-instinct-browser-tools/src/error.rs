@@ -169,6 +169,11 @@ pub enum ToolError {
     SecretsFull {
         limit: usize,
     },
+    /// This server typed a secret, and the page's sensitive fields could not
+    /// be hidden for a screenshot / PDF: nothing was captured.
+    SecretOnScreen {
+        message: String,
+    },
 }
 
 impl ToolError {
@@ -236,6 +241,7 @@ impl ToolError {
             Self::DownloadsOff => "DownloadsOff",
             Self::OutputTooLarge { .. } => "OutputTooLarge",
             Self::SecretsFull { .. } => "SecretsFull",
+            Self::SecretOnScreen { .. } => "SecretOnScreen",
         }
     }
 
@@ -302,6 +308,7 @@ impl ToolError {
             Self::DownloadsOff => "downloads_off",
             Self::OutputTooLarge { .. } => "output_too_large",
             Self::SecretsFull { .. } => "secrets_full",
+            Self::SecretOnScreen { .. } => "secret_on_screen",
         }
     }
 
@@ -471,6 +478,7 @@ impl ToolError {
                     | Self::DownloadsOff
                     | Self::OutputTooLarge { .. }
                     | Self::SecretsFull { .. }
+                    | Self::SecretOnScreen { .. }
             ) {
                 map.insert("message".into(), json!(self.to_string()));
             }
@@ -597,6 +605,10 @@ impl fmt::Display for ToolError {
             Self::SecretsFull { limit } => write!(
                 f,
                 "this server already masks {limit} typed secrets; refusing to type another"
+            ),
+            Self::SecretOnScreen { message } => write!(
+                f,
+                "could not hide the page's sensitive fields for the capture ({message}); nothing was captured"
             ),
         }
     }

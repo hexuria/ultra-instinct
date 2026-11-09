@@ -532,5 +532,209 @@ fn keyboard_text_after_a_click_into_a_password_field_is_masked() {
     let text = server
         .call_tool("browser_get_text", &json!({"cdp": CDP}))
         .expect("text");
-    assert_eq!(text["text"], format!("Your password {MASK} is weak."), "{text}");
+    assert_eq!(
+        text["text"],
+        format!("Your password {MASK} is weak."),
+        "{text}"
+    );
+}
+
+/// A replay that logs `(method, params)` of every call.
+struct Logging {
+    inner: ReplayTransport,
+    log: std::rc::Rc<std::cell::RefCell<Vec<(String, Value)>>>,
+}
+
+impl CdpTransport for Logging {
+    fn call(&mut self, method: &str, params_json: &str) -> Result<String, CdpError> {
+        let params = serde_json::from_str(params_json).unwrap_or(Value::Null);
+        self.log.borrow_mut().push((method.to_owned(), params));
+        self.inner.call(method, params_json)
+    }
+}
+
+type CallLog = std::rc::Rc<std::cell::RefCell<Vec<(String, Value)>>>;
+
+/// Email @e1, CVV @e2 (a type=text field the label makes sensitive).
+fn card() -> PageSpec {
+    let mut card = page();
+    card.dom[1].label = "CVV".into();
+    card.ax[1].name = "CVV".into();
+    card.dom[1] = card.dom[1]
+        .clone()
+        .with_compact_state(json!({"it": "text"}));
+    card
+}
+
+/// A server that typed "123" into the CVV, then answers `then`.
+fn typed_cvv(then: impl FnOnce(ScriptBuilder) -> ScriptBuilder) -> (Server, CallLog) {
+    let script = then(
+        ScriptBuilder::new()
+            .observe_compact(&card())
+            .observe_compact(&card())
+            .dom_input(11),
+    );
+    let log: CallLog = std::rc::Rc::default();
+    let shared = std::rc::Rc::clone(&log);
+    let mut connect = Some(script);
+    let mut server = Server::with_connector(move |_url| {
+        let script = connect.take().ok_or_else(|| CdpError::Transport {
+            message: "one connect".into(),
+        })?;
+        Ok(Box::new(Logging {
+            inner: ReplayTransport::parse(&script.to_json())?,
+            log: std::rc::Rc::clone(&shared),
+        }) as Box<dyn CdpTransport>)
+    });
+    server
+        .call_tool(
+            "browser_type",
+            &json!({"cdp": CDP, "index": 2, "text": "123"}),
+        )
+        .expect("typed");
+    log.borrow_mut().clear();
+    (server, log)
+}
+
+/// What a capture sends around itself: resolve the CVV's node, hide it
+/// (the node as an argument, never in the script), capture, restore the
+/// style it had, free the handles.
+fn hide_then(
+    script: ScriptBuilder,
+    capture: impl FnOnce(ScriptBuilder) -> ScriptBuilder,
+) -> ScriptBuilder {
+    let script = script
+        .observe_compact(&card())
+        .call(
+            "DOM.resolveNode",
+            json!({"object": {"type": "object", "objectId": "cvv-1"}}),
+        )
+        .call(
+            "Runtime.callFunctionOn",
+            json!({"result": {"type": "object", "value": ["width: 80px"]}}),
+        );
+    capture(script)
+        .call(
+            "Runtime.callFunctionOn",
+            json!({"result": {"type": "boolean", "value": true}}),
+        )
+        .call("Runtime.releaseObjectGroup", json!({}))
+}
+
+fn capture_calls(log: &CallLog) -> Vec<String> {
+    log.borrow()
+        .iter()
+        .map(|(m, _)| m.clone())
+        .filter(|m| {
+            m.starts_with("DOM.resolveNode")
+                || m.starts_with("Runtime.callFunctionOn")
+                || m.starts_with("Runtime.releaseObjectGroup")
+                || m.starts_with("Page.captureScreenshot")
+                || m.starts_with("Page.printToPDF")
+        })
+        .collect()
+}
+
+#[test]
+fn a_screenshot_hides_typed_sensitive_values_and_restores_them() {
+    let (mut server, log) = typed_cvv(|s| {
+        hide_then(s, |s| {
+            s.call("Page.captureScreenshot", json!({"data": "iVBORw0K"}))
+        })
+    });
+    let shot = server
+        .call_tool("browser_screenshot", &json!({"cdp": CDP}))
+        .expect("screenshot");
+    assert_eq!(shot["base64"], "iVBORw0K", "{shot}");
+    assert!(shot.get("restore_error").is_none(), "{shot}");
+    assert_eq!(
+        capture_calls(&log),
+        [
+            "DOM.resolveNode",
+            "Runtime.callFunctionOn",
+            "Page.captureScreenshot",
+            "Runtime.callFunctionOn",
+            "Runtime.releaseObjectGroup",
+        ]
+    );
+    let calls = log.borrow();
+    let of = |method: &str| -> Vec<Value> {
+        calls
+            .iter()
+            .filter(|(m, _)| m == method)
+            .map(|(_, p)| p.clone())
+            .collect()
+    };
+    assert_eq!(of("DOM.resolveNode")[0]["nodeId"], 11, "the CVV, not Email");
+    let functions = of("Runtime.callFunctionOn");
+    let (hide, restore) = (&functions[0], &functions[1]);
+    assert!(hide["functionDeclaration"]
+        .as_str()
+        .unwrap()
+        .contains("-webkit-text-security"));
+    assert_eq!(hide["arguments"], json!([{"objectId": "cvv-1"}]));
+    assert_eq!(
+        restore["arguments"],
+        json!([{"value": ["width: 80px"]}, {"objectId": "cvv-1"}]),
+        "the style it had goes back"
+    );
+}
+
+#[test]
+fn the_restore_runs_when_the_capture_fails() {
+    let (mut server, log) =
+        typed_cvv(|s| hide_then(s, |s| s.call_error("Page.printToPDF", "Printing failed")));
+    let err = server
+        .call_tool("browser_save_as_pdf", &json!({"cdp": CDP}))
+        .expect_err("the capture fails");
+    assert!(
+        matches!(&err, ToolError::Browser(m) if m.contains("Printing failed")),
+        "{err:?}"
+    );
+    assert_eq!(
+        capture_calls(&log),
+        [
+            "DOM.resolveNode",
+            "Runtime.callFunctionOn",
+            "Page.printToPDF",
+            "Runtime.callFunctionOn",
+            "Runtime.releaseObjectGroup",
+        ]
+    );
+}
+
+#[test]
+fn a_field_that_cannot_be_hidden_refuses_the_capture() {
+    let (mut server, log) = typed_cvv(|s| {
+        s.observe_compact(&card())
+            .call_error("DOM.resolveNode", "No node with given id found")
+            .call("Runtime.releaseObjectGroup", json!({}))
+    });
+    let err = server
+        .call_tool("browser_screenshot", &json!({"cdp": CDP}))
+        .expect_err("refused");
+    assert_eq!(err.code(), "secret_on_screen", "{err:?}");
+    assert!(!capture_calls(&log).contains(&"Page.captureScreenshot".to_owned()));
+}
+
+/// Nothing secret typed yet: a screenshot is the one capture call it was.
+#[test]
+fn a_screenshot_with_no_typed_secret_hides_nothing() {
+    let log: CallLog = std::rc::Rc::default();
+    let shared = std::rc::Rc::clone(&log);
+    let mut connect =
+        Some(ScriptBuilder::new().call("Page.captureScreenshot", json!({"data": "iVBORw0K"})));
+    let mut server = Server::with_connector(move |_url| {
+        let script = connect.take().ok_or_else(|| CdpError::Transport {
+            message: "one connect".into(),
+        })?;
+        Ok(Box::new(Logging {
+            inner: ReplayTransport::parse(&script.to_json())?,
+            log: std::rc::Rc::clone(&shared),
+        }) as Box<dyn CdpTransport>)
+    });
+    server
+        .call_tool("browser_screenshot", &json!({"cdp": CDP}))
+        .expect("screenshot");
+    assert_eq!(capture_calls(&log), ["Page.captureScreenshot"]);
 }

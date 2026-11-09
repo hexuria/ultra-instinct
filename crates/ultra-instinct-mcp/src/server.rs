@@ -546,13 +546,9 @@ impl BrowserHost for Host<'_> {
     }
 
     fn snapshot(&self, id: u64) -> Result<(&str, &Rc<InteractionManifold>, usize), ToolError> {
-        self.0.snapshot(id).map(|snapshot| {
-            (
-                snapshot.origin.as_str(),
-                &snapshot.manifold,
-                snapshot.shown,
-            )
-        })
+        self.0
+            .snapshot(id)
+            .map(|snapshot| (snapshot.origin.as_str(), &snapshot.manifold, snapshot.shown))
     }
 
     fn require_snapshot(&self) -> bool {

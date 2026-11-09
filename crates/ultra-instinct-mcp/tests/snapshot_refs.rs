@@ -309,7 +309,11 @@ fn a_snapshot_press_past_the_shown_elements_is_unknown() {
         "browser_get_state",
         json!({"cdp": CDP, "format": "json"}),
     );
-    assert_eq!(state["interactive_elements"], 1000, "{}", state["dropped_elements"]);
+    assert_eq!(
+        state["interactive_elements"], 1000,
+        "{}",
+        state["dropped_elements"]
+    );
     assert_eq!(state["dropped_elements"], 200);
     let err = server
         .call_tool(

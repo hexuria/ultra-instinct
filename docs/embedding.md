@@ -160,6 +160,26 @@ as they are: `browser_screenshot`'s `base64` (and the MCP image item built
 from it) and `browser_save_as_pdf`'s `data`; any other `data` or `base64`
 (a `browser_exec` result, say) is masked.
 
+Masking cannot reach pixels, so captures hide instead. Once the server has
+typed a sensitive value, `browser_screenshot` and `browser_save_as_pdf`
+first observe the page and draw every sensitive text field (a CVV or PIN in
+a `type=text` box, say; password inputs are dotted already) as dots
+(`-webkit-text-security: disc`, inline, through CDP arguments), capture,
+then put each field's `style` attribute back exactly as it was, also when
+the capture failed (a failed restore shows as `restore_error`). Values are
+never changed. A field that cannot be hidden refuses `secret_on_screen`
+and nothing is captured. Cross-origin iframes and closed shadow roots are
+not covered (observe cannot see them), nor text the page copies elsewhere
+from a field: keep `browser_screenshot` off the allow-list if that matters.
+Before any secret is typed a capture is exactly one CDP call.
+
+Whether typed text is a secret is decided on the page as the input lands:
+`browser_type` checks the field on the executor's own fresh observation as
+well as the one the caller saw (a text box that became a password input in
+between is a secret), and `browser_keyboard` reads the focus again when a
+press ran since the last observation. When neither can tell, the text is
+treated as a secret.
+
 `Server::run_goal` remembers every TYPE / SELECT payload before it is
 dispatched: a sensitive field's at any length, any other field's from 4
 chars (typed text is user data), the newest 32 of those. Its report's
@@ -214,6 +234,7 @@ codes are only ever appended.
 | `downloads_off` | | `Downloads::Off` |
 | `output_too_large` | `limit`, `bytes` | a screenshot over `max_screenshot_bytes` even as JPEG |
 | `secrets_full` | `limit` | the server already masks 64 typed secrets; the new one was not typed |
+| `secret_on_screen` | `message` | a screenshot / PDF could not hide the page's sensitive fields; nothing was captured |
 | `invalid_arguments` | `message` | a malformed or missing argument |
 | `ticket_invalid` | `message` | the hard gate refused (disabled, hidden, occluded, …) or the ticket was spent |
 | `browser` | `message` | any other browser / CDP failure |
