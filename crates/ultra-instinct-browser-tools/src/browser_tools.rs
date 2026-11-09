@@ -513,8 +513,13 @@ fn get_state(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, T
                 "\n… {dropped} more controls not shown (max_elements)"
             ));
         }
-        let cut = crate::browser_extra::truncate_output(&body, limits.max_state_chars);
+        let mut cut = crate::browser_extra::truncate_output(&body, limits.max_state_chars);
         let truncated = dropped > 0 || cut.len() != body.len();
+        // Keep the snapshot id even when the cut drops its line.
+        let tag = format!("· snapshot {snapshot}");
+        if !cut.contains(&tag) {
+            cut.to_mut().push_str(&format!("\n{tag}"));
+        }
         let mut out = json!({"format": "text", "text": cut, "snapshot": snapshot});
         if truncated {
             out["truncated"] = json!(true);
@@ -695,10 +700,8 @@ fn gated_input(
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".into()))?;
     let snapshot = bound::required_snapshot(server, arguments)?;
     let input = match input_kind {
-        // DOM-side click by default; `mouse: true` presses like the agent
-        // loop does: a trusted pointer at the center, which moves focus and
-        // fires pointerdown / mousedown.
-        "click" if opt_bool(arguments, "mouse")? == Some(true) => Input::Click,
+        // Pointer press by default; `mouse: false` is the script click.
+        "click" if crate::args::pointer_press(arguments)? => Input::Click,
         "click" => Input::ScriptClick,
         "type" => Input::Type(req_str(arguments, "text")?.to_owned()),
         "select" => Input::Select(req_str(arguments, "text")?.to_owned()),
@@ -1625,11 +1628,11 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
         }
         "browser_click" => {
             props.insert("index".into(), index_prop());
-            props.insert("mouse".into(), json!({"type": "boolean"}));
+            props.insert("mouse".into(), crate::args::mouse_prop());
             props.insert("confirm".into(), confirm_prop());
             props.insert("verify".into(), verify_prop());
             required.push("index");
-            "Left-click the interactive element at a browser_get_state index, through the ticketed executor (re-observes and refuses on drift). Default is a script click; mouse: true presses a real mouse at its center instead (moves focus, fires mousedown) — use it when a script click does nothing."
+            "Left-click the interactive element at a browser_get_state index, through the ticketed executor (re-observes and refuses on drift). A real pointer press at its center by default (moves focus, fires mousedown), like a person; mouse: false sends a DOM script click instead."
         }
         "browser_type" => {
             props.insert("index".into(), index_prop());

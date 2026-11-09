@@ -52,6 +52,14 @@ pub fn call(
     if let Err(err) = host::inner_allowed(host, name) {
         return Some(Err(err));
     }
+    let state_after =
+        STATE_AFTER.contains(&name) && arguments.get("state") == Some(&Value::Bool(true));
+    // `state: true` reads the page too, so it needs `browser_get_state` allowed.
+    if state_after && !host.allows("browser_get_state") {
+        return Some(Err(ToolError::ToolNotAllowed {
+            tool: "browser_get_state".to_owned(),
+        }));
+    }
     let result = if ENV_TOOLS.contains(&name) {
         browser_env::call(host, name, arguments)
             .map_err(|err| browser_extra::dialog_error(host, arguments, err))
@@ -60,7 +68,57 @@ pub fn call(
     } else {
         browser_extra::call(host, name, arguments)
     };
-    Some(result)
+    Some(match result {
+        Ok(body) if state_after => Ok(with_state_after(host, arguments, body)),
+        other => other,
+    })
+}
+
+/// Input tools that take `state: true`: the reply adds the page after the input and its `snapshot`.
+pub const STATE_AFTER: [&str; 21] = [
+    "browser_navigate",
+    "browser_go_back",
+    "browser_go_forward",
+    "browser_reload",
+    "browser_scroll",
+    "browser_click",
+    "browser_right_click",
+    "browser_middle_click",
+    "browser_double_click",
+    "browser_triple_click",
+    "browser_hover",
+    "browser_drag",
+    "browser_type",
+    "browser_form_input",
+    "browser_select_dropdown",
+    "browser_send_key",
+    "browser_file_upload",
+    "browser_check",
+    "browser_focus",
+    "browser_keyboard",
+    "browser_download",
+];
+
+/// Adds the page after the input; a failed read is `state_error`, not the input's error.
+fn with_state_after(host: &mut dyn BrowserHost, arguments: &Value, mut body: Value) -> Value {
+    let mut read = Map::new();
+    if let Some(cdp) = arguments.get("cdp") {
+        read.insert("cdp".into(), cdp.clone());
+    }
+    read.insert("format".into(), "text".into());
+    let read = browser_extra::call(host, "browser_get_state", &Value::Object(read));
+    if let Some(map) = body.as_object_mut() {
+        match read {
+            Ok(state) => {
+                map.insert("state".into(), state["text"].clone());
+                map.insert("snapshot".into(), state["snapshot"].clone());
+            }
+            Err(err) => {
+                map.insert("state_error".into(), err.to_value());
+            }
+        }
+    }
+    body
 }
 
 /// `err` with the type and message of the dialog open on the tab
@@ -85,9 +143,17 @@ pub fn state_origin(host: &dyn BrowserHost, cdp: &str) -> String {
 
 /// `(description, properties, required)` for a `browser_*` tool.
 pub fn spec(name: &str) -> (String, Map<String, Value>, Vec<&'static str>) {
-    if ENV_TOOLS.contains(&name) {
+    let (description, mut props, required) = if ENV_TOOLS.contains(&name) {
         browser_env::spec(name)
     } else {
         browser_state::spec(name).unwrap_or_else(|| browser_extra::spec(name))
+    };
+    if STATE_AFTER.contains(&name) {
+        props.insert(
+            "state".into(),
+            serde_json::json!({"type": "boolean",
+                "description": "After the input, also return the page as browser_get_state prints it (`state`, text) and its `snapshot` id, for the next press. A failed read is `state_error`; the input still ran."}),
+        );
     }
+    (description, props, required)
 }

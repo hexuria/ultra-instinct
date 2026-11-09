@@ -265,7 +265,7 @@ fn index_accepts_integer_digit_string_and_at_e_ref() {
             ScriptBuilder::new()
                 .observe_compact(&page())
                 .observe_compact(&page())
-                .dom_click(11),
+                .pointer_click(),
         );
         let out = call(
             &mut server,
@@ -273,7 +273,7 @@ fn index_accepts_integer_digit_string_and_at_e_ref() {
             json!({"cdp": CDP, "index": index}),
         );
         assert_eq!(out["acted"], "click", "{index}: {out}");
-        assert!(log.borrow().iter().any(|m| m == "DOM.resolveNode"));
+        assert!(log.borrow().iter().any(|m| m == "Input.dispatchMouseEvent"));
     }
     for bad in [json!("e2"), json!("@x2"), json!("two"), json!(-1)] {
         let (mut server, log) = server(ScriptBuilder::new().observe_compact(&page()));
@@ -359,7 +359,7 @@ fn read_network_enables_and_drains() {
 }
 
 #[test]
-fn click_gates_tickets_and_presses_dom_side() {
+fn click_gates_tickets_and_presses_dom_side_with_mouse_false() {
     // get_state's observe → gated click's fresh executor observe → press.
     let (mut server, log) = server(
         ScriptBuilder::new()
@@ -370,13 +370,42 @@ fn click_gates_tickets_and_presses_dom_side() {
     let out = call(
         &mut server,
         "browser_click",
-        json!({"cdp": CDP, "index": 2}),
+        json!({"cdp": CDP, "index": 2, "mouse": false}),
     );
     assert_eq!(out["acted"], "click", "{out}");
     assert!(
         log.borrow().iter().any(|m| m == "DOM.resolveNode"),
         "DOM-tier press expected: {:?}",
         log.borrow()
+    );
+}
+
+/// With no `mouse` argument the click is a trusted pointer press at the
+/// region center, never the DOM script click.
+#[test]
+fn click_defaults_to_a_trusted_pointer_press() {
+    let (mut server, log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&page())
+            .pointer_click(),
+    );
+    let out = call(
+        &mut server,
+        "browser_click",
+        json!({"cdp": CDP, "index": 2}),
+    );
+    assert_eq!(out["acted"], "click", "{out}");
+    let log = log.borrow();
+    let pointer = log
+        .iter()
+        .filter(|m| *m == "Input.dispatchMouseEvent")
+        .count();
+    assert_eq!(pointer, 3, "move, press, release: {log:?}");
+    assert!(
+        !log.iter()
+            .any(|m| m == "DOM.resolveNode" || m == "Runtime.callFunctionOn"),
+        "no script click: {log:?}"
     );
 }
 
@@ -1054,13 +1083,16 @@ fn click_needs_confirm_until_confirm_names_the_label() {
         err.to_string(),
         ToolError::TicketInvalid("needs-confirm: \"Sign in\"".into()).to_string()
     );
-    assert!(log.borrow().iter().all(|m| m != "DOM.resolveNode"));
+    assert!(log
+        .borrow()
+        .iter()
+        .all(|m| m != "DOM.resolveNode" && m != "Input.dispatchMouseEvent"));
 
     let (server_, log) = server(
         ScriptBuilder::new()
             .observe_compact(&page())
             .observe_compact(&page())
-            .dom_click(11),
+            .pointer_click(),
     );
     let mut server = server_.with_policy(policy("", "sign*"));
     let out = call(
@@ -1070,7 +1102,7 @@ fn click_needs_confirm_until_confirm_names_the_label() {
     );
     assert_eq!(out["acted"], "click", "{out}");
     assert!(out["ticket"].as_u64().is_some(), "{out}");
-    assert!(log.borrow().iter().any(|m| m == "DOM.resolveNode"));
+    assert!(log.borrow().iter().any(|m| m == "Input.dispatchMouseEvent"));
 }
 
 /// The consume_ticket_once press path (double click) checks the page URL
@@ -1121,7 +1153,7 @@ fn click_with_verify_reports_the_verification() {
         ScriptBuilder::new()
             .observe_compact(&page())
             .observe_compact(&page())
-            .dom_click(11)
+            .pointer_click()
             .ready_state("complete")
             .observe_compact(&page()),
     );

@@ -12,7 +12,8 @@ use ultra_instinct_mcp::Server;
 
 const CDP: &str = "http://127.0.0.1:9222";
 
-/// Records the params of every `DOM.resolveNode`: the node a press lands on.
+/// Records the params of every `DOM.resolveNode` and
+/// `Input.dispatchMouseEvent`: the node or point a press lands on.
 struct Logged {
     inner: ReplayTransport,
     resolved: Rc<RefCell<Vec<Value>>>,
@@ -20,10 +21,10 @@ struct Logged {
 
 impl CdpTransport for Logged {
     fn call(&mut self, method: &str, params_json: &str) -> Result<String, CdpError> {
-        if method == "DOM.resolveNode" {
-            self.resolved
-                .borrow_mut()
-                .push(serde_json::from_str(params_json).unwrap());
+        if method == "DOM.resolveNode" || method == "Input.dispatchMouseEvent" {
+            let mut params: Value = serde_json::from_str(params_json).unwrap();
+            params["method"] = json!(method);
+            self.resolved.borrow_mut().push(params);
         }
         self.inner.call(method, params_json)
     }
@@ -83,7 +84,7 @@ fn a_custom_checkbox_is_clicked_through_its_label() {
             .observe_compact(&page) // get_state
             .observe_compact(&page) // the click reads its index
             .observe_compact(&page) // the executor's fresh observe
-            .dom_click(61), // a DOM click on the label node toggles its input
+            .pointer_click(), // a pointer press on the label's box toggles its input
     );
     let state = call(
         &mut server,
@@ -102,5 +103,19 @@ fn a_custom_checkbox_is_clicked_through_its_label() {
         json!({"cdp": CDP, "index": 7}),
     );
     assert_eq!(out["acted"], "click", "{out}");
-    assert_eq!(resolved.borrow()[0]["nodeId"], 61, "the label's node");
+    let rect = &news["rect"];
+    let center = (
+        rect["x"].as_f64().unwrap() + rect["w"].as_f64().unwrap() / 2.0,
+        rect["y"].as_f64().unwrap() + rect["h"].as_f64().unwrap() / 2.0,
+    );
+    let presses = resolved.borrow();
+    assert_eq!(presses.len(), 3, "move, press, release: {presses:?}");
+    for press in presses.iter() {
+        assert_eq!(press["method"], "Input.dispatchMouseEvent", "{press:?}");
+        assert_eq!(
+            (press["x"].as_f64().unwrap(), press["y"].as_f64().unwrap()),
+            center,
+            "the label's box center: {press:?}"
+        );
+    }
 }

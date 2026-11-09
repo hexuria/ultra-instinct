@@ -100,7 +100,9 @@ pub const TOOLS: [&str; 56] = [
 
 pub const PRODUCT_TOOLS: [&str; 3] = [TOOL_OBSERVE, TOOL_GUARD, TOOL_VERIFY];
 
-pub use ultra_instinct_browser_tools::{BROWSER_TOOLS, ENV_TOOLS, EXTRA_TOOLS, STATE_TOOLS};
+pub use ultra_instinct_browser_tools::{
+    BROWSER_TOOLS, ENV_TOOLS, EXTRA_TOOLS, STATE_AFTER, STATE_TOOLS,
+};
 
 /// Tool name for a legacy protocol phase, mapped onto the product tool that
 /// covers it: Locate and Inspect read the page with `observe` (regions carry id,

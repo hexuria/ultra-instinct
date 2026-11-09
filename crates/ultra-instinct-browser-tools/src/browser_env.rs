@@ -624,7 +624,7 @@ fn download(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, To
         }
     };
     let overwrite = opt_bool(arguments, "overwrite")?.unwrap_or(false);
-    let mouse = opt_bool(arguments, "mouse")?.unwrap_or(false);
+    let mouse = crate::args::pointer_press(arguments)?;
     let timeout_ms = opt_u64(arguments, "timeout_ms")?
         .unwrap_or(DEFAULT_DOWNLOAD_TIMEOUT_MS)
         .clamp(1, MAX_DOWNLOAD_TIMEOUT_MS);
@@ -943,7 +943,7 @@ pub(crate) fn spec(name: &str) -> (String, Map<String, Value>, Vec<&'static str>
                 json!({"type": "string", "description": "Absolute file path."}),
             );
             props.insert("overwrite".into(), json!({"type": "boolean"}));
-            props.insert("mouse".into(), json!({"type": "boolean"}));
+            props.insert("mouse".into(), crate::args::mouse_prop());
             props.insert("timeout_ms".into(), json!({"type": "integer"}));
             required.extend(["index", "path"]);
             "Click the element at a browser_get_state index through the same ticketed path as browser_click, wait (timeout_ms, default 30000) for the download to complete, and move the file to path. Refuses a directory path, and an existing file unless overwrite. Returns path, bytes, suggested_name."

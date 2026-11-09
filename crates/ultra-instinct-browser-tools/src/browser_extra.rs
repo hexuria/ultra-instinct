@@ -411,7 +411,7 @@ fn check(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
     let index = index_arg(arguments)?;
     let want = opt_bool(arguments, "checked")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `checked`".into()))?;
-    let input = if opt_bool(arguments, "mouse")? == Some(true) {
+    let input = if crate::args::pointer_press(arguments)? {
         Input::Click
     } else {
         Input::ScriptClick
@@ -961,7 +961,7 @@ pub(crate) fn spec(name: &str) -> (String, Map<String, Value>, Vec<&'static str>
             props.insert("index".into(), index());
             props.insert("snapshot".into(), crate::bound::snapshot_prop());
             props.insert("checked".into(), json!({"type": "boolean"}));
-            props.insert("mouse".into(), json!({"type": "boolean"}));
+            props.insert("mouse".into(), crate::args::mouse_prop());
             required.extend(["index", "checked"]);
             "Set a checkbox / radio / switch to `checked`. Already so on the page now: {changed: false}, no press (with snapshot, only after the element still matches it; else stale_ref). Else the browser_click press through the ticketed executor, then a read-back that must show the new state."
         }

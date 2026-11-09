@@ -82,10 +82,16 @@ fn params_of(calls: &Calls, method: &str) -> Vec<Value> {
         .collect()
 }
 
+/// Presses sent: DOM script clicks plus pointer button-downs (a move alone
+/// presses nothing).
 fn presses(calls: &Calls) -> usize {
-    methods(calls)
+    calls
+        .borrow()
         .iter()
-        .filter(|m| *m == "DOM.resolveNode" || *m == "Input.dispatchMouseEvent")
+        .filter(|(m, p)| {
+            m == "DOM.resolveNode"
+                || (m == "Input.dispatchMouseEvent" && p["type"] == "mousePressed")
+        })
         .count()
 }
 
@@ -377,7 +383,8 @@ fn reset_clears_emulation_and_network_overrides_it_set() {
 
 // ---- browser_download -------------------------------------------------------
 
-/// Scripted download: Chrome begins it on the press, and completes it on the
+/// Scripted download: Chrome begins it on the press (the pointer release),
+/// and completes it on the
 /// `complete_on`-th `Browser.getVersion` pump (0 = never), writing the file
 /// into the `downloadPath` the tool asked for.
 fn download_hook(complete_on: usize, dir_seen: Rc<RefCell<Option<PathBuf>>>) -> Hook {
@@ -389,7 +396,7 @@ fn download_hook(complete_on: usize, dir_seen: Rc<RefCell<Option<PathBuf>>>) -> 
             }
             Vec::new()
         }
-        "Runtime.callFunctionOn" => vec![event(
+        "Input.dispatchMouseEvent" if params["type"] == "mouseReleased" => vec![event(
             "Browser.downloadWillBegin",
             json!({"guid": "g-1", "url": "http://127.0.0.1/r.pdf", "suggestedFilename": "report.pdf"}),
         )],
@@ -422,7 +429,7 @@ fn download_presses_through_the_ticket_and_waits_for_completed() {
             .call("Browser.setDownloadBehavior", json!({}))
             .observe_compact(&page())
             .observe_compact(&page())
-            .dom_click(11)
+            .pointer_click()
             .call("Browser.getVersion", json!({}))
             .call("Browser.getVersion", json!({}))
             .call("Browser.setDownloadBehavior", json!({})),
@@ -443,6 +450,11 @@ fn download_presses_through_the_ticket_and_waits_for_completed() {
     assert_eq!(behaviors[0]["eventsEnabled"], true);
     assert_eq!(behaviors[1], json!({"behavior": "default"}));
     assert_eq!(presses(&calls), 1, "{:?}", methods(&calls));
+    assert!(
+        params_of(&calls, "Runtime.callFunctionOn").is_empty(),
+        "a pointer press, no script click: {:?}",
+        methods(&calls)
+    );
     let temp = dir_seen.borrow().clone().unwrap();
     assert!(!temp.exists(), "temp dir {temp:?} must be removed");
     let _ = std::fs::remove_dir_all(out_dir);
@@ -477,7 +489,7 @@ fn download_needs_the_click_on_the_allow_list() {
             .call("Browser.setDownloadBehavior", json!({}))
             .observe_compact(&page())
             .observe_compact(&page())
-            .dom_click(11)
+            .pointer_click()
             .call("Browser.getVersion", json!({}))
             .call("Browser.setDownloadBehavior", json!({})),
         download_hook(1, Rc::clone(&dir_seen)),
@@ -504,7 +516,7 @@ fn download_times_out_cleanly_and_restores_behavior() {
             .call("Browser.setDownloadBehavior", json!({}))
             .observe_compact(&page())
             .observe_compact(&page())
-            .dom_click(11)
+            .pointer_click()
             .call("Browser.getVersion", json!({}))
             .call("Browser.getVersion", json!({}))
             .call("Browser.setDownloadBehavior", json!({})),
@@ -551,6 +563,7 @@ fn download_on_a_drifted_page_refuses_without_pressing() {
     assert!(matches!(err, ToolError::StaleRef { .. }), "{err:?}");
     assert_eq!(err.to_value()["variant"], "TicketInvalid");
     assert_eq!(presses(&calls), 0, "{:?}", methods(&calls));
+    assert!(params_of(&calls, "Input.dispatchMouseEvent").is_empty());
     assert!(params_of(&calls, "Browser.getVersion").is_empty());
     assert_eq!(
         params_of(&calls, "Browser.setDownloadBehavior")[1],
@@ -598,7 +611,7 @@ fn download_with_overwrite_replaces_an_existing_file() {
             .call("Browser.setDownloadBehavior", json!({}))
             .observe_compact(&page())
             .observe_compact(&page())
-            .dom_click(11)
+            .pointer_click()
             .call("Browser.getVersion", json!({}))
             .call("Browser.setDownloadBehavior", json!({})),
         download_hook(1, dir_seen),
@@ -911,10 +924,10 @@ fn a_failed_download_reports_its_own_error_when_the_restore_times_out() {
         .call("Browser.setDownloadBehavior", json!({}))
         .observe_compact(&page())
         .observe_compact(&page())
-        .dom_click(11)
+        .pointer_click()
         .call("Browser.getVersion", json!({}));
-    let hook: Hook = Box::new(|method, _| match method {
-        "Runtime.callFunctionOn" => vec![event(
+    let hook: Hook = Box::new(|method, params| match method {
+        "Input.dispatchMouseEvent" if params["type"] == "mouseReleased" => vec![event(
             "Browser.downloadWillBegin",
             json!({"guid": "g-1", "url": "http://127.0.0.1/r.pdf", "suggestedFilename": "r.pdf"}),
         )],

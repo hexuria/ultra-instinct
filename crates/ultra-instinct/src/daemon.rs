@@ -223,6 +223,73 @@ pub fn with_endpoint(line: &str, cdp: &str) -> Option<Value> {
     Some(value)
 }
 
+/// Press tools that take an `aui snap` ref (reads stay on a fresh look, like `count`).
+const REF_TOOLS: [&str; 7] = [
+    "browser_click",
+    "browser_type",
+    "browser_select_dropdown",
+    "browser_send_key",
+    "browser_check",
+    "browser_focus",
+    "browser_download",
+];
+
+/// The latest snap's id: ref presses bind to it, so a changed page refuses (`stale_ref`).
+#[derive(Debug, Default)]
+pub struct LastSnap(Option<u64>);
+
+impl LastSnap {
+    /// Add the latest snap's id to a ref press that names none.
+    pub fn bind(&self, value: &mut Value) {
+        let Some(id) = self.0 else { return };
+        if value.get("method").and_then(Value::as_str) != Some("tools/call") {
+            return;
+        }
+        let Some(params) = value.get_mut("params") else {
+            return;
+        };
+        let is_ref_tool = params
+            .get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| REF_TOOLS.contains(&name));
+        if let Some(arguments) = params.get_mut("arguments").and_then(Value::as_object_mut) {
+            if is_ref_tool && arguments.contains_key("index") {
+                arguments.entry("snapshot").or_insert_with(|| json!(id));
+            }
+        }
+    }
+
+    /// Record the snapshot from a `browser_get_state` or `state: true` reply.
+    pub fn note(&mut self, request: &Value, reply: &str) {
+        let params = &request["params"];
+        let prints_a_look =
+            params["name"] == "browser_get_state" || params["arguments"]["state"] == true;
+        if request["method"] != "tools/call" || !prints_a_look {
+            return;
+        }
+        let Ok(reply) = serde_json::from_str::<Value>(reply) else {
+            return;
+        };
+        let result = &reply["result"];
+        if result["isError"] == true {
+            return;
+        }
+        // The text format carries the id in `_meta`; the JSON format in its body.
+        let snapshot = result["_meta"]["snapshot"].as_u64().or_else(|| {
+            result["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item["text"].as_str())
+                .filter_map(|text| serde_json::from_str::<Value>(text).ok())
+                .find_map(|body| body["snapshot"].as_u64())
+        });
+        if snapshot.is_some() {
+            self.0 = snapshot;
+        }
+    }
+}
+
 /// A connect failure on a daemon that did not launch its Chrome: when
 /// nothing answers on `cdp`, say how to get a browser.
 pub fn connect_hint(
@@ -259,7 +326,7 @@ mod imp {
     use ultra_instinct_browser::{CdpTransport, WebSocketTransport};
 
     use super::{
-        connect_hint, render, request_line, with_endpoint, SessionName, Verb, STOP_METHOD,
+        connect_hint, render, request_line, with_endpoint, LastSnap, SessionName, Verb, STOP_METHOD,
     };
     use crate::CliError;
 
@@ -351,6 +418,7 @@ mod imp {
         idle: Duration,
     ) -> Result<(), CliError> {
         let mut last = Instant::now();
+        let mut snap = LastSnap::default();
         loop {
             let stream = match daemon.listener.accept() {
                 Ok((stream, _)) => stream,
@@ -364,7 +432,7 @@ mod imp {
                 Err(err) => return Err(io_err(&daemon.path, err)),
             };
             // A misbehaving client gets dropped; the daemon keeps serving.
-            if let Ok(true) = serve_connection(stream, server, cdp) {
+            if let Ok(true) = serve_connection(stream, server, cdp, &mut snap) {
                 return Ok(());
             }
             last = Instant::now();
@@ -376,13 +444,14 @@ mod imp {
         stream: UnixStream,
         server: &mut ultra_instinct_mcp::Server,
         cdp: &str,
+        snap: &mut LastSnap,
     ) -> io::Result<bool> {
         stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_secs(10)))?;
         let mut writer = stream.try_clone()?;
         for line in BufReader::new(stream).lines() {
             let line = line?;
-            let Some(value) = with_endpoint(&line, cdp) else {
+            let Some(mut value) = with_endpoint(&line, cdp) else {
                 // Not JSON: the server answers the parse error.
                 if let Some(reply) = server.handle_line(&line) {
                     writeln!(writer, "{reply}")?;
@@ -395,7 +464,9 @@ mod imp {
                 writeln!(writer, "{reply}")?;
                 return Ok(true);
             }
+            snap.bind(&mut value);
             if let Some(reply) = server.handle_line(&value.to_string()) {
+                snap.note(&value, &reply);
                 writeln!(writer, "{reply}")?;
             }
         }
@@ -453,6 +524,8 @@ mod imp {
                 .map_err(|err| if hint { connect_hint(err, &cdp) } else { err })
         })
         .with_env_policy()
+        // Ref presses need a snap (see `LastSnap`).
+        .require_snapshot(true)
     }
 
     /// The hidden `aui daemon` body.
@@ -767,6 +840,90 @@ mod tests {
         );
     }
 
+    fn call(name: &str, arguments: Value) -> Value {
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+               "params": {"name": name, "arguments": arguments}})
+    }
+
+    fn state_reply(snapshot: u64) -> String {
+        let body = json!({"format": "text", "text": "Form", "snapshot": snapshot}).to_string();
+        json!({"jsonrpc": "2.0", "id": 1,
+               "result": {"content": [{"type": "text", "text": body}]}})
+        .to_string()
+    }
+
+    /// A press names the latest snap's id unless it names its own; reads
+    /// and calls before any snap stay bare.
+    #[test]
+    fn a_press_is_bound_to_the_latest_snap() {
+        let mut snap = LastSnap::default();
+        let mut click = call("browser_click", json!({"index": "@e2"}));
+        snap.bind(&mut click);
+        assert!(click["params"]["arguments"].get("snapshot").is_none());
+
+        let get_state = call("browser_get_state", json!({"format": "text"}));
+        snap.note(&get_state, &state_reply(7));
+        // The text format: plain text, the id in `_meta`.
+        let text = json!({"jsonrpc": "2.0", "id": 1, "result": {
+            "content": [{"type": "text", "text": "Form  http://h/\n@e1 button \"Go\""}],
+            "_meta": {"snapshot": 9}}});
+        snap.note(&get_state, &text.to_string());
+        for name in REF_TOOLS {
+            let mut press = call(name, json!({"index": "@e2"}));
+            snap.bind(&mut press);
+            assert_eq!(press["params"]["arguments"]["snapshot"], 9, "{name}");
+        }
+        let mut own = call("browser_click", json!({"index": "2", "snapshot": 3}));
+        snap.bind(&mut own);
+        assert_eq!(own["params"]["arguments"]["snapshot"], 3);
+        for (name, arguments) in [
+            ("browser_get", json!({"index": "@e2", "what": "value"})),
+            ("browser_is", json!({"index": "@e2", "what": "visible"})),
+            ("browser_scroll", json!({"down": true})),
+        ] {
+            let mut read = call(name, arguments);
+            snap.bind(&mut read);
+            assert!(
+                read["params"]["arguments"].get("snapshot").is_none(),
+                "{name}"
+            );
+        }
+    }
+
+    /// Only a successful `browser_get_state` reply moves the latest snap.
+    #[test]
+    fn only_a_successful_get_state_moves_the_latest_snap() {
+        let mut snap = LastSnap::default();
+        let get_state = call("browser_get_state", json!({}));
+        snap.note(&get_state, &state_reply(4));
+        snap.note(&call("browser_count", json!({})), &state_reply(5));
+        let failed = json!({"jsonrpc": "2.0", "id": 1, "result": {"isError": true,
+            "content": [{"type": "text", "text": json!({"snapshot": 6}).to_string()}]}});
+        snap.note(&get_state, &failed.to_string());
+        snap.note(&get_state, "not json");
+        let mut click = call("browser_click", json!({"index": 1}));
+        snap.bind(&mut click);
+        assert_eq!(click["params"]["arguments"]["snapshot"], 4);
+    }
+
+    /// A `--snap` reply moves the latest snap; a plain input's does not.
+    #[test]
+    fn an_input_with_state_after_moves_the_latest_snap() {
+        let mut snap = LastSnap::default();
+        snap.note(&call("browser_get_state", json!({})), &state_reply(2));
+        snap.note(&call("browser_click", json!({"index": 1})), &state_reply(3));
+        let mut click = call("browser_click", json!({"index": 1}));
+        snap.bind(&mut click);
+        assert_eq!(click["params"]["arguments"]["snapshot"], 2);
+        snap.note(
+            &call("browser_click", json!({"index": 1, "state": true})),
+            &state_reply(5),
+        );
+        let mut click = call("browser_click", json!({"index": 1}));
+        snap.bind(&mut click);
+        assert_eq!(click["params"]["arguments"]["snapshot"], 5);
+    }
+
     #[test]
     fn daemon_flags_are_checked() {
         for bad in [
@@ -814,10 +971,12 @@ mod tests {
             // (it is not Send).
             std::thread::spawn(move || {
                 let mut once = Some(json);
+                // Like `daemon_server`: a ref press needs a snap.
                 let mut server = ultra_instinct_mcp::Server::with_connector(move |_url| {
                     let json = once.take().expect("one connect");
                     Ok(Box::new(ReplayTransport::parse(&json)?) as Box<dyn CdpTransport>)
-                });
+                })
+                .require_snapshot(true);
                 serve_on(
                     daemon,
                     &mut server,
@@ -835,7 +994,7 @@ mod tests {
                 .observe_compact(&page())
                 .observe_compact(&page())
                 .observe_compact(&page())
-                .dom_click(11)
+                .pointer_click()
                 .ready_state("complete")
                 .observe_compact(&page());
             let handle = start(&path, script);
@@ -861,6 +1020,58 @@ mod tests {
             );
             handle.join().unwrap();
             assert!(!path.exists(), "socket removed on exit");
+            let _ = std::fs::remove_dir(path.parent().unwrap());
+        }
+
+        /// A ref names what the last snap showed; a moved target refuses unpressed.
+        #[test]
+        fn a_press_after_the_page_changed_since_snap_refuses_unpressed() {
+            let path = path("st");
+            let moved = PageSpec::of(
+                &[
+                    Control::text_field(10, 100, "Email", (20.0, 20.0, 300.0, 28.0)),
+                    Control::button(11, 101, "Sign in", (20.0, 300.0, 120.0, 28.0)),
+                ],
+                "http://127.0.0.1/form",
+                "Form",
+            );
+            // No press scripted: a press would fail the replay.
+            let script = ScriptBuilder::new()
+                .observe_compact(&page())
+                .observe_compact(&moved)
+                .observe_compact(&moved);
+            let handle = start(&path, script);
+            let no_spawn = || panic!("the daemon is running");
+            run_verb_with(&parse_verb("snap", &[]).unwrap(), &path, no_spawn).unwrap();
+            let click = parse_verb("click", &a(&["@e2"])).unwrap();
+            let err = run_verb_with(&click, &path, no_spawn)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.starts_with("✗ refused: ") && err.ends_with("· run aui snap"),
+                "{err}"
+            );
+            run_verb_with(&parse_verb("close", &[]).unwrap(), &path, no_spawn).unwrap();
+            handle.join().unwrap();
+            let _ = std::fs::remove_dir(path.parent().unwrap());
+        }
+
+        /// A ref press before any snap refuses before any CDP call.
+        #[test]
+        fn a_press_before_any_snap_refuses() {
+            let path = path("ns");
+            let handle = start(&path, ScriptBuilder::new());
+            let no_spawn = || panic!("the daemon is running");
+            let click = parse_verb("click", &a(&["@e2"])).unwrap();
+            let err = run_verb_with(&click, &path, no_spawn)
+                .unwrap_err()
+                .to_string();
+            assert_eq!(
+                err,
+                "✗ refused: no aui snap on this session yet · run aui snap"
+            );
+            run_verb_with(&parse_verb("close", &[]).unwrap(), &path, no_spawn).unwrap();
+            handle.join().unwrap();
             let _ = std::fs::remove_dir(path.parent().unwrap());
         }
 

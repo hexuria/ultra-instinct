@@ -502,7 +502,7 @@ fn keyboard_text_after_a_click_into_a_password_field_is_masked() {
         .observe_compact(&focused(0)) // get_state
         .observe_compact(&focused(0)) // click: resolve
         .observe_compact(&focused(0)) // click: executor
-        .dom_click(11)
+        .pointer_click()
         .observe_compact(&focused(1)) // keyboard: the focus now
         .call(
             "Runtime.evaluate",

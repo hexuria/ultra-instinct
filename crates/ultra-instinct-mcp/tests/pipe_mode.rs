@@ -40,8 +40,16 @@ struct Fake {
     destroy_on: Option<&'static str>,
     /// A page method that makes Chrome exit (EOF on the pipe).
     exit_on: Option<&'static str>,
-    /// A page method that opens an `alert("Saved")` instead of answering.
+    /// A page method that opens an `alert("Saved")` instead of answering;
+    /// `method:type` matches only a call whose `type` param is `type`.
     alert_on: Option<&'static str>,
+}
+
+fn hits(trigger: &str, method: &str, params: &Value) -> bool {
+    match trigger.split_once(':') {
+        Some((m, kind)) => m == method && params["type"] == kind,
+        None => trigger == method,
+    }
 }
 
 impl Fake {
@@ -87,7 +95,7 @@ impl Fake {
                     if self.exit_on == Some(method.as_str()) {
                         return;
                     }
-                    if self.alert_on == Some(method.as_str()) {
+                    if self.alert_on.is_some_and(|m| hits(m, &method, &params)) {
                         self.alert_on = None;
                         self.send(json!({"sessionId": session,
                                          "method": "Page.javascriptDialogOpening",
@@ -265,7 +273,7 @@ fn navigate_state_and_a_snapshot_click_ride_the_bound_tab_with_no_http() {
             .observe_compact(&page())
             .observe_compact(&page())
             .observe_compact(&page())
-            .dom_click(11),
+            .pointer_click(),
     )
     .start();
     // `cdp` is ignored in pipe mode: no HTTP endpoint is ever read.
@@ -299,10 +307,14 @@ fn navigate_state_and_a_snapshot_click_ride_the_bound_tab_with_no_http() {
     assert!(page.contains(&"Page.navigate".to_owned()), "{page:?}");
     assert_eq!(
         page.iter()
-            .filter(|m| *m == "Runtime.callFunctionOn")
+            .filter(|m| *m == "Input.dispatchMouseEvent")
             .count(),
-        1,
-        "{page:?}"
+        3,
+        "one pointer press: {page:?}"
+    );
+    assert!(
+        !page.iter().any(|m| m == "Runtime.callFunctionOn"),
+        "no script click: {page:?}"
     );
     drop(server);
 }
@@ -406,9 +418,9 @@ fn a_click_that_opens_an_alert_carries_its_type_and_message() {
         ScriptBuilder::new()
             .observe_compact(&page())
             .observe_compact(&page())
-            .dom_click(11),
+            .pointer_click(),
     );
-    setup.alert_on = Some("Runtime.callFunctionOn");
+    setup.alert_on = Some("Input.dispatchMouseEvent:mouseReleased");
     let (mut server, _chrome) = setup.start();
     let err = server
         .call_tool("browser_click", &json!({"index": 2}))
@@ -436,10 +448,10 @@ fn a_download_press_that_opens_an_alert_carries_its_type_and_message() {
             .call("Browser.setDownloadBehavior", json!({}))
             .observe_compact(&page())
             .observe_compact(&page())
-            .dom_click(11)
+            .pointer_click()
             .call("Browser.setDownloadBehavior", json!({})),
     );
-    setup.alert_on = Some("Runtime.callFunctionOn");
+    setup.alert_on = Some("Input.dispatchMouseEvent:mouseReleased");
     let (mut server, _chrome) = setup.start();
     let path = std::env::temp_dir().join(format!("aui-pipe-alert-{}.bin", std::process::id()));
     let err = server
