@@ -166,7 +166,7 @@ Verbs:
 | `forward`, `reload [--ignore-cache]` | history forward, reload |
 | `check <ref>`, `uncheck <ref>` | set a checkbox; `--mouse` presses a real pointer |
 | `focus <ref>` | focus a control (ticketed) |
-| `keyboard type\|insert <text> [--confirm <label>]` | keys into whatever has focus (`insert` sends the text in one go); refused off `--allow-domain`; with `--confirm-press` set, an Enter / space on a focused matching button, Enter in a field whose form submits through one, or Enter / space when no control is seen focused (`(unobserved focus)`) needs `--confirm`; an Enter or space after a Tab in the same text is refused: send it in its own call |
+| `keyboard type\|insert <text> [--confirm <label>]` | keys into whatever has focus (`insert` sends the text in one go); refused off `--allow-domain`; with `--confirm-press` set, an Enter / space on a focused matching button, Enter in a field whose form submits through one, or Enter / space when no control is seen focused (`(unobserved focus)`) needs `--confirm`; an Enter after a Tab in the same text, or a space right after one, is refused: send it in its own call |
 | `get value\|label\|role\|box <ref>`, `get attr <ref> <name>` | read one fact; never a password value |
 | `is visible\|enabled\|checked\|editable <ref>` | prints `true` or `false` |
 | `count [--label L] [--role R]` | how many controls match, and their refs |
