@@ -24,12 +24,10 @@ pub use browser_env::ENV_TOOLS;
 pub use browser_extra::EXTRA_TOOLS;
 pub use browser_state::STATE_TOOLS;
 pub use browser_tools::BROWSER_TOOLS;
-pub use error::{ToolError, ERROR_CODES};
-pub use host::{
-    BrowserHost, CdpConnector, Downloads, HttpBackend, LiveSession, PageTab, TargetBackend,
-    ToolLimits, ToolState,
-};
+pub use error::ToolError;
+pub use host::{BrowserHost, Downloads, LiveSession, ToolLimits, ToolState};
 pub use secrets::{sensitive, MASK};
+pub use ultra_instinct_cdp::{CdpConnector, HttpBackend, PageTab, TargetBackend};
 
 use serde_json::{Map, Value};
 

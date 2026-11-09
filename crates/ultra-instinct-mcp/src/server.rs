@@ -257,7 +257,7 @@ impl Server {
     /// first page tab. One thread owns the server and the pipe.
     #[cfg(unix)]
     pub fn with_pipe(browser: ultra_instinct_cdp::PipeBrowser) -> Self {
-        Self::with_backend(crate::PipeBackend::new(browser))
+        Self::with_backend(ultra_instinct_cdp::PipeBackend::new(browser))
     }
 
     /// One inbound JSON-RPC line. `None` means the client must not be answered.

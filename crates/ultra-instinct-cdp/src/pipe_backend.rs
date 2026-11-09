@@ -8,9 +8,8 @@
 //! thread).
 
 use serde_json::json;
-use ultra_instinct_browser::{CdpError, CdpTransport};
-use ultra_instinct_browser_tools::{PageTab, TargetBackend};
-use ultra_instinct_cdp::{CdpEvent, PipeBrowser, PipePage};
+
+use crate::{CdpError, CdpEvent, CdpTransport, PageTab, PipeBrowser, PipePage, TargetBackend};
 
 /// The endpoint every call drives in pipe mode (`cdp` is ignored).
 pub const PIPE_ENDPOINT: &str = "pipe";

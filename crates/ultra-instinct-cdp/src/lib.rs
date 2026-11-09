@@ -6,19 +6,25 @@
 
 #![forbid(unsafe_code)]
 
+mod backend;
 mod error;
 #[cfg(unix)]
 mod pipe;
+#[cfg(unix)]
+mod pipe_backend;
 mod replay;
 pub mod script;
 mod transport;
 mod ws;
 
+pub use backend::{CdpConnector, HttpBackend, PageTab, TargetBackend};
 pub use error::CdpError;
 #[cfg(unix)]
 pub use pipe::{
     FrameSplitter, PipeBrowser, PipeLimits, PipePage, PipeTarget, DEFAULT_MAX_FRAME_BYTES,
 };
+#[cfg(unix)]
+pub use pipe_backend::{PipeBackend, PIPE_ENDPOINT};
 pub use replay::ReplayTransport;
 pub use transport::{CdpEvent, CdpTransport};
 pub use ws::{

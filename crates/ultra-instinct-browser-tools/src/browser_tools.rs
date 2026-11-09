@@ -30,7 +30,8 @@ use ultra_instinct_protocol::GuardReason;
 
 use crate::bound::{self, at_index, ticket_error};
 use crate::error::ToolError;
-use crate::host::{endpoint_of, keep, session_key, BrowserHost, PageTab};
+use crate::host::{endpoint_of, keep, session_key, BrowserHost};
+use ultra_instinct_cdp::PageTab;
 
 /// All `browser_*` tool names this module serves.
 pub const BROWSER_TOOLS: [&str; 37] = [

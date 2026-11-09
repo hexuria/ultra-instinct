@@ -3,7 +3,73 @@
 //! wire value next to the `variant` it always had.
 
 use serde_json::{json, Value};
-use ultra_instinct_browser_tools::{ToolError, ERROR_CODES};
+use ultra_instinct_browser_tools::ToolError;
+use ultra_instinct_cdp::CdpError;
+
+/// Every `ToolError::code`, in declaration order (docs/embedding.md). A
+/// code never changes meaning once shipped: change this list only by
+/// appending.
+const ERROR_CODES: [&str; 59] = [
+    "missing_fixture",
+    "missing_before",
+    "missing_after",
+    "duplicate_source",
+    "missing_tool_name",
+    "unknown_tool",
+    "goal_not_accepted",
+    "coordinates_not_accepted",
+    "empty_text",
+    "unknown_region",
+    "unknown_role",
+    "unknown_action",
+    "unsupported_action",
+    "non_finite_confidence",
+    "runner_up_needs_confidence",
+    "runner_up_is_target",
+    "bad_runner_up",
+    "target_not_top",
+    "confidence_with_query",
+    "snapshot_evicted",
+    "unknown_snapshot",
+    "bad_snapshot",
+    "expect_needs_observe_after",
+    "expected_text_missing",
+    "region_still_present",
+    "bad_confidence",
+    "confidence_out_of_range",
+    "missing_expect",
+    "both_expectations",
+    "act_needs_cdp",
+    "unknown_executor",
+    "not_implemented",
+    "browser_use_is_replay",
+    "browser_use_rejected",
+    "browser_use_script",
+    "cua_is_replay",
+    "cua_rejected",
+    "cua_script",
+    "invalid_arguments",
+    "ticket_invalid",
+    "verify_no_effect",
+    "io",
+    "fixture",
+    "browser",
+    "needs_confirm",
+    "domain_not_allowed",
+    "stale_ref",
+    "unknown_ref",
+    "snapshot_required",
+    "target_gone",
+    "dialog_open",
+    "timeout",
+    "pipe_closed",
+    "frame_too_large",
+    "tool_not_allowed",
+    "path_not_absolute",
+    "path_not_allowed",
+    "downloads_off",
+    "output_too_large",
+];
 
 fn s(text: &str) -> String {
     text.to_owned()
@@ -178,4 +244,53 @@ fn named_codes_carry_their_fields() {
         ToolError::MissingFixture.to_value(),
         json!({"code": "missing_fixture", "variant": "MissingFixture"})
     );
+}
+
+#[test]
+fn typed_refusals_keep_their_old_variant_message_and_display() {
+    let confirm = ToolError::NeedsConfirm {
+        label: "Pay $18".into(),
+    };
+    assert_eq!(
+        confirm.to_value(),
+        json!({"code": "needs_confirm", "variant": "TicketInvalid",
+               "message": "needs-confirm: \"Pay $18\"", "label": "Pay $18"})
+    );
+    assert_eq!(
+        confirm.to_string(),
+        ToolError::TicketInvalid("needs-confirm: \"Pay $18\"".into()).to_string()
+    );
+    let timeout = ToolError::cdp(&CdpError::Timeout {
+        method: "X.y".into(),
+        after: std::time::Duration::from_secs(30),
+    });
+    assert_eq!(timeout.code(), "timeout");
+    assert_eq!(
+        timeout.to_value()["message"],
+        "CDP transport: no CDP result for `X.y` within 30 s"
+    );
+    // A generic Browser error becomes the typed failure seen in the call.
+    assert_eq!(
+        ToolError::Browser("x".into()).or_cdp(Some(&CdpError::PipeClosed {
+            message: "end of stream".into()
+        })),
+        ToolError::PipeClosed {
+            message: "CDP pipe closed: end of stream".into()
+        }
+    );
+    // A typed refusal is kept whatever CDP saw.
+    let stale = ToolError::StaleRef {
+        reason: "target-changed".into(),
+    };
+    assert_eq!(
+        stale
+            .clone()
+            .or_cdp(Some(&CdpError::Timeout {
+                method: "X".into(),
+                after: std::time::Duration::from_secs(1)
+            }))
+            .code(),
+        "stale_ref"
+    );
+    assert!(ToolError::from_cdp(&CdpError::NoScriptedResponse { method: "X".into() }).is_none());
 }
