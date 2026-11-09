@@ -93,6 +93,48 @@ fn short_deadline(millis: u64) -> PipeLimits {
     }
 }
 
+/// One end of a socketpair as both fd 3 and fd 4 (buwiz-computer's launcher):
+/// the host passes two dups of its end, `PipeBrowser::new(s.try_clone()?, s)`.
+#[test]
+fn one_socket_dup_as_reader_and_writer_routes_and_closes() {
+    use std::os::fd::OwnedFd;
+    use std::os::unix::net::UnixStream;
+
+    let (host, chrome) = UnixStream::pair().expect("socketpair");
+    let browser = PipeBrowser::new(host.try_clone().expect("dup"), host);
+    let fake = thread::spawn(move || {
+        let mut fake = Fake {
+            requests: BufReader::new(PipeReader::from(OwnedFd::from(
+                chrome.try_clone().expect("dup"),
+            ))),
+            out: PipeWriter::from(OwnedFd::from(chrome)),
+        };
+        let version = fake.expect("Browser.getVersion");
+        fake.reply(&version, json!({"product": "Chrome/156"}));
+        fake.attach("S1");
+        let eval = fake.expect("Runtime.evaluate");
+        assert_eq!(eval["sessionId"], "S1", "{eval}");
+        fake.send(json!({"method": "Page.loadEventFired", "sessionId": "S1", "params": {}}));
+        fake.reply(&eval, json!({"result": {"value": 7}}));
+        // Dropping both dups of Chrome's end closes the socket.
+    });
+    let version = browser.call("Browser.getVersion", "{}").expect("version");
+    assert!(version.contains("Chrome/156"), "{version}");
+    let mut page = browser.page("T1").expect("attach");
+    let out = page
+        .call("Runtime.evaluate", r#"{"expression":"7"}"#)
+        .expect("evaluate");
+    assert!(out.contains('7'), "{out}");
+    let events = page.drain_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].method, "Page.loadEventFired");
+    fake.join().expect("fake");
+    match page.call("Runtime.evaluate", "{}") {
+        Err(CdpError::PipeClosed { .. }) => {}
+        other => panic!("expected PipeClosed after the peer closed, got {other:?}"),
+    }
+}
+
 #[test]
 fn defaults_match_the_websocket_transport() {
     let limits = PipeLimits::default();
