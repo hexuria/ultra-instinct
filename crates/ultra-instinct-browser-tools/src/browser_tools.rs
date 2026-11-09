@@ -15,7 +15,8 @@
 use serde_json::{json, Value};
 
 use ultra_instinct_agent::{
-    classify_delta, classify_value, execute_ticketed_with, BrowserRuntime, Input,
+    classify_delta, classify_value, execute_ticketed_with, AgentError, BeforeDispatch,
+    BrowserRuntime, Input,
 };
 use ultra_instinct_browser::BrowserError;
 use ultra_instinct_cdp::DEFAULT_CDP_HTTP;
@@ -711,7 +712,7 @@ fn gated_input(
         // (before dispatch, so a failed press does not leak it either): the
         // field the caller saw, or the one on this observation, is
         // sensitive. The executor's own observation is checked again at
-        // dispatch (`TypingInto`).
+        // dispatch (`secrets::remember_at_dispatch`).
         if let Input::Type(text) = &input {
             let secret = [manifold.get(&region_id), fresh.get(&region_id)]
                 .into_iter()
@@ -730,13 +731,20 @@ fn gated_input(
                 .map_err(|reason| refusal_for(reason, &label, url.as_deref()))?;
         }
         let mut ledger = server.take_ledger(&key);
-        let mut typing = crate::secrets::TypingInto {
-            session: &mut session,
-            secrets: &mut server.tool_state_mut().secrets,
-            refused: None,
+        // The executor's own observation decides again whether the text is
+        // a secret, just before dispatch.
+        let mut refused = None;
+        let secrets = &mut server.tool_state_mut().secrets;
+        let mut typing = BeforeDispatch {
+            inner: &mut session,
+            before: |fresh: Option<&InteractionManifold>, target: &RegionId, input: &Input| {
+                crate::secrets::remember_at_dispatch(secrets, fresh, target, input).map_err(|err| {
+                    refused = Some(err);
+                    AgentError::InputRejected("secrets_full".into())
+                })
+            },
         };
         let executed = execute_ticketed_with(&mut typing, &mut ledger, &ticket, &input, &policy);
-        let refused = typing.refused.take();
         server.keep_ledger(&key, ledger);
         if let Some(full) = refused {
             return Err(full);

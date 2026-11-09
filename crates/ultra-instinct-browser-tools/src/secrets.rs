@@ -15,8 +15,7 @@
 use std::collections::VecDeque;
 
 use serde_json::Value;
-use ultra_instinct_agent::{AgentError, BrowserRuntime, Input};
-use ultra_instinct_browser::{PageState, ScrollDirection};
+use ultra_instinct_agent::Input;
 use ultra_instinct_core::{Action, InteractionManifold, InteractionRegion, RegionId};
 
 use crate::error::ToolError;
@@ -178,49 +177,25 @@ impl Secrets {
     }
 }
 
-/// The session the executor drives for one `browser_type`. Just before
-/// dispatch, the text becomes a secret when the target on the executor's
-/// own fresh observation (the one it revalidated against) is sensitive, or
-/// is missing from it (fail closed): `input_type` is not in the region
-/// fingerprint, so a field that became a password input after the caller
-/// looked still revalidates.
-pub(crate) struct TypingInto<'a> {
-    pub(crate) session: &'a mut LiveSession,
-    pub(crate) secrets: &'a mut Secrets,
-    /// `secrets_full` at dispatch: the ticket is spent, nothing was typed.
-    pub(crate) refused: Option<ToolError>,
-}
-
-impl BrowserRuntime for TypingInto<'_> {
-    fn observe(&mut self) -> Result<&InteractionManifold, AgentError> {
-        BrowserRuntime::observe(self.session)
-    }
-    fn focused(&self) -> Option<RegionId> {
-        BrowserRuntime::focused(self.session)
-    }
-    fn page(&self) -> Option<&PageState> {
-        BrowserRuntime::page(self.session)
-    }
-    fn last_observation(&self) -> Option<&InteractionManifold> {
-        BrowserRuntime::last_observation(self.session)
-    }
-    fn scroll(&mut self, direction: ScrollDirection) -> Result<(), AgentError> {
-        BrowserRuntime::scroll(self.session, direction)
-    }
-    fn dispatch(&mut self, target: &RegionId, input: &Input) -> Result<(), AgentError> {
-        if let Input::Type(text) = input {
-            let secret = BrowserRuntime::last_observation(self.session)
-                .and_then(|fresh| fresh.get(target))
-                .is_none_or(sensitive);
-            if let Err(err) = secret
-                .then(|| self.secrets.remember(text, true))
-                .transpose()
-            {
-                self.refused = Some(err);
-                return Err(AgentError::InputRejected("secrets_full".into()));
-            }
+/// The check `browser_type` runs just before its dispatch (through
+/// [`ultra_instinct_agent::BeforeDispatch`], which forwards every other
+/// runtime method): the text becomes a secret when the target on the
+/// executor's own fresh observation (the one it revalidated against) is
+/// sensitive, or is missing from it (fail closed). `input_type` is not in
+/// the region fingerprint, so a field that became a password input after
+/// the caller looked still revalidates. `Err`: `secrets_full`, the ticket
+/// is spent and nothing is typed.
+pub(crate) fn remember_at_dispatch(
+    secrets: &mut Secrets,
+    fresh: Option<&InteractionManifold>,
+    target: &RegionId,
+    input: &Input,
+) -> Result<(), ToolError> {
+    match input {
+        Input::Type(text) if fresh.and_then(|m| m.get(target)).is_none_or(sensitive) => {
+            secrets.remember(text, true)
         }
-        BrowserRuntime::dispatch(self.session, target, input)
+        _ => Ok(()),
     }
 }
 

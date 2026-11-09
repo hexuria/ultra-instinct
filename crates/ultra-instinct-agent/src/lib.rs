@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod agent;
+mod before_dispatch;
 mod error;
 mod executor;
 mod journal;
@@ -19,6 +20,7 @@ pub use agent::{
     region_action, Agent, AgentBuilder, AgentState, Predicted, TickResult, DEFAULT_MAX_WAIT,
     DEFAULT_WAIT_POLLS, WAIT_POLL_MS,
 };
+pub use before_dispatch::BeforeDispatch;
 pub use error::AgentError;
 pub use executor::{execute_ticketed, execute_ticketed_with, ExecError, Executed};
 pub use journal::JournalEvent;
