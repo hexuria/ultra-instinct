@@ -291,7 +291,12 @@ impl<T: CdpTransport> BrowserSession<T> {
             if let Some(rect) = rect {
                 let mut raw = RawNode::from_dom(element, rect);
                 if let Some(target) = raw.labels.as_mut() {
-                    target.sight = control_sight(target.control, &dom, compact.as_ref());
+                    target.sight = control_sight(
+                        target.control,
+                        element.backend_node_id,
+                        &dom,
+                        compact.as_ref(),
+                    );
                 }
                 // Script-made click targets (a span with a click handler and
                 // a pointer cursor) are offered like links.
@@ -1433,30 +1438,44 @@ fn owns_hit(hit: i64, target: i64, parent_of: &BTreeMap<i64, i64>) -> bool {
 /// How the pointer meets a labelled control, from the compact walk alone
 /// (no extra calls). No compact record, `display: none`, or a hit test
 /// that was not collected or found nothing (an offscreen center) is no
-/// evidence.
+/// evidence. `opacity: 0` on the control or on an element between it and
+/// its label makes it faint; on an element that also holds the label,
+/// neither is visible, which is no evidence either.
 fn control_sight(
     control: i64,
+    label: i64,
     dom: &extract::DomDocument,
     compact: Option<&compact::CompactSnapshot>,
 ) -> fusion::Sight {
     use fusion::Sight;
-    let Some(node) = dom
-        .hu_k_of_backend
-        .get(&control)
-        .and_then(|k| compact.and_then(|c| c.node(*k)))
-    else {
+    let record = |backend: i64| {
+        dom.hu_k_of_backend
+            .get(&backend)
+            .and_then(|k| compact.and_then(|c| c.node(*k)))
+    };
+    let transparent = |node: &compact::CompactNode| {
+        node.style
+            .as_deref()
+            .is_some_and(|s| crate::stacking::style_from_computed(s).opacity <= 0.0)
+    };
+    let Some(node) = record(control) else {
         return Sight::Unknown;
     };
     if node.unrendered {
         return Sight::Unknown;
     }
-    if node.rect.is_none() {
-        return Sight::Faint;
+    let mut faint = node.rect.is_none() || transparent(node);
+    let mut above = dom.parent_of.get(&control).copied();
+    while let Some(ancestor) = above {
+        if record(ancestor).is_some_and(transparent) {
+            if owns_hit(label, ancestor, &dom.parent_of) {
+                return Sight::Unknown;
+            }
+            faint = true;
+        }
+        above = dom.parent_of.get(&ancestor).copied();
     }
-    let transparent = node.style.iter().flatten().any(|(name, value)| {
-        name == "opacity" && value.trim().parse::<f64>().is_ok_and(|o| o <= 0.0)
-    });
-    if transparent {
+    if faint {
         return Sight::Faint;
     }
     match node.hit {

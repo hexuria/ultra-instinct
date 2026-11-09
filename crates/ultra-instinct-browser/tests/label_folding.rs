@@ -139,3 +139,47 @@ fn a_pointer_cursor_text_named_by_aria_labelledby_keeps_its_click() {
         .actions()
         .contains(&Action::Click));
 }
+
+#[test]
+fn a_transparent_ancestor_is_not_a_visible_control() {
+    // Label and field inside one `opacity: 0` box: neither is visible, so
+    // nothing folds either way.
+    let hidden_box = |checkbox: bool| {
+        let kind = if checkbox { "checkbox" } else { "text" };
+        let dom = vec![
+            el(10, "DIV", "", (0.0, 0.0, 400.0, 60.0)).with_children(vec![
+                el(11, "LABEL", "Agree", (20.0, 20.0, 60.0, 20.0)).with_attr("for", "x"),
+                input(12, kind, (90.0, 24.0, 13.0, 13.0)).with_attr("id", "x"),
+            ]),
+        ];
+        let role = if checkbox { "checkbox" } else { "textbox" };
+        let ax = vec![AxSpec::new(112, role, "Agree", (90.0, 24.0, 13.0, 13.0))];
+        PageSpec::new(dom, ax, "http://127.0.0.1/", "T").style(10, vec![("opacity", "0")])
+    };
+    for checkbox in [false, true] {
+        let manifold = observe(&[hidden_box(checkbox)]).remove(0);
+        assert_eq!(ids(&manifold), ["n111", "n112"], "checkbox {checkbox}");
+        assert_eq!(manifold.get_str("n111").unwrap().role(), Role::Generic);
+    }
+    // A transparent box between the label and its checkbox (inside the
+    // label): the label is what a reader sees, so it stands for the checkbox.
+    let dom = vec![
+        el(11, "LABEL", "Agree", (20.0, 20.0, 120.0, 20.0)).with_children(vec![el(
+            13,
+            "SPAN",
+            "",
+            (22.0, 22.0, 16.0, 16.0),
+        )
+        .with_children(vec![input(12, "checkbox", (22.0, 24.0, 13.0, 13.0))])]),
+    ];
+    let ax = vec![AxSpec::new(
+        112,
+        "checkbox",
+        "Agree",
+        (22.0, 24.0, 13.0, 13.0),
+    )];
+    let page = PageSpec::new(dom, ax, "http://127.0.0.1/", "T").style(13, vec![("opacity", "0")]);
+    let manifold = observe(&[page]).remove(0);
+    assert_eq!(ids(&manifold), ["n111"]);
+    assert_eq!(manifold.get_str("n111").unwrap().role(), Role::Checkbox);
+}
