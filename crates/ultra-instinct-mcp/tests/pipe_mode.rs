@@ -40,6 +40,8 @@ struct Fake {
     destroy_on: Option<&'static str>,
     /// A page method that makes Chrome exit (EOF on the pipe).
     exit_on: Option<&'static str>,
+    /// A page method that opens an `alert("Saved")` instead of answering.
+    alert_on: Option<&'static str>,
 }
 
 impl Fake {
@@ -84,6 +86,16 @@ impl Fake {
                         .push((target.clone(), method.clone()));
                     if self.exit_on == Some(method.as_str()) {
                         return;
+                    }
+                    if self.alert_on == Some(method.as_str()) {
+                        self.alert_on = None;
+                        self.send(json!({"sessionId": session,
+                                         "method": "Page.javascriptDialogOpening",
+                                         "params": {"type": "alert", "message": "Saved",
+                                                    "url": "https://shop.example/login",
+                                                    "hasBrowserHandler": false,
+                                                    "defaultPrompt": ""}}));
+                        continue;
                     }
                     if self.destroy_on == Some(method.as_str()) {
                         self.send(json!({"method": "Target.targetDestroyed",
@@ -181,6 +193,7 @@ struct Setup {
     next_pages: Vec<ScriptBuilder>,
     destroy_on: Option<&'static str>,
     exit_on: Option<&'static str>,
+    alert_on: Option<&'static str>,
 }
 
 impl Setup {
@@ -190,6 +203,7 @@ impl Setup {
             next_pages: Vec::new(),
             destroy_on: None,
             exit_on: None,
+            alert_on: None,
         }
     }
 
@@ -211,6 +225,7 @@ impl Setup {
             log: Arc::clone(&log),
             destroy_on: self.destroy_on,
             exit_on: self.exit_on,
+            alert_on: self.alert_on,
         };
         let thread = thread::spawn(move || fake.run());
         (
@@ -381,4 +396,86 @@ fn observe_reads_the_bound_tab() {
 #[test]
 fn replay_errors_are_not_typed_failures() {
     assert!(ToolError::from_cdp(&CdpError::NoScriptedResponse { method: "X".into() }).is_none());
+}
+
+/// A click whose handler opens an `alert()` over the pipe: the press ends
+/// `dialog_open` carrying the dialog's type and message, not empty fields.
+#[test]
+fn a_click_that_opens_an_alert_carries_its_type_and_message() {
+    let mut setup = Setup::page(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&page())
+            .dom_click(11),
+    );
+    setup.alert_on = Some("Runtime.callFunctionOn");
+    let (mut server, _chrome) = setup.start();
+    let err = server
+        .call_tool("browser_click", &json!({"index": 2}))
+        .expect_err("the alert interrupts the press");
+    let ToolError::DialogOpen { kind, message, .. } = &err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(
+        (kind.as_str(), message.as_str()),
+        ("alert", "Saved"),
+        "{err:?}"
+    );
+    assert_eq!(err.to_value()["type"], "alert");
+    assert_eq!(err.to_value()["message"], "Saved");
+    drop(server);
+}
+
+/// `browser_download` presses through the `browser_tools` path directly:
+/// an `alert()` its press opens still answers `dialog_open` with the
+/// dialog's type and message (they used to come back empty).
+#[test]
+fn a_download_press_that_opens_an_alert_carries_its_type_and_message() {
+    let mut setup = Setup::page(
+        ScriptBuilder::new()
+            .call("Browser.setDownloadBehavior", json!({}))
+            .observe_compact(&page())
+            .observe_compact(&page())
+            .dom_click(11)
+            .call("Browser.setDownloadBehavior", json!({})),
+    );
+    setup.alert_on = Some("Runtime.callFunctionOn");
+    let (mut server, _chrome) = setup.start();
+    let path = std::env::temp_dir().join(format!("aui-pipe-alert-{}.bin", std::process::id()));
+    let err = server
+        .call_tool(
+            "browser_download",
+            &json!({"index": 2, "path": path.display().to_string(), "timeout_ms": 50}),
+        )
+        .expect_err("the alert interrupts the press");
+    let ToolError::DialogOpen { kind, message, .. } = &err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(
+        (kind.as_str(), message.as_str()),
+        ("alert", "Saved"),
+        "{err:?}"
+    );
+    drop(server);
+}
+
+/// observe is not a `browser_*` tool: a dialog that ends its observation
+/// still answers `dialog_open` with the dialog's type and message.
+#[test]
+fn an_observe_cut_short_by_an_alert_carries_its_type_and_message() {
+    let mut setup = Setup::page(ScriptBuilder::new().observe_compact(&page()));
+    setup.alert_on = Some("Page.getLayoutMetrics");
+    let (mut server, _chrome) = setup.start();
+    let err = server
+        .call_tool("observe", &json!({}))
+        .expect_err("the alert interrupts observe");
+    let ToolError::DialogOpen { kind, message, .. } = &err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(
+        (kind.as_str(), message.as_str()),
+        ("alert", "Saved"),
+        "{err:?}"
+    );
+    drop(server);
 }

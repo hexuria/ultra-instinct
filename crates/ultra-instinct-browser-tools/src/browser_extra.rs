@@ -212,6 +212,22 @@ fn fold_dialog_events(server: &mut dyn BrowserHost, key: &str) {
     }
 }
 
+/// A failed env / state tool (which skip [`call`]'s wrapper): fold the
+/// tab's buffered dialog events and add the hint, so a dialog its press
+/// opened reports its type and message like every other tool's.
+pub(crate) fn dialog_error(
+    server: &mut dyn BrowserHost,
+    arguments: &Value,
+    err: ToolError,
+) -> ToolError {
+    let Ok(endpoint) = endpoint_of(arguments) else {
+        return err;
+    };
+    let key = session_key(server, &endpoint);
+    fold_dialog_events(server, &key);
+    with_dialog_hint(server, &key, err)
+}
+
 /// While a dialog is open the page answers nothing else: say so.
 fn with_dialog_hint(server: &dyn BrowserHost, key: &str, err: ToolError) -> ToolError {
     let Some(dialog) = server.dialog(key) else {

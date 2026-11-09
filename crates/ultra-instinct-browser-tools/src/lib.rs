@@ -40,8 +40,9 @@ pub fn call(
 ) -> Option<Result<Value, ToolError>> {
     let result = if ENV_TOOLS.contains(&name) {
         browser_env::call(host, name, arguments)
+            .map_err(|err| browser_extra::dialog_error(host, arguments, err))
     } else if let Some(result) = browser_state::call(host, name, arguments) {
-        result
+        result.map_err(|err| browser_extra::dialog_error(host, arguments, err))
     } else if name.starts_with("browser_") {
         browser_extra::call(host, name, arguments)
     } else {
@@ -56,6 +57,19 @@ pub fn call(
         }
         Err(err) => Err(secrets.scrub_error(err)),
     })
+}
+
+/// `err` with the type and message of the dialog open on the tab
+/// `arguments` names, when it is a `dialog_open` that lacks them (a typed
+/// CDP failure the host recovered from text, or a tool outside the
+/// `browser_*` family). Folds the tab's buffered dialog events first.
+pub fn fill_dialog(host: &mut dyn BrowserHost, arguments: &Value, err: ToolError) -> ToolError {
+    match &err {
+        ToolError::DialogOpen { kind, .. } if kind.is_empty() => {
+            browser_extra::dialog_error(host, arguments, err)
+        }
+        _ => err,
+    }
 }
 
 /// `(description, properties, required)` for a `browser_*` tool.

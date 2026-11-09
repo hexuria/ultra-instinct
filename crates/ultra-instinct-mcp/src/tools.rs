@@ -532,10 +532,18 @@ fn observe_origin(
         Origin::Fixture(path) => load_observation(path)?,
         Origin::Cdp(url) => {
             let mut session = Host(server).take_session(url)?;
-            let manifold = session
-                .observe()
-                .cloned()
-                .map_err(|err| ToolError::Browser(err.to_string()))?;
+            let manifold = match session.observe().cloned() {
+                Ok(manifold) => manifold,
+                Err(err) => {
+                    // The session is dropped, but a dialog it saw still
+                    // names itself in the error (`fill_dialog`).
+                    let events = session.transport_mut().drain_events();
+                    if !events.is_empty() {
+                        Host(server).push_events(url, events);
+                    }
+                    return Err(ToolError::Browser(err.to_string()));
+                }
+            };
             let page = session.page().cloned().unwrap_or_else(PageState::blank);
             Host(server).keep_session(url, session);
             (manifold, page)

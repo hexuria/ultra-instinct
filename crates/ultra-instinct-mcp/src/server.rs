@@ -274,9 +274,13 @@ impl Server {
         }
         self.cdp_failure.borrow_mut().take();
         let fixed = self.fixed_arguments(name, arguments);
-        let result = crate::tools::dispatch(self, name, fixed.as_ref().unwrap_or(arguments));
+        let arguments = fixed.as_ref().unwrap_or(arguments);
+        let result = crate::tools::dispatch(self, name, arguments);
         let seen = self.cdp_failure.borrow_mut().take();
-        result.map_err(|err| err.or_cdp(seen.as_ref()))
+        result.map_err(|err| {
+            let err = err.or_cdp(seen.as_ref());
+            ultra_instinct_browser_tools::fill_dialog(&mut Host(self), arguments, err)
+        })
     }
 
     /// With a fixed-endpoint backend (the pipe): `cdp` names that endpoint
