@@ -128,6 +128,23 @@ mod tests {
     }
 
     #[test]
+    fn tools_are_product_tools_then_every_browser_tool_once() {
+        // TOOLS lives here; the browser tool lists live in
+        // ultra-instinct-browser-tools. Each browser tool appears exactly once.
+        let browser: Vec<&str> = BROWSER_TOOLS
+            .into_iter()
+            .chain(EXTRA_TOOLS)
+            .chain(ENV_TOOLS)
+            .chain(STATE_TOOLS)
+            .collect();
+        assert_eq!(TOOLS[..3], PRODUCT_TOOLS);
+        assert_eq!(TOOLS.len(), PRODUCT_TOOLS.len() + browser.len());
+        for name in &TOOLS[3..] {
+            assert_eq!(browser.iter().filter(|n| *n == name).count(), 1, "{name}");
+        }
+    }
+
+    #[test]
     fn firewall_phases_match_product_tools() {
         let names: Vec<_> = FIREWALL_ORDER.iter().map(|p| p.as_str()).collect();
         assert_eq!(names, PRODUCT_TOOLS);
