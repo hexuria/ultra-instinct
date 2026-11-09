@@ -324,7 +324,7 @@ fn fold_labels<'a>(
         .collect();
     let mut dropped = BTreeSet::new();
     let mut reversed = BTreeMap::new();
-    let mut reversed_controls = BTreeSet::<i64>::new();
+    let mut reversed_controls = BTreeSet::new();
     for (i, node) in dom_nodes.iter().enumerate() {
         let (Some(target), Some(label)) = (&node.labels, node.backend_node_id) else {
             continue;
@@ -358,9 +358,7 @@ fn fold_labels<'a>(
                 if target.label_element
                     && target.role == Role::Checkbox
                     && other_clicks == 0
-                    && !reversed
-                        .values()
-                        .any(|t: &&LabelTarget| t.control == target.control) =>
+                    && reversed_controls.insert(target.control) =>
             {
                 reversed.insert(i, target);
                 dropped.insert(target.control);
