@@ -41,6 +41,12 @@ pub(crate) fn call(
     if !STATE_TOOLS.contains(&name) {
         return None;
     }
+    // A state file path is the caller's, and absolute.
+    if matches!(name, "browser_state_save" | "browser_state_load") {
+        if let Err(err) = req_str(arguments, "path").and_then(crate::host::absolute_path) {
+            return Some(Err(err));
+        }
+    }
     Some(with_session(server, arguments, |session| match name {
         "browser_state_save" => state_save(session, arguments),
         "browser_state_load" => state_load(session, arguments),

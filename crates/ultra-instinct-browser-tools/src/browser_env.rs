@@ -27,7 +27,7 @@ use serde_json::{json, Map, Value};
 use ultra_instinct_cdp::{CdpEvent, DEFAULT_CDP_HTTP};
 
 use crate::error::ToolError;
-use crate::host::{endpoint_of, keep, session_key, BrowserHost, LiveSession};
+use crate::host::{endpoint_of, keep, session_key, BrowserHost, Downloads, LiveSession};
 
 /// Tool names this module serves.
 pub const ENV_TOOLS: [&str; 3] = ["browser_set", "browser_download", "browser_network"];
@@ -510,12 +510,11 @@ fn check_destination(path: &Path, overwrite: bool) -> Result<(), ToolError> {
 /// A fresh, empty temp directory Chrome writes the download into. Made
 /// with `create_dir`, never reused: the clock can repeat (macOS gives
 /// microseconds), so a name taken by another download gets the next suffix.
-fn download_dir() -> Result<PathBuf, ToolError> {
+fn download_dir(base: &Path) -> Result<PathBuf, ToolError> {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or_default();
-    let base = std::env::temp_dir();
     let mut suffix = 0u32;
     loop {
         let dir = base.join(format!(
@@ -628,7 +627,26 @@ fn download(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, To
     let endpoint = endpoint_of(arguments)?;
     // 5, "5" or "@e5", like every other index tool.
     let index = crate::browser_extra::index_arg(arguments)? as u64;
-    let path = PathBuf::from(req_str(arguments, "path")?);
+    let path = crate::host::absolute_path(req_str(arguments, "path")?)?.to_path_buf();
+    // Where the host lets downloads go; Chrome writes into a fresh folder
+    // inside it (or the temp dir when downloads may go anywhere).
+    let staging = match server.downloads() {
+        Downloads::Off => return Err(ToolError::DownloadsOff),
+        Downloads::Anywhere => std::env::temp_dir(),
+        Downloads::Dir(dir) => {
+            let inside = path.parent() == Some(dir.as_path())
+                && !path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir));
+            if !inside {
+                return Err(ToolError::PathNotAllowed {
+                    path: path.display().to_string(),
+                    dir: dir.display().to_string(),
+                });
+            }
+            dir
+        }
+    };
     let overwrite = opt_bool(arguments, "overwrite")?.unwrap_or(false);
     let mouse = opt_bool(arguments, "mouse")?.unwrap_or(false);
     let timeout_ms = opt_u64(arguments, "timeout_ms")?
@@ -636,7 +654,7 @@ fn download(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, To
         .clamp(1, MAX_DOWNLOAD_TIMEOUT_MS);
     check_destination(&path, overwrite)?;
 
-    let dir = download_dir()?;
+    let dir = download_dir(&staging)?;
     // The press takes this call's `snapshot` and `confirm` like browser_click.
     let mut press = json!({"cdp": endpoint, "index": index, "mouse": mouse});
     for key in ["snapshot", "confirm"] {
@@ -819,7 +837,7 @@ fn network(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, Too
             Ok(json!({"recording": true}))
         }),
         "har_stop" => {
-            let path = PathBuf::from(req_str(arguments, "path")?);
+            let path = crate::host::absolute_path(req_str(arguments, "path")?)?.to_path_buf();
             if path.is_dir() {
                 return Err(bad(format!(
                     "`path` {} is an existing directory; give a file path",

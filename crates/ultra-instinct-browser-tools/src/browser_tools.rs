@@ -32,9 +32,6 @@ use crate::bound::{self, at_index, ticket_error};
 use crate::error::ToolError;
 use crate::host::{endpoint_of, keep, session_key, BrowserHost, PageTab};
 
-/// Longest a `browser_wait` sleeps, whatever the argument says.
-const MAX_WAIT_SECS: u64 = 60;
-
 /// All `browser_*` tool names this module serves.
 pub const BROWSER_TOOLS: [&str; 37] = [
     "browser_navigate",
@@ -458,7 +455,8 @@ fn wait(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolEr
     let until = WaitFor::parse(arguments)?;
     let default = if until.is_some() { 10.0 } else { 3.0 };
     let seconds = opt_f64(arguments, "seconds")?.unwrap_or(default);
-    let seconds = seconds.clamp(0.0, MAX_WAIT_SECS as f64);
+    // Capped at the host's `max_wait` (default 60 s).
+    let seconds = seconds.clamp(0.0, server.limits().max_wait.as_secs_f64());
     let Some(until) = until else {
         std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
         return Ok(json!({"waited": seconds}));
@@ -559,7 +557,10 @@ fn get_state(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, T
     })();
     keep(server, &key, session);
     let (page, manifold) = observed?;
-    let order = interactive_index(&manifold);
+    let mut order = interactive_index(&manifold);
+    let limits = server.limits();
+    let dropped = order.len().saturating_sub(limits.max_elements);
+    order.truncate(limits.max_elements);
     // Recorded in both formats: index presses may pass this `snapshot` to
     // act on what this call printed, or refuse.
     let snapshot = server
@@ -571,21 +572,38 @@ fn get_state(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, T
         )
         .get();
     if text {
-        let body = crate::page_text::page_text(page.as_ref(), &manifold, &order, snapshot);
-        return Ok(json!({"format": "text", "text": body, "snapshot": snapshot}));
+        let mut body = crate::page_text::page_text(page.as_ref(), &manifold, &order, snapshot);
+        if dropped > 0 {
+            body.push_str(&format!(
+                "\n… {dropped} more controls not shown (max_elements)"
+            ));
+        }
+        let cut = crate::browser_extra::truncate_output(&body, limits.max_state_chars);
+        let truncated = dropped > 0 || cut.len() != body.len();
+        let mut out = json!({"format": "text", "text": cut, "snapshot": snapshot});
+        if truncated {
+            out["truncated"] = json!(true);
+            out["dropped_elements"] = json!(dropped);
+        }
+        return Ok(out);
     }
     let elements: Vec<Value> = order
         .iter()
         .enumerate()
         .filter_map(|(i, id)| manifold.get(id).map(|r| element_json(i + 1, r)))
         .collect();
-    Ok(json!({
+    let mut out = json!({
         "url": page.as_ref().and_then(|p| p.url().map(str::to_owned)),
         "title": page.as_ref().and_then(|p| p.title().map(str::to_owned)),
         "interactive_elements": elements.len(),
         "elements": elements,
         "snapshot": snapshot,
-    }))
+    });
+    if dropped > 0 {
+        out["truncated"] = json!(true);
+        out["dropped_elements"] = json!(dropped);
+    }
+    Ok(out)
 }
 
 fn get_html(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
@@ -615,19 +633,45 @@ fn get_text(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, To
 
 fn screenshot(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
+    let path = opt_str(arguments, "path")?
+        .map(crate::host::absolute_path)
+        .transpose()?;
+    let limit = server.limits().max_screenshot_bytes;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
-    let outcome = session
-        .screenshot_png()
-        .map(|png| json!({"format": "png", "base64": png}))
-        .map_err(browser_err);
+    // Over the byte cap: once more as a JPEG, then `output_too_large`.
+    let outcome = (|| {
+        let png = session.screenshot_png().map_err(browser_err)?;
+        if decoded_len(&png) <= limit {
+            return Ok(json!({"format": "png", "base64": png}));
+        }
+        let jpeg = session.screenshot_jpeg().map_err(browser_err)?;
+        match jpeg {
+            Some(jpeg) if decoded_len(&jpeg) <= limit => {
+                Ok(json!({"format": "jpeg", "base64": jpeg}))
+            }
+            other => Err(ToolError::OutputTooLarge {
+                limit,
+                bytes: decoded_len(other.as_deref().unwrap_or(&png)),
+            }),
+        }
+    })();
     keep(server, &key, session);
-    save_artifact(outcome?, "base64", opt_str(arguments, "path")?)
+    save_artifact(outcome?, "base64", path)
+}
+
+/// Bytes a base64 string decodes to (padding aside).
+fn decoded_len(base64: &str) -> usize {
+    base64.len() / 4 * 3
 }
 
 /// With a `path`, writes the decoded base64 in `body[field]` there and
 /// records `path` and `bytes`. The body keeps the base64 either way.
-fn save_artifact(mut body: Value, field: &str, path: Option<&str>) -> Result<Value, ToolError> {
+fn save_artifact(
+    mut body: Value,
+    field: &str,
+    path: Option<&std::path::Path>,
+) -> Result<Value, ToolError> {
     use base64::Engine as _;
     let Some(path) = path else {
         return Ok(body);
@@ -637,7 +681,7 @@ fn save_artifact(mut body: Value, field: &str, path: Option<&str>) -> Result<Val
         .map_err(browser_err)?;
     std::fs::write(path, &bytes)
         .map_err(|err| ToolError::InvalidArguments(format!("`path` {path:?}: {err}")))?;
-    body["path"] = json!(path);
+    body["path"] = json!(path.display().to_string());
     body["bytes"] = json!(bytes.len());
     Ok(body)
 }
@@ -1060,6 +1104,9 @@ fn save_as_pdf(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value,
     let landscape = opt_bool(arguments, "landscape")?.unwrap_or(false);
     let print_background = opt_bool(arguments, "print_background")?.unwrap_or(false);
     let scale = opt_f64(arguments, "scale")?.unwrap_or(1.0);
+    let path = opt_str(arguments, "path")?
+        .map(crate::host::absolute_path)
+        .transpose()?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
     let outcome = session
@@ -1067,7 +1114,7 @@ fn save_as_pdf(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value,
         .map(|data| json!({"data": data}))
         .map_err(browser_err);
     keep(server, &key, session);
-    save_artifact(outcome?, "data", opt_str(arguments, "path")?)
+    save_artifact(outcome?, "data", path)
 }
 
 fn get_dropdown_options(

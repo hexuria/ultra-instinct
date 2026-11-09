@@ -16,7 +16,7 @@
 //! instead (`crate::PipeBackend`, ADR 0013): no HTTP endpoint at all.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use serde_json::Value;
@@ -24,7 +24,7 @@ use ultra_instinct_browser::{
     BrowserSession, CdpError, CdpTransport, PageState, WebSocketTransport,
 };
 use ultra_instinct_browser_tools::{
-    BrowserHost, HttpBackend, LiveSession, TargetBackend, ToolState,
+    BrowserHost, Downloads, HttpBackend, LiveSession, TargetBackend, ToolLimits, ToolState,
 };
 use ultra_instinct_cdp::CdpEvent;
 use ultra_instinct_core::InteractionManifold;
@@ -84,6 +84,10 @@ pub struct Server {
     policy: Result<Policy, String>,
     /// Index presses must name the `snapshot` they were read from.
     require_snapshot: bool,
+    limits: ToolLimits,
+    downloads: Downloads,
+    /// `Some`: only these tools run and `tools/list` shows only them.
+    allowlist: Option<BTreeSet<String>>,
 }
 
 impl SignedSnapshot for Snapshot {
@@ -148,7 +152,51 @@ impl Server {
             tools: ToolState::default(),
             policy: Ok(Policy::default()),
             require_snapshot: false,
+            limits: ToolLimits::default(),
+            downloads: Downloads::default(),
+            allowlist: None,
         }
+    }
+
+    /// Replace the policy now; open sessions stay open and the next call
+    /// runs under `policy`. A `confirm` argument still lifts a confirm for
+    /// its own call only.
+    pub fn set_policy(&mut self, policy: Policy) {
+        self.policy = Ok(policy);
+    }
+
+    /// Output limits for the `browser_*` tools (see [`ToolLimits`] for the
+    /// defaults and what happens at each).
+    pub fn with_limits(mut self, limits: ToolLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    /// Where `browser_download` may write: [`Downloads::Anywhere`] (default,
+    /// any absolute path), [`Downloads::Off`] (refuses `downloads_off`), or
+    /// [`Downloads::Dir`] (only files directly in that folder, else
+    /// `path_not_allowed`).
+    pub fn with_downloads(mut self, downloads: Downloads) -> Self {
+        self.downloads = downloads;
+        self
+    }
+
+    /// Only `names` run (any other gives `tool_not_allowed` before any CDP
+    /// call) and `tools/list` lists only them. Default: every tool.
+    pub fn with_tool_allowlist<I, S>(mut self, names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.allowlist = Some(names.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Whether `name` may run here (the allow-list, when one is set).
+    pub fn allows(&self, name: &str) -> bool {
+        self.allowlist
+            .as_ref()
+            .is_none_or(|allowed| allowed.contains(name))
     }
 
     /// With `true`, every index press (click, type, select, check, focus,
@@ -179,6 +227,11 @@ impl Server {
 
     /// Run one tool against this server's state.
     pub fn call_tool(&mut self, name: &str, arguments: &Value) -> Result<Value, ToolError> {
+        if !self.allows(name) {
+            return Err(ToolError::ToolNotAllowed {
+                tool: name.to_owned(),
+            });
+        }
         self.cdp_failure.borrow_mut().take();
         let fixed = self.fixed_arguments(name, arguments);
         let result = crate::tools::dispatch(self, name, fixed.as_ref().unwrap_or(arguments));
@@ -399,6 +452,14 @@ impl BrowserHost for Host<'_> {
 
     fn require_snapshot(&self) -> bool {
         self.0.require_snapshot
+    }
+
+    fn limits(&self) -> ToolLimits {
+        self.0.limits
+    }
+
+    fn downloads(&self) -> Downloads {
+        self.0.downloads.clone()
     }
 
     fn policy(&self) -> Result<&Policy, ToolError> {

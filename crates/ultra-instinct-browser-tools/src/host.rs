@@ -10,6 +10,8 @@
 //! no host can skip either.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde_json::Value;
 use ultra_instinct_browser::{BrowserSession, CdpTransport, PageState};
@@ -30,6 +32,60 @@ pub type LiveSession = BrowserSession<Box<dyn CdpTransport>>;
 
 /// Opens the CDP transport for one session key.
 pub type CdpConnector = Box<dyn FnMut(&str) -> Result<Box<dyn CdpTransport>, CdpError>>;
+
+/// Output limits the `browser_*` tools apply ([`BrowserHost::limits`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ToolLimits {
+    /// Longest `browser_get_state` text, in chars; a longer one is cut with
+    /// `… [truncated N chars]` and `truncated: true`. Default 100 000.
+    pub max_state_chars: usize,
+    /// Most elements `browser_get_state` lists (text lines or JSON
+    /// `elements`); the rest are counted in `dropped_elements` with
+    /// `truncated: true`. Default 1 000.
+    pub max_elements: usize,
+    /// Largest decoded screenshot. A PNG over it is taken once more as a
+    /// JPEG (quality 70); still over: `output_too_large`. Default 16 MiB,
+    /// which fits a 32 MiB pipe frame as base64 with room to spare.
+    pub max_screenshot_bytes: usize,
+    /// Longest `browser_wait`, whatever the argument says. Default 60 s.
+    pub max_wait: Duration,
+}
+
+impl Default for ToolLimits {
+    fn default() -> Self {
+        Self {
+            max_state_chars: 100_000,
+            max_elements: 1_000,
+            max_screenshot_bytes: 16 << 20,
+            max_wait: Duration::from_secs(60),
+        }
+    }
+}
+
+/// Where `browser_download` may put files ([`BrowserHost::downloads`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Downloads {
+    /// Any absolute path the call names (the default).
+    #[default]
+    Anywhere,
+    /// `browser_download` refuses with `downloads_off`.
+    Off,
+    /// Only files directly in this folder; Chrome also writes there.
+    Dir(PathBuf),
+}
+
+/// `raw` as a path the caller chose: absolute, or `path_not_absolute`. No
+/// tool invents a default path or resolves a relative one.
+pub(crate) fn absolute_path(raw: &str) -> Result<&Path, ToolError> {
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Err(ToolError::PathNotAbsolute {
+            path: raw.to_owned(),
+        })
+    }
+}
 
 /// One page tab, as a [`TargetBackend`] lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -220,6 +276,16 @@ pub trait BrowserHost {
 
     /// Where tabs come from (list / create / activate / close).
     fn backend(&mut self) -> &mut dyn TargetBackend;
+
+    /// Output limits. Default [`ToolLimits::default`].
+    fn limits(&self) -> ToolLimits {
+        ToolLimits::default()
+    }
+
+    /// Where downloads may go. Default [`Downloads::Anywhere`].
+    fn downloads(&self) -> Downloads {
+        Downloads::Anywhere
+    }
 
     /// The tools' own state, stored on the host.
     fn tool_state(&self) -> &ToolState;

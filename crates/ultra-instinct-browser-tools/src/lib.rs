@@ -26,7 +26,8 @@ pub use browser_state::STATE_TOOLS;
 pub use browser_tools::BROWSER_TOOLS;
 pub use error::{ToolError, ERROR_CODES};
 pub use host::{
-    BrowserHost, CdpConnector, HttpBackend, LiveSession, PageTab, TargetBackend, ToolState,
+    BrowserHost, CdpConnector, Downloads, HttpBackend, LiveSession, PageTab, TargetBackend,
+    ToolLimits, ToolState,
 };
 pub use secrets::{sensitive, MASK};
 

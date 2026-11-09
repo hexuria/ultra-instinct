@@ -86,7 +86,7 @@ fn dispatch_object(server: &mut Server, value: &Value) -> Option<String> {
     let params = value.get("params").cloned().unwrap_or(Value::Null);
     Some(match method {
         "initialize" => rpc_ok(id, initialize_result()),
-        "tools/list" => rpc_ok(id, tools_list()),
+        "tools/list" => rpc_ok(id, tools_list(server)),
         "tools/call" => match tools_call(server, &params) {
             Ok(result) => rpc_ok(id, result),
             Err(err) => rpc_error(id, -32602, &err.to_string(), err.to_value()),
@@ -133,10 +133,14 @@ fn tools_call(server: &mut Server, params: &Value) -> Result<Value, ToolError> {
 /// (browser-use parity), then the rest of the body as text, without the
 /// base64 it would otherwise repeat.
 fn image_result(mut body: Value) -> Value {
+    let mime = match body.get("format").and_then(Value::as_str) {
+        Some("jpeg") => "image/jpeg",
+        _ => "image/png",
+    };
     match body.as_object_mut().and_then(|map| map.remove("base64")) {
         Some(Value::String(data)) => json!({
             "content": [
-                {"type": "image", "data": data, "mimeType": "image/png"},
+                {"type": "image", "data": data, "mimeType": mime},
                 {"type": "text", "text": body.to_string()},
             ],
             "isError": false,
@@ -161,9 +165,14 @@ fn initialize_result() -> Value {
     })
 }
 
-fn tools_list() -> Value {
+fn tools_list(server: &Server) -> Value {
     json!({
-        "tools": TOOLS.iter().copied().map(tool_spec).collect::<Vec<_>>(),
+        "tools": TOOLS
+            .iter()
+            .copied()
+            .filter(|name| server.allows(name))
+            .map(tool_spec)
+            .collect::<Vec<_>>(),
     })
 }
 
