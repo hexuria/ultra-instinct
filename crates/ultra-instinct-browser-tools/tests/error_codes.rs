@@ -9,7 +9,7 @@ use ultra_instinct_cdp::CdpError;
 /// Every `ToolError::code`, in declaration order (docs/embedding.md). A
 /// code never changes meaning once shipped: change this list only by
 /// appending.
-const ERROR_CODES: [&str; 61] = [
+const ERROR_CODES: [&str; 62] = [
     "missing_fixture",
     "missing_before",
     "missing_after",
@@ -71,6 +71,7 @@ const ERROR_CODES: [&str; 61] = [
     "output_too_large",
     "secrets_full",
     "secret_on_screen",
+    "uploads_off",
 ];
 
 fn s(text: &str) -> String {
@@ -168,6 +169,7 @@ fn every_variant() -> Vec<ToolError> {
         ToolError::SecretOnScreen {
             message: s("no objectId"),
         },
+        ToolError::UploadsOff,
     ]
 }
 

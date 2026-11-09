@@ -153,7 +153,7 @@ pub enum ToolError {
     PathNotAbsolute {
         path: String,
     },
-    /// The host forces downloads into `dir`; `path` is elsewhere.
+    /// The host keeps downloads (or uploads) in `dir`; `path` is elsewhere.
     PathNotAllowed {
         path: String,
         dir: String,
@@ -175,6 +175,8 @@ pub enum ToolError {
     SecretOnScreen {
         message: String,
     },
+    /// The host turned uploads off.
+    UploadsOff,
 }
 
 impl ToolError {
@@ -243,6 +245,7 @@ impl ToolError {
             Self::OutputTooLarge { .. } => "OutputTooLarge",
             Self::SecretsFull { .. } => "SecretsFull",
             Self::SecretOnScreen { .. } => "SecretOnScreen",
+            Self::UploadsOff => "UploadsOff",
         }
     }
 
@@ -310,6 +313,7 @@ impl ToolError {
             Self::OutputTooLarge { .. } => "output_too_large",
             Self::SecretsFull { .. } => "secrets_full",
             Self::SecretOnScreen { .. } => "secret_on_screen",
+            Self::UploadsOff => "uploads_off",
         }
     }
 
@@ -480,6 +484,7 @@ impl ToolError {
                     | Self::OutputTooLarge { .. }
                     | Self::SecretsFull { .. }
                     | Self::SecretOnScreen { .. }
+                    | Self::UploadsOff
             ) {
                 map.insert("message".into(), json!(self.to_string()));
             }
@@ -597,9 +602,10 @@ impl fmt::Display for ToolError {
             Self::ToolNotAllowed { tool } => write!(f, "tool `{tool}` is not allowed on this server"),
             Self::PathNotAbsolute { path } => write!(f, "path {path:?} must be absolute"),
             Self::PathNotAllowed { path, dir } => {
-                write!(f, "path {path:?} is outside the download folder {dir:?}")
+                write!(f, "path {path:?} is outside the folder {dir:?} this server allows")
             }
             Self::DownloadsOff => f.write_str("downloads are turned off on this server"),
+            Self::UploadsOff => f.write_str("uploads are turned off on this server"),
             Self::OutputTooLarge { limit, bytes } => {
                 write!(f, "output is {bytes} bytes, over the {limit}-byte limit")
             }

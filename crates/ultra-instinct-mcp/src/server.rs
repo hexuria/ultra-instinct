@@ -24,7 +24,7 @@ use ultra_instinct_browser::{
     BrowserSession, CdpError, CdpTransport, PageState, WebSocketTransport,
 };
 use ultra_instinct_browser_tools::{
-    BrowserHost, Downloads, HttpBackend, LiveSession, TargetBackend, ToolLimits, ToolState,
+    BrowserHost, Downloads, HttpBackend, LiveSession, TargetBackend, ToolLimits, ToolState, Uploads,
 };
 use ultra_instinct_cdp::CdpEvent;
 use ultra_instinct_core::InteractionManifold;
@@ -91,6 +91,7 @@ pub struct Server {
     require_snapshot: bool,
     limits: ToolLimits,
     downloads: Downloads,
+    uploads: Uploads,
     /// `Some`: only these tools run and `tools/list` shows only them.
     allowlist: Option<BTreeSet<String>>,
 }
@@ -160,6 +161,7 @@ impl Server {
             require_snapshot: false,
             limits: ToolLimits::default(),
             downloads: Downloads::default(),
+            uploads: Uploads::default(),
             allowlist: None,
         }
     }
@@ -184,6 +186,15 @@ impl Server {
     /// `path_not_allowed`).
     pub fn with_downloads(mut self, downloads: Downloads) -> Self {
         self.downloads = downloads;
+        self
+    }
+
+    /// Which local files `browser_file_upload` may give the page:
+    /// [`Uploads::Anywhere`] (default, any absolute path), [`Uploads::Off`]
+    /// (refuses `uploads_off`), or [`Uploads::Dir`] (only files under that
+    /// folder once `..` and symlinks are resolved, else `path_not_allowed`).
+    pub fn with_uploads(mut self, uploads: Uploads) -> Self {
+        self.uploads = uploads;
         self
     }
 
@@ -566,6 +577,10 @@ impl BrowserHost for Host<'_> {
 
     fn downloads(&self) -> Downloads {
         self.0.downloads.clone()
+    }
+
+    fn uploads(&self) -> Uploads {
+        self.0.uploads.clone()
     }
 
     fn policy(&self) -> Result<&Policy, ToolError> {

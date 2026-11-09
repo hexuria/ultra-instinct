@@ -75,6 +75,50 @@ pub enum Downloads {
     Dir(PathBuf),
 }
 
+/// Which local files `browser_file_upload` may hand the page
+/// ([`BrowserHost::uploads`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Uploads {
+    /// Any absolute path the call names (the default).
+    #[default]
+    Anywhere,
+    /// `browser_file_upload` refuses with `uploads_off`.
+    Off,
+    /// Only files under this folder, after resolving `..` and symlinks.
+    Dir(PathBuf),
+}
+
+/// The files `raw` names as `uploads` lets them go: each absolute (else
+/// `path_not_absolute`), and under `Dir` the canonical path inside the
+/// canonical folder (else `path_not_allowed`), checked before any CDP call.
+pub(crate) fn upload_paths(uploads: &Uploads, raw: &[String]) -> Result<Vec<String>, ToolError> {
+    let paths = raw
+        .iter()
+        .map(|path| absolute_path(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    match uploads {
+        Uploads::Anywhere => Ok(raw.to_vec()),
+        Uploads::Off => Err(ToolError::UploadsOff),
+        Uploads::Dir(dir) => paths
+            .into_iter()
+            .map(|path| {
+                let refused = || ToolError::PathNotAllowed {
+                    path: path.display().to_string(),
+                    dir: dir.display().to_string(),
+                };
+                let (Ok(file), Ok(folder)) = (path.canonicalize(), dir.canonicalize()) else {
+                    return Err(refused());
+                };
+                if file.starts_with(&folder) && file.is_file() {
+                    Ok(file.to_string_lossy().into_owned())
+                } else {
+                    Err(refused())
+                }
+            })
+            .collect(),
+    }
+}
+
 /// `raw` as a path the caller chose: absolute, or `path_not_absolute`. No
 /// tool invents a default path or resolves a relative one.
 pub(crate) fn absolute_path(raw: &str) -> Result<&Path, ToolError> {
@@ -211,6 +255,11 @@ pub trait BrowserHost {
     /// Where downloads may go. Default [`Downloads::Anywhere`].
     fn downloads(&self) -> Downloads {
         Downloads::Anywhere
+    }
+
+    /// Which files uploads may name. Default [`Uploads::Anywhere`].
+    fn uploads(&self) -> Uploads {
+        Uploads::Anywhere
     }
 
     /// Take the typed CDP failure (timeout, pipe closed, …) the host noted

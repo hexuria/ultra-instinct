@@ -1043,6 +1043,7 @@ fn file_upload(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value,
             "missing required `path` or `paths`".into(),
         ));
     }
+    let files = crate::host::upload_paths(&server.uploads(), &files)?;
     gated_press_at(server, arguments, move |session, target| {
         session.set_files(target, &files)
     })
@@ -1687,7 +1688,7 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             props.insert("paths".into(), json!({"type": "array", "items": {"type": "string"}}));
             props.insert("confirm".into(), confirm_prop());
             required.push("index");
-            "Set files on the file input at a browser_get_state index (DOM.setFileInputFiles; paths resolved by the Chrome process)."
+            "Set files on the file input at a browser_get_state index (DOM.setFileInputFiles). Paths must be absolute; the server may turn uploads off or keep them inside one folder."
         }
         "browser_save_as_pdf" => {
             props.insert("landscape".into(), json!({"type": "boolean"}));
