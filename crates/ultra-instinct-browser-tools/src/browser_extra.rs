@@ -35,7 +35,7 @@ use ultra_instinct_core::{Action, InteractionManifold, InteractionRegion, Region
 use ultra_instinct_guard::{consume_ticket_once_checked, gate, gate_check, ConsumeError, Policy};
 
 use crate::bound::{self, at_index, ticket_error};
-use crate::browser_tools::{interactive_index, refused};
+use crate::browser_tools::{interactive_index, refusal_for};
 use crate::error::ToolError;
 use crate::host::{endpoint_of, keep, session_key, BrowserHost, LiveSession};
 
@@ -439,7 +439,7 @@ fn check(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
         executed.map_err(|err| match err {
             ExecError::Gate(reason) if is_policy(reason) => {
                 let url = session.page().and_then(|p| p.url().map(str::to_owned));
-                policy_refusal(reason, &ticket.target_label, url.as_deref())
+                refusal_for(reason, &ticket.target_label, url.as_deref())
             }
             other => exec_error(other),
         })?;
@@ -501,7 +501,7 @@ fn focus(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
         server.keep_ledger(key, ledger);
         result.map_err(|err| match err {
             ConsumeError::Refused(reason) => {
-                policy_refusal(reason, &ticket.target_label, url.as_deref())
+                refusal_for(reason, &ticket.target_label, url.as_deref())
             }
             other => consume_error(other),
         })?;
@@ -982,18 +982,6 @@ fn is_policy(reason: ultra_instinct_protocol::GuardReason) -> bool {
         reason,
         GuardReason::NeedsConfirm | GuardReason::DomainNotAllowed
     )
-}
-
-/// A policy refusal: the label for a confirm, the URL's host for a domain.
-fn policy_refusal(
-    reason: ultra_instinct_protocol::GuardReason,
-    label: &str,
-    url: Option<&str>,
-) -> ToolError {
-    match reason {
-        ultra_instinct_protocol::GuardReason::NeedsConfirm => refused(reason, label),
-        _ => refused(reason, url.unwrap_or("")),
-    }
 }
 
 /// Tool specs: this module's tools, and `max_chars` / `annotate` on the

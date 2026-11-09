@@ -840,7 +840,7 @@ fn gated_input(
 
 /// [`refused`] with the right detail: the label for a confirm, the URL for
 /// a domain.
-fn refusal_for(reason: GuardReason, label: &str, url: Option<&str>) -> ToolError {
+pub(crate) fn refusal_for(reason: GuardReason, label: &str, url: Option<&str>) -> ToolError {
     match reason {
         GuardReason::NeedsConfirm => refused(reason, label),
         _ => refused(reason, url.unwrap_or("")),
