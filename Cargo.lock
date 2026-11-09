@@ -1722,6 +1722,8 @@ dependencies = [
 name = "ultra-instinct-cdp"
 version = "0.1.0"
 dependencies = [
+ "proptest",
+ "rustix",
  "serde_json",
  "tungstenite",
 ]
