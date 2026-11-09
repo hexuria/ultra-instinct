@@ -477,3 +477,32 @@ fn seen_snapshot_escalates_when_occlusion_appears() {
     assert_eq!(decision["reason"], "world-changed", "{decision}");
     assert_eq!(presses(&log), 0);
 }
+
+/// A `browser_get_state` snapshot (either format) is what the host saw:
+/// guard's `seen_snapshot` takes it for the same tab, as it did when
+/// get_state recorded under `cdp:<endpoint>`.
+#[test]
+fn guard_takes_a_get_state_snapshot_of_the_same_tab_as_seen() {
+    for format in ["text", "json"] {
+        let page = settings_page(false, false, false);
+        let script = ScriptBuilder::new().observe(&page).observe(&page);
+        let (mut server, log) = server(script);
+        let seen = call(
+            &mut server,
+            "browser_get_state",
+            json!({"cdp": TAB, "format": format}),
+        );
+        let decision = call(
+            &mut server,
+            "guard",
+            json!({
+                "cdp": TAB,
+                "target": "Delete project",
+                "role": "button",
+                "seen_snapshot": seen["snapshot"],
+            }),
+        );
+        assert_eq!(decision["decision"], "allow", "{format}: {decision}");
+        assert_eq!(presses(&log), 0);
+    }
+}

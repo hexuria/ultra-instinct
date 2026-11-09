@@ -72,6 +72,13 @@ pub fn fill_dialog(host: &mut dyn BrowserHost, arguments: &Value, err: ToolError
     }
 }
 
+/// The snapshot origin `browser_get_state` records for the tab the `cdp`
+/// endpoint drives now (`browser:<session key>`), so a host's guard can
+/// take those snapshots as what the caller saw on that tab.
+pub fn state_origin(host: &dyn BrowserHost, cdp: &str) -> String {
+    bound::origin(&host::session_key(host, cdp))
+}
+
 /// `(description, properties, required)` for a `browser_*` tool.
 pub fn spec(name: &str) -> (String, Map<String, Value>, Vec<&'static str>) {
     if ENV_TOOLS.contains(&name) {

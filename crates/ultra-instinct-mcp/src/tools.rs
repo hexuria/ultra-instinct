@@ -160,10 +160,21 @@ fn guard_tool(server: &mut Server, arguments: &Value) -> Result<Value, ToolError
     };
     // The observation the host decided on. Its world snapshot (focus, dialogs,
     // clickable ids, occluded set) is compared with the world observed now.
+    // Recorded by observe / guard on this origin, or by `browser_get_state`
+    // on the tab this endpoint drives.
+    let state_origin = match &origin {
+        Origin::Cdp(url) => Some(ultra_instinct_browser_tools::state_origin(
+            &Host(server),
+            url,
+        )),
+        Origin::Fixture(_) => None,
+    };
     let seen = match opt_snapshot(arguments, "seen_snapshot")? {
         Some(id) => {
             let seen = server.snapshot(id)?;
-            if seen.origin != origin_key(&origin) {
+            if seen.origin != origin_key(&origin)
+                && state_origin.as_deref() != Some(seen.origin.as_str())
+            {
                 return Err(ToolError::InvalidArguments(format!(
                     "seen_snapshot {id} was observed from {}, not {}",
                     seen.origin,

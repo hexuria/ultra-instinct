@@ -479,3 +479,35 @@ fn an_observe_cut_short_by_an_alert_carries_its_type_and_message() {
     );
     drop(server);
 }
+
+/// guard takes a `browser_get_state` snapshot of the bound tab as
+/// `seen_snapshot`, and refuses one taken on another tab.
+#[test]
+fn guard_takes_a_get_state_snapshot_of_its_tab_only() {
+    let mut setup = Setup::page(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&page()),
+    );
+    setup
+        .next_pages
+        .push(ScriptBuilder::new().ready_state("complete"));
+    let (mut server, _chrome) = setup.start();
+    let guard = |snapshot: &Value| json!({"target": "Sign in", "role": "button", "seen_snapshot": snapshot});
+    let seen = call(&mut server, "browser_get_state", json!({}));
+    let decision = call(&mut server, "guard", guard(&seen["snapshot"]));
+    assert_eq!(decision["decision"], "allow", "{decision}");
+    call(
+        &mut server,
+        "browser_new_tab",
+        json!({"url": "https://shop.example/cart"}),
+    );
+    let err = server
+        .call_tool("guard", &guard(&seen["snapshot"]))
+        .expect_err("a snapshot of another tab");
+    assert!(
+        matches!(&err, ToolError::InvalidArguments(m) if m.contains("browser:pipe:T1")),
+        "{err:?}"
+    );
+    drop(server);
+}
