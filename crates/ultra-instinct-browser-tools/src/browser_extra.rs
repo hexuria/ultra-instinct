@@ -36,7 +36,7 @@ use ultra_instinct_guard::{consume_ticket_once, gate, ConsumeError};
 
 use crate::browser_tools::interactive_index;
 use crate::error::ToolError;
-use crate::server::{LiveSession, Server};
+use crate::host::{endpoint_of, keep, session_key, BrowserHost, LiveSession};
 
 /// The tools this module serves itself.
 pub const EXTRA_TOOLS: [&str; 9] = [
@@ -62,7 +62,7 @@ const OUTPUT_TOOLS: [&str; 7] = [
     "browser_read_network",
 ];
 
-/// `Server::enabled_domains` bit for the Page domain (console 0b01, network 0b10).
+/// `BrowserHost::enabled_domains` bit for the Page domain (console 0b01, network 0b10).
 const PAGE_BIT: u8 = 0b100;
 
 /// True when the page has a focused element other than the document itself.
@@ -117,7 +117,11 @@ fn truncated_marker(dropped: usize) -> String {
 }
 
 /// Run one `browser_*` tool with dialog tracking and the output limit.
-pub(crate) fn call(server: &mut Server, name: &str, arguments: &Value) -> Result<Value, ToolError> {
+pub(crate) fn call(
+    server: &mut dyn BrowserHost,
+    name: &str,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
     // A malformed `cdp` is the tool's own argument error.
     let Ok(endpoint) = endpoint_of(arguments) else {
         return crate::browser_tools::call(server, name, arguments);
@@ -171,7 +175,7 @@ fn drives_page(name: &str, arguments: &Value) -> bool {
 /// `Page.enable` once per tab, so dialog events are buffered. A transport
 /// that cannot enable it (a replay script that never scripted the call)
 /// leaves dialogs untracked; the next call tries again.
-fn enable_page_events(server: &mut Server, key: &str) -> Result<(), ToolError> {
+fn enable_page_events(server: &mut dyn BrowserHost, key: &str) -> Result<(), ToolError> {
     if server.enabled_domains(key) & PAGE_BIT != 0 {
         return Ok(());
     }
@@ -189,7 +193,7 @@ fn enable_page_events(server: &mut Server, key: &str) -> Result<(), ToolError> {
 
 /// Fold buffered dialog events into `key`'s dialog state. Other Page events
 /// are dropped: only this module enables Page, and nothing reads them.
-fn fold_dialog_events(server: &mut Server, key: &str) {
+fn fold_dialog_events(server: &mut dyn BrowserHost, key: &str) {
     let events = server.take_events(key);
     let mut rest: Vec<CdpEvent> = Vec::with_capacity(events.len());
     for event in events {
@@ -208,7 +212,7 @@ fn fold_dialog_events(server: &mut Server, key: &str) {
 }
 
 /// While a dialog is open the page answers nothing else: say so.
-fn with_dialog_hint(server: &Server, key: &str, err: ToolError) -> ToolError {
+fn with_dialog_hint(server: &dyn BrowserHost, key: &str, err: ToolError) -> ToolError {
     let Some(dialog) = server.dialog(key) else {
         return err;
     };
@@ -269,7 +273,7 @@ fn limit_output(name: &str, arguments: &Value, mut body: Value) -> Result<Value,
     Ok(body)
 }
 
-fn dialog(server: &mut Server, key: &str, arguments: &Value) -> Result<Value, ToolError> {
+fn dialog(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<Value, ToolError> {
     let action = opt_str(arguments, "action")?.unwrap_or("status");
     let accept = match action {
         "status" => None,
@@ -318,7 +322,7 @@ fn dialog(server: &mut Server, key: &str, arguments: &Value) -> Result<Value, To
     Ok(body)
 }
 
-fn go_forward(server: &mut Server, key: &str) -> Result<Value, ToolError> {
+fn go_forward(server: &mut dyn BrowserHost, key: &str) -> Result<Value, ToolError> {
     let mut session = server.take_session(key)?;
     let outcome = (|| {
         let body = session
@@ -345,7 +349,7 @@ fn go_forward(server: &mut Server, key: &str) -> Result<Value, ToolError> {
     outcome
 }
 
-fn reload(server: &mut Server, key: &str, arguments: &Value) -> Result<Value, ToolError> {
+fn reload(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<Value, ToolError> {
     let ignore_cache = opt_bool(arguments, "ignore_cache")?.unwrap_or(false);
     let mut session = server.take_session(key)?;
     let outcome = session
@@ -364,7 +368,7 @@ fn reload(server: &mut Server, key: &str, arguments: &Value) -> Result<Value, To
 
 /// Set a checkbox / radio / switch to `checked`: no press when it already
 /// is, else the `browser_click` press, then a read-back that must agree.
-fn check(server: &mut Server, key: &str, arguments: &Value) -> Result<Value, ToolError> {
+fn check(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<Value, ToolError> {
     let index = index_arg(arguments)?;
     let want = opt_bool(arguments, "checked")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `checked`".into()))?;
@@ -412,7 +416,7 @@ fn check(server: &mut Server, key: &str, arguments: &Value) -> Result<Value, Too
 
 /// Move keyboard focus to an element: gate (Focus) → ticket →
 /// `consume_ticket_once` → `DOM.focus` on its node.
-fn focus(server: &mut Server, key: &str, arguments: &Value) -> Result<Value, ToolError> {
+fn focus(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<Value, ToolError> {
     let index = index_arg(arguments)?;
     let mut session = server.take_session(key)?;
     let outcome = (|| {
@@ -450,7 +454,11 @@ fn focus(server: &mut Server, key: &str, arguments: &Value) -> Result<Value, Too
 
 /// Type at whatever has focus, with no target: per-char key events
 /// (`type`) or one `Input.insertText` (`insert`). Nothing focused refuses.
-fn keyboard(server: &mut Server, key: &str, arguments: &Value) -> Result<Value, ToolError> {
+fn keyboard(
+    server: &mut dyn BrowserHost,
+    key: &str,
+    arguments: &Value,
+) -> Result<Value, ToolError> {
     let text = opt_str(arguments, "text")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `text`".into()))?;
     let mode = opt_str(arguments, "mode")?.unwrap_or("type");
@@ -523,7 +531,7 @@ fn type_char(session: &mut LiveSession, ch: char) -> Result<(), BrowserError> {
 
 /// `browser_get`: value / attr / box / label / role of an element, from the
 /// observation (attr reads `DOM.getAttributes`). Secret values are never read.
-fn get(server: &mut Server, key: &str, arguments: &Value) -> Result<Value, ToolError> {
+fn get(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<Value, ToolError> {
     let index = index_arg(arguments)?;
     let what = opt_str(arguments, "what")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `what`".into()))?;
@@ -616,7 +624,7 @@ fn attribute(session: &mut LiveSession, id: &RegionId, name: &str) -> Result<Val
 
 /// `browser_is`: visible / enabled / checked / editable, from the fresh
 /// observation's flags and control state.
-fn is(server: &mut Server, key: &str, arguments: &Value) -> Result<Value, ToolError> {
+fn is(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<Value, ToolError> {
     let index = index_arg(arguments)?;
     let what = opt_str(arguments, "what")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `what`".into()))?;
@@ -650,7 +658,7 @@ fn is(server: &mut Server, key: &str, arguments: &Value) -> Result<Value, ToolEr
 
 /// Interactive-index entries whose label (exact, case-insensitive) and/or
 /// role match.
-fn count(server: &mut Server, key: &str, arguments: &Value) -> Result<Value, ToolError> {
+fn count(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<Value, ToolError> {
     let label = opt_str(arguments, "label")?.map(|l| l.trim().to_lowercase());
     let role = match opt_str(arguments, "role")? {
         None => None,
@@ -684,7 +692,7 @@ fn count(server: &mut Server, key: &str, arguments: &Value) -> Result<Value, Too
 /// temporary overlay. The overlay is removed after the capture, whatever the
 /// capture did.
 fn annotated_screenshot(
-    server: &mut Server,
+    server: &mut dyn BrowserHost,
     key: &str,
     arguments: &Value,
 ) -> Result<Value, ToolError> {
@@ -819,29 +827,6 @@ pub(crate) fn index_arg(arguments: &Value) -> Result<usize, ToolError> {
         Some(index) if index > 0 => Ok(index),
         _ => Err(bad(&arguments["index"])),
     }
-}
-
-fn endpoint_of(arguments: &Value) -> Result<String, ToolError> {
-    Ok(opt_str(arguments, "cdp")?
-        .unwrap_or(DEFAULT_CDP_HTTP)
-        .to_owned())
-}
-
-/// The page-websocket key a `cdp` endpoint currently drives.
-fn session_key(server: &Server, endpoint: &str) -> String {
-    server
-        .current_tab(endpoint)
-        .map(str::to_owned)
-        .unwrap_or_else(|| endpoint.to_owned())
-}
-
-/// Keep the session; buffer the events that arrived during the call.
-fn keep(server: &mut Server, key: &str, mut session: LiveSession) {
-    let events = session.transport_mut().drain_events();
-    if !events.is_empty() {
-        server.push_events(key, events);
-    }
-    server.keep_session(key, session);
 }
 
 fn opt_str<'a>(arguments: &'a Value, key: &str) -> Result<Option<&'a str>, ToolError> {

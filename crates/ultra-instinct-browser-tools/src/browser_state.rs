@@ -19,7 +19,7 @@ use ultra_instinct_browser::storage_state::{
 use ultra_instinct_cdp::DEFAULT_CDP_HTTP;
 
 use crate::error::ToolError;
-use crate::server::{LiveSession, Server};
+use crate::host::{BrowserHost, LiveSession};
 
 /// Tool names this module serves.
 pub const STATE_TOOLS: [&str; 4] = [
@@ -34,7 +34,7 @@ pub const MASK: &str = "•••";
 
 /// `None` when `name` is not one of [`STATE_TOOLS`].
 pub(crate) fn call(
-    server: &mut Server,
+    server: &mut dyn BrowserHost,
     name: &str,
     arguments: &Value,
 ) -> Option<Result<Value, ToolError>> {
@@ -51,7 +51,7 @@ pub(crate) fn call(
 
 /// Run `f` on the session the `cdp` endpoint (or its current tab) drives.
 fn with_session(
-    server: &mut Server,
+    server: &mut dyn BrowserHost,
     arguments: &Value,
     f: impl FnOnce(&mut LiveSession) -> Result<Value, ToolError>,
 ) -> Result<Value, ToolError> {

@@ -7,20 +7,25 @@
 //! get_state, click, type, scroll, screenshot, tabs). Target-bound input still
 //! goes through gate → ticket → `execute_ticketed`, so a stale page refuses
 //! instead of clicking the wrong element; page-level calls are plain CDP.
+//! They live in `ultra-instinct-browser-tools` and run on [`Server`] through
+//! a crate-private `BrowserHost` adapter. `Server` itself does not implement
+//! the trait, so its ledgers and buffers are not public API:
+//!
+//! ```compile_fail,E0277
+//! fn host<T: ultra_instinct_browser_tools::BrowserHost>(_: T) {}
+//! host(ultra_instinct_mcp::Server::default());
+//! ```
 
 #![forbid(unsafe_code)]
 
-mod browser_env;
-mod error;
-mod page_text;
 mod rpc;
 mod server;
 mod tools;
 
-pub use error::ToolError;
 pub use rpc::{handle_line, serve_stdio};
 pub use server::{CdpConnector, Server, ENV_ALLOW_DOMAINS, ENV_CONFIRM_PRESS, MAX_LIVE_SESSIONS};
 pub use tools::call_tool;
+pub use ultra_instinct_browser_tools::ToolError;
 
 pub const TOOL_OBSERVE: &str = "observe";
 pub const TOOL_GUARD: &str = "guard";
@@ -87,13 +92,7 @@ pub const TOOLS: [&str; 56] = [
 
 pub const PRODUCT_TOOLS: [&str; 3] = [TOOL_OBSERVE, TOOL_GUARD, TOOL_VERIFY];
 
-mod browser_extra;
-mod browser_state;
-mod browser_tools;
-pub use browser_env::ENV_TOOLS;
-pub use browser_extra::EXTRA_TOOLS;
-pub use browser_state::STATE_TOOLS;
-pub use browser_tools::BROWSER_TOOLS;
+pub use ultra_instinct_browser_tools::{BROWSER_TOOLS, ENV_TOOLS, EXTRA_TOOLS, STATE_TOOLS};
 
 /// Tool name for a legacy protocol phase. The locate, inspect and diff tools
 /// are removed, so their phases map onto the product tool that now covers
@@ -124,16 +123,34 @@ mod tests {
         assert!(!PRODUCT_TOOLS.contains(&"act"));
         // The `browser_*` host surface sits beside the firewall tools; it
         // never enters PRODUCT_TOOLS.
-        for name in crate::browser_tools::BROWSER_TOOLS
-            .into_iter()
-            .chain(crate::browser_extra::EXTRA_TOOLS)
-        {
+        for name in crate::BROWSER_TOOLS.into_iter().chain(crate::EXTRA_TOOLS) {
             assert!(TOOLS.contains(&name));
             assert!(!PRODUCT_TOOLS.contains(&name));
         }
-        for name in crate::browser_env::ENV_TOOLS {
+        for name in crate::ENV_TOOLS {
             assert!(TOOLS.contains(&name));
             assert!(!PRODUCT_TOOLS.contains(&name));
+        }
+    }
+
+    #[test]
+    fn tools_are_product_tools_then_every_browser_tool_once() {
+        // TOOLS lives here; the browser tool lists live in
+        // ultra-instinct-browser-tools. Each browser tool appears exactly once.
+        let browser: Vec<&str> = BROWSER_TOOLS
+            .into_iter()
+            .chain(EXTRA_TOOLS)
+            .chain(ENV_TOOLS)
+            .chain(STATE_TOOLS)
+            .collect();
+        let mut distinct = browser.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), browser.len(), "a browser tool listed twice");
+        assert_eq!(TOOLS[..3], PRODUCT_TOOLS);
+        assert_eq!(TOOLS.len(), PRODUCT_TOOLS.len() + browser.len());
+        for name in &browser {
+            assert_eq!(TOOLS.iter().filter(|n| *n == name).count(), 1, "{name}");
         }
     }
 

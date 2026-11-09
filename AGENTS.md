@@ -189,7 +189,8 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 | `ultra-instinct-guard` | Hard `gate`, `ActionTicket` issue / `revalidate`, `TicketLedger`, `consume_ticket_once` / `consume_ticket_once_checked`, front layer + `WorldSnapshot`; the user's `Policy` (`HostPattern` allowed domains, `LabelGlob` confirm-before-press); exact-label `guard()` for MCP / CLI preflight |
 | `ultra-instinct-agent` | `Agent` state machine, `execute_ticketed` / `execute_ticketed_with` (policy), `AgentBuilder::guard_policy`, `BrowserRuntime`, verification mapping, `MockBrowser` |
 | `ultra-instinct-protocol` | Guard / ticket / verify wire types |
-| `ultra-instinct-mcp` | Optional JSON-RPC adapter (observe / guard / verify) and the `browser_*` host surface: browser-use names, `browser_wait` conditions, `browser_extra` (dialog, forward / reload, check, focus, keyboard, get / is / count, annotate, `max_chars`), `browser_state` (state save / load, cookies, storage), `browser_env` (set, download, network) |
+| `ultra-instinct-browser-tools` | The `browser_*` host surface as MCP tool families (`call` / `spec`, the tool-name lists, `ToolError`) over a `BrowserHost` trait (sessions, tab binding, ledgers, events, snapshot record, `Policy`, the tools' own `ToolState`): browser-use names, `browser_wait` conditions, `browser_extra` (dialog, forward / reload, check, focus, keyboard, get / is / count, annotate, `max_chars`), `browser_state` (state save / load, cookies, storage), `browser_env` (set, download, network) |
+| `ultra-instinct-mcp` | Optional JSON-RPC adapter (observe / guard / verify), `TOOLS`, and the `Server` that keeps sessions and the snapshot ring and serves the `browser_*` tools through a crate-private `BrowserHost` adapter (`Server` itself does not implement it); re-exports `ToolError` and the tool-name lists |
 | `ultra-instinct-remote` | Remote decision transports and the HTTP text model, the only crate with a model SDK / HTTP client: `typesafe` (feature `jev`), `clef` (feature `clef`), `http_text` (feature `model-text`); re-exported by `ultra-instinct` |
 | `ultra-instinct` | `ultra-instinct run` (agent loop, `--policy instinct|jev|clef|clef-flash`, `--diary <dir>`); `replay --diary` (offline arena: agree / would-abstain / regress per recorded decision); `observe` / `guard` / `verify` preflight commands; `mcp` (stdio); the shell verbs over the session daemon (`verbs.rs`, `daemon.rs`), `batch`, `session`, `skills`, `doctor`, `install`; `run --launch/--load-state/--save-state/--allow-domain/--confirm-press/--confirm`; `TypesafeTransport` (feature `jev`: JEV-primary over the closed remote wire); `ClefTransport` (feature `clef`: Cloudflare Workers AI Clef / Clef-Flash over the same wire through `typesafe-sdk`'s Clef provider, one decision call, single-candidate heads answered locally) |
 | `ultra-instinct-dojo` | Battle diary schema v1 (`DiaryLine` JSONL), `DiaryWriter` / `read_diary`, site + situation keys, decision→`ActionSpace` rebuild for the replay arena; versioned `LessonStore` (words / places / moves / trust, keyed per situation, carrying proving diary ids); lessons only adjust evidence inside the finite `ActionSpace` |
@@ -216,7 +217,8 @@ deliberate eval.
   the `daemon.rs` socket tests (round trip, spawn / stale socket, idle exit,
   `--idle`, failed launch, session list). `browser_*` families over CDP
   replay: `crates/ultra-instinct-mcp/tests/browser_tools.rs`,
-  `browser_extra.rs`, `browser_state.rs`, `browser_env.rs`. A call that
+  `browser_extra.rs`, `browser_state.rs`, `browser_env.rs`, and the
+  `ultra-instinct-browser-tools` unit tests. A call that
   opens a JS dialog returns `CdpError::DialogOpened` at once: ws.rs
   `a_dialog_opening_ends_the_wait_and_stays_buffered`.
 - Instinct evidence: `ultra-instinct-policy` unit tests. Do not add a second model of
@@ -287,8 +289,9 @@ matches), refuses `near` / `position` / `matcher` / `dims` by name, runs
 `gate::check` before Allow, and issues `of_target` tickets like the agent. MCP
 never bypasses tickets and is never required to run the agent.
 
-`browser_*` tools are the browser-use-compatible host surface (drop-in MCP
-names: `browser_navigate`, `browser_get_state`, `browser_click`,
+`browser_*` tools are the browser-use-compatible host surface (crate
+`ultra-instinct-browser-tools`, run on the MCP `Server` through a
+crate-private `BrowserHost` adapter; drop-in MCP names: `browser_navigate`, `browser_get_state`, `browser_click`,
 `browser_type`, `browser_scroll`, `browser_screenshot`, tab tools). Element
 indexes come from `browser_get_state` in reading order; `browser_click` /
 `browser_type` issue an `of_target` ticket and run `execute_ticketed`, so a
