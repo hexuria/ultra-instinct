@@ -127,6 +127,64 @@ fn get_state_text_is_one_line_per_control() {
     assert_eq!(lines.len(), 5, "{text}");
 }
 
+/// Each control's line carries its state: a value, `checked`, collapsed and
+/// the selected option; a password prints no value (even one the page
+/// reported), quotes are escaped, and a long label is cut.
+#[test]
+fn get_state_text_carries_control_state_and_never_a_password() {
+    let checkbox = Control {
+        tag: "INPUT",
+        role: "checkbox",
+        ..Control::button(12, 102, "Send me news", (20.0, 80.0, 20.0, 20.0))
+    };
+    let long = "x".repeat(150);
+    let mut page = PageSpec::of(
+        &[
+            Control::text_field(10, 100, "Email", (20.0, 20.0, 300.0, 28.0)),
+            Control::text_field(11, 101, "Password", (20.0, 50.0, 300.0, 28.0)),
+            checkbox,
+            Control::button(13, 103, "Sign \"up\"", (20.0, 110.0, 120.0, 28.0)),
+            Control::combobox(14, 104, &long, (20.0, 140.0, 200.0, 28.0)),
+        ],
+        "https://shop.example/join",
+        "Sign up",
+    );
+    let states = [
+        json!({"v": "", "it": "email"}),
+        json!({"v": "hunter2", "it": "password"}),
+        json!({"c": true, "it": "checkbox"}),
+        json!({}),
+        json!({"sel": "Canada", "x": false}),
+    ];
+    for (node, state) in page.dom.iter_mut().zip(states) {
+        *node = node.clone().with_compact_state(state);
+    }
+    page.dom[2] = page.dom[2].clone().with_attr("type", "checkbox");
+    let (mut server, _log) = server(ScriptBuilder::new().observe_compact(&page));
+    let out = call(&mut server, "browser_get_state", json!({"cdp": CDP}));
+    let text = out["text"].as_str().expect("text");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        lines[..5],
+        [
+            "Sign up  https://shop.example/join",
+            "@e1 textbox \"Email\"  value=\"\"",
+            "@e2 textbox \"Password\"",
+            "@e3 checkbox \"Send me news\"  checked",
+            "@e4 button \"Sign \\\"up\\\"\"",
+        ],
+        "{text}"
+    );
+    assert!(lines[5].starts_with("@e5 combobox \"xxxx"), "{text}");
+    assert!(lines[5].contains("…\""), "{text}");
+    assert!(
+        lines[5].ends_with("  collapsed  selected=\"Canada\""),
+        "{text}"
+    );
+    assert!(lines[6].starts_with("5 controls · snapshot "), "{text}");
+    assert!(!text.contains("hunter2"), "{text}");
+}
+
 #[test]
 fn get_state_rejects_an_unknown_format() {
     let (mut server, _log) = server(ScriptBuilder::new());
