@@ -1,7 +1,7 @@
 //! Finite action space derived from an [`InteractionManifold`].
 //!
-//! Phase 1 of the agent-runtime pivot: build the set of operations and targets
-//! a policy may choose from. No ranking, no Instinct, no executor.
+//! The set of operations and targets a policy may choose from. No ranking,
+//! no Instinct, no executor.
 //!
 //! Architectural invariants (from `browser-use/jev-ultrafast`, MIT):
 //! - Every observation yields a dynamic finite action space.
@@ -12,7 +12,7 @@
 //! Per-region [`crate::Action`] claims (click/type/select/…) are mapped into
 //! agent-level [`ActionKind`]s. Hard-invalid regions (disabled, hidden,
 //! occluded, offscreen, zero-area) are excluded from the offered target set;
-//! they remain in the manifold for evidence / guard later.
+//! they remain in the manifold as guard evidence.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -190,9 +190,8 @@ pub struct DragDest {
 }
 
 impl ObservedAction {
-    /// Build one offered action directly. `from_manifold` uses this for every
-    /// action it emits; the replay arena uses it to rebuild a recorded menu —
-    /// the caller owns which actions belong on the menu.
+    /// Build one offered action directly. The caller owns which actions
+    /// belong on the menu.
     pub fn new(
         id: ActionId,
         kind: ActionKind,
@@ -1212,9 +1211,9 @@ mod tests {
 
     #[test]
     fn modal_confirm_still_lists_buried_page_buttons() {
-        // Phase 1: ActionSpace lists what the manifold claims. Front-layer /
-        // occlusion refusal is a guard/hard-gate concern (Phase 3), not
-        // ActionSpace filtering — except explicit occluded flags.
+        // ActionSpace lists what the manifold claims. Front-layer refusal is
+        // the hard gate's job, not ActionSpace filtering; only explicit
+        // occluded flags are filtered here.
         let m = parse_fixture(include_str!("../../../fixtures/modal-confirm.manifold")).unwrap();
         let space = ActionSpace::from_manifold(&m);
 

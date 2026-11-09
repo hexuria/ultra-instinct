@@ -286,8 +286,7 @@ mod tests {
         assert_eq!(parsed.get_str("quote").unwrap().label(), "Say \"hi\"");
 
         // strip_comment must honor \-escapes inside quotes: a label holding
-        // both a quote and a '#' truncated the written line mid-token and
-        // could not re-parse (found by the `fixture` fuzz target).
+        // both a quote and a '#' must not truncate the line mid-token.
         let hash = InteractionRegion::try_new(RegionParts {
             id: RegionId::try_new("hash").unwrap(),
             role: Role::Button,
