@@ -9,7 +9,9 @@ use ultra_instinct_agent::MockBrowser;
 use ultra_instinct_browser::script::{Control, PageSpec, ScriptBuilder};
 use ultra_instinct_browser::{CdpError, CdpTransport, ReplayTransport};
 use ultra_instinct_core::parse_fixture;
-use ultra_instinct_mcp::{run_goal, run_goal_on, Policy, RunLimits, RunOutcome, RunStep, Server};
+use ultra_instinct_mcp::{
+    run_goal, run_goal_on, BlockKind, Policy, RunLimits, RunOutcome, RunStep, Server,
+};
 
 const SEARCH: &str = r#"
     viewport w=800 h=600
@@ -62,19 +64,28 @@ fn a_press_that_needs_a_confirm_ends_blocked_with_its_label_unpressed() {
     let policy = Policy::from_lists("", "Pay*").unwrap();
     let (report, browser) = run_goal_on(mock(PAY), "click Pay $18", policy.clone(), limits(3));
     assert!(
-        matches!(&report.outcome, RunOutcome::Blocked { label, reason }
+        matches!(&report.outcome, RunOutcome::Blocked { label, reason, kind: Some(BlockKind::NeedsConfirm) }
             if label == "Pay $18" && reason.starts_with("needs-confirm")),
         "{report:?}"
     );
+    assert_eq!(BlockKind::NeedsConfirm.code(), "needs_confirm");
     assert!(report.steps.is_empty());
     assert!(browser.press_log().is_empty());
     // The domain allow-list blocks the same way.
     let off = Policy::from_lists("shop.example", "").unwrap();
     let (report, browser) = run_goal_on(mock(PAY), "click Back to cart", off, limits(3));
-    assert!(
-        matches!(report.outcome, RunOutcome::Blocked { ref label, .. } if label == "Back to cart"),
-        "{report:?}"
+    let RunOutcome::Blocked { label, kind, .. } = &report.outcome else {
+        panic!("{report:?}");
+    };
+    assert_eq!(label, "Back to cart");
+    let kind = kind.as_ref().expect("a policy refusal");
+    assert_eq!(
+        kind,
+        &BlockKind::DomainNotAllowed {
+            host: Some("mock.invalid".into())
+        }
     );
+    assert_eq!(kind.code(), "domain_not_allowed");
     assert!(browser.input_log().is_empty());
 }
 
@@ -104,7 +115,8 @@ fn the_step_cap_ends_the_run_failed() {
     assert_eq!(
         report.outcome,
         RunOutcome::Failed {
-            error: "max steps exceeded".into()
+            error: "max steps exceeded".into(),
+            code: None,
         },
         "{report:?}"
     );
@@ -158,7 +170,8 @@ fn a_passed_deadline_ends_failed_before_any_cdp_call() {
     assert_eq!(
         report.outcome,
         RunOutcome::Failed {
-            error: "deadline exceeded".into()
+            error: "deadline exceeded".into(),
+            code: None,
         }
     );
     assert!(log.borrow().is_empty(), "{:?}", log.borrow());
@@ -193,7 +206,7 @@ fn server_run_goal_uses_the_current_tab_and_the_server_policy() {
         },
     );
     assert!(
-        matches!(report.outcome, RunOutcome::Blocked { ref label, .. } if label == "Sign in"),
+        matches!(report.outcome, RunOutcome::Blocked { ref label, kind: Some(BlockKind::NeedsConfirm), .. } if label == "Sign in"),
         "{report:?}"
     );
     assert!(log

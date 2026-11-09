@@ -215,7 +215,11 @@ surface.
   `confirm` lifts its own call only. `ultra_instinct_mcp::run_goal` runs the
   agent loop (InstinctPolicy, deterministic text, no model) under a guard
   `Policy`, with a step cap and a deadline checked between steps
-  (`AgentBuilder::deadline`).
+  (`AgentBuilder::deadline`). A policy stop is `RunOutcome::Blocked` with a
+  typed `kind` (`BlockKind::NeedsConfirm` / `DomainNotAllowed { host }`)
+  taken from the agent's `GuardReason`, its `code()` the matching error
+  code; a refusal before the loop starts is `Failed` with that error's
+  `code`.
 
 Owners: `crates/ultra-instinct-mcp/tests/pipe_mode.rs`, `snapshot_refs.rs`,
 `secrets.rs`, `host_options.rs`, `keyboard_policy.rs`, `uploads.rs`,

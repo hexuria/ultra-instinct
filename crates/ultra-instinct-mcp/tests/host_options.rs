@@ -467,7 +467,8 @@ fn run_goal_runs_only_when_the_allow_list_names_it() {
     assert_eq!(
         report.outcome,
         ultra_instinct_mcp::RunOutcome::Failed {
-            error: "tool_not_allowed: tool `run_goal` is not allowed on this server".into()
+            error: "tool_not_allowed: tool `run_goal` is not allowed on this server".into(),
+            code: Some("tool_not_allowed"),
         }
     );
     assert!(report.steps.is_empty());
@@ -484,7 +485,7 @@ fn run_goal_runs_only_when_the_allow_list_names_it() {
         },
     );
     assert!(
-        matches!(&report.outcome, ultra_instinct_mcp::RunOutcome::Failed { error } if !error.contains("tool_not_allowed")),
+        matches!(&report.outcome, ultra_instinct_mcp::RunOutcome::Failed { error, .. } if !error.contains("tool_not_allowed")),
         "{report:?}"
     );
     assert!(!log.borrow().is_empty(), "the run observed the page");

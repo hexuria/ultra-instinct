@@ -31,6 +31,7 @@ use ultra_instinct_core::{InteractionManifold, RegionId};
 use ultra_instinct_guard::Policy;
 use ultra_instinct_policy::InstinctPolicy;
 use ultra_instinct_policy::{PageView, Screenshot};
+use ultra_instinct_protocol::GuardReason;
 
 /// Bounds for one [`run_goal`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,20 +69,54 @@ pub enum RunOutcome {
         reason: String,
     },
     /// The policy refused (or the loop blocked): `label` is the target that
-    /// needs a confirm or sits off the allow-list, when it was a policy refusal.
+    /// needs a confirm or sits off the allow-list, when it was a policy
+    /// refusal, and `kind` says which (`None`: the loop blocked itself).
     Blocked {
         label: String,
         reason: String,
+        kind: Option<BlockKind>,
     },
     /// Instinct found no action it trusted.
     Abstained {
         why: String,
     },
     /// The browser failed, the step cap or the deadline was hit
-    /// (`max steps exceeded`, `deadline exceeded`).
+    /// (`max steps exceeded`, `deadline exceeded`). `code` is the
+    /// [`ToolError`](crate::ToolError) code when [`crate::Server::run_goal`]
+    /// refused before the loop started (`tool_not_allowed`,
+    /// `invalid_arguments` for a bad policy, a session error's code); the
+    /// loop's own failures are text only (`None`).
     Failed {
         error: String,
+        code: Option<&'static str>,
     },
+}
+
+/// The guard refusal that ended a run [`RunOutcome::Blocked`], from the
+/// guard's own reason (never parsed from text).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BlockKind {
+    /// The target's label matches a confirm pattern (the outcome's `label`).
+    NeedsConfirm,
+    /// The page is off the domain allow-list; `host` is `None` when its URL
+    /// could not be read.
+    DomainNotAllowed { host: Option<String> },
+}
+
+impl BlockKind {
+    /// The [`ToolError`](crate::ToolError) code of the same refusal:
+    /// `needs_confirm` / `domain_not_allowed`.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::NeedsConfirm => crate::ToolError::NeedsConfirm {
+                label: String::new(),
+            },
+            Self::DomainNotAllowed { .. } => crate::ToolError::DomainNotAllowed {
+                host: String::new(),
+            },
+        }
+        .code()
+    }
 }
 
 /// What [`run_goal`] did.
@@ -191,15 +226,29 @@ pub(crate) fn run_goal_typing<B: BrowserRuntime>(
     let steps = outcome.steps().iter().map(step).collect();
     let outcome = match outcome {
         AgentOutcome::Done { reason, .. } => RunOutcome::Done { reason },
-        AgentOutcome::Blocked { reason, .. } => RunOutcome::Blocked {
-            label: agent
-                .policy_refusal()
-                .map(|(_, label)| label.to_owned())
-                .unwrap_or_default(),
-            reason,
-        },
+        AgentOutcome::Blocked { reason, .. } => {
+            let refusal = agent.policy_refusal();
+            let kind = refusal.and_then(|(guard, _)| match guard {
+                GuardReason::NeedsConfirm => Some(BlockKind::NeedsConfirm),
+                GuardReason::DomainNotAllowed => Some(BlockKind::DomainNotAllowed {
+                    host: agent
+                        .browser()
+                        .page()
+                        .and_then(PageState::url)
+                        .and_then(ultra_instinct_guard::host_of),
+                }),
+                _ => None,
+            });
+            RunOutcome::Blocked {
+                label: refusal
+                    .map(|(_, label)| label.to_owned())
+                    .unwrap_or_default(),
+                reason,
+                kind,
+            }
+        }
         AgentOutcome::Abstained { reason, .. } => RunOutcome::Abstained { why: reason },
-        AgentOutcome::Failed { error, .. } => RunOutcome::Failed { error },
+        AgentOutcome::Failed { error, .. } => RunOutcome::Failed { error, code: None },
     };
     let browser = agent.into_browser();
     let report = RunReport {

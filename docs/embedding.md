@@ -73,6 +73,19 @@ loop on any `CdpTransport` (a `PipePage` you attached yourself, say);
 `Server::run_goal` uses the server's current tab and policy and keeps the
 session.
 
+A run the policy stops ends `RunOutcome::Blocked { label, reason, kind }`
+with nothing pressed. `kind` is the guard's refusal, typed (never parsed
+from `reason`): `Some(BlockKind::NeedsConfirm)` (`label` is the press to
+confirm), `Some(BlockKind::DomainNotAllowed { host })` (`host` is `None`
+when the page URL could not be read), or `None` when the loop blocked
+itself (repeated no-effect presses, a remote policy's BLOCKED).
+`BlockKind::code()` is the matching error code (`needs_confirm` /
+`domain_not_allowed`). `RunOutcome::Failed { error, code }` carries the
+error code when `Server::run_goal` refused before the loop started
+(`tool_not_allowed`, `invalid_arguments` for an invalid policy, a session
+error's code); the loop's own failures (`max steps exceeded`, `deadline
+exceeded`, a browser error) have `code: None`.
+
 ## Threading
 
 One OS thread owns the `PipeBrowser`, every `PipePage`, and the `Server`.
@@ -133,7 +146,7 @@ the list through `BrowserHost::allows` (default: everything allowed).
 `Server::run_goal` is not a tool, but an allow-list gates it by the name
 `run_goal`: with a list set and `run_goal` not on it, the run ends
 `RunOutcome::Failed` with ``tool_not_allowed: tool `run_goal` is not allowed
-on this server`` before any CDP call. Naming it allows the whole loop, which
+on this server`` (`code: Some("tool_not_allowed")`) before any CDP call. Naming it allows the whole loop, which
 presses whatever the page offers (click, type, select, hover, drag, scroll,
 key), still under the server's `Policy`, the hard gate and tickets, whichever
 press tools the list names. `tools/list` never shows it.

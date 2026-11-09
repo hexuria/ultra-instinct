@@ -232,20 +232,23 @@ impl Server {
     /// length, any other field's from 4 chars (typed text is user data).
     /// [`crate::RunReport::typed`] still holds them: never log it.
     pub fn run_goal(&mut self, goal: &str, limits: crate::RunLimits) -> crate::RunReport {
-        let failed = |error: String| crate::RunReport {
+        let failed = |error: String, err: &ToolError| crate::RunReport {
             steps: Vec::new(),
-            outcome: crate::RunOutcome::Failed { error },
+            outcome: crate::RunOutcome::Failed {
+                error,
+                code: Some(err.code()),
+            },
             typed: crate::TypedText::default(),
         };
         if !self.allows("run_goal") {
             let refused = ToolError::ToolNotAllowed {
                 tool: "run_goal".into(),
             };
-            return failed(format!("{}: {refused}", refused.code()));
+            return failed(format!("{}: {refused}", refused.code()), &refused);
         }
         let policy = match &self.policy {
             Ok(policy) => policy.clone(),
-            Err(err) => return failed(err.clone()),
+            Err(err) => return failed(err.clone(), &ToolError::InvalidArguments(err.clone())),
         };
         let endpoint = self
             .backend
@@ -257,7 +260,7 @@ impl Server {
         let key = self.tab_binding.get(&endpoint).cloned().unwrap_or(endpoint);
         let session = match Host(self).take_session(&key) {
             Ok(session) => session,
-            Err(err) => return failed(err.to_string()),
+            Err(err) => return failed(err.to_string(), &err),
         };
         self.call_deadline.set(limits.deadline);
         let tools = &mut self.tools;
@@ -276,11 +279,18 @@ impl Server {
             crate::RunOutcome::Done { reason } | crate::RunOutcome::Abstained { why: reason } => {
                 scrub(reason)
             }
-            crate::RunOutcome::Blocked { label, reason } => {
+            crate::RunOutcome::Blocked {
+                label,
+                reason,
+                kind,
+            } => {
                 scrub(label);
                 scrub(reason);
+                if let Some(crate::BlockKind::DomainNotAllowed { host: Some(host) }) = kind {
+                    scrub(host);
+                }
             }
-            crate::RunOutcome::Failed { error } => scrub(error),
+            crate::RunOutcome::Failed { error, .. } => scrub(error),
         }
         let events = session.transport_mut().drain_events();
         let mut host = Host(self);
