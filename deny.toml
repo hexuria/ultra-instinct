@@ -1,7 +1,6 @@
 # RUSTSEC advisories are gated for every dependency; no advisory is ignored.
 # Licenses are gated now that the workspace publishes to crates.io: every dep
 # must be permissive (MIT / Apache-2.0 family). Bans and sources stay unchecked.
-# See docs/DECISIONS.md.
 [graph]
 all-features = true
 

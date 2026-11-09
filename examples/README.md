@@ -12,7 +12,7 @@ cargo run -p ultra-instinct --bin ultra-instinct -- guard \
 ## Benchmark scenarios
 
 Six local scenario sites for the uniform agent benchmark in `bench/` (results in
-`RESULTS.md` at the repo root and in each scenario's `RESULTS.md`). Every page
+each scenario's `RESULTS.md`). Every page
 takes `?seed=N` (reorders rows and twins, never changes what a task means) and
 reports ground truth to the bench server through `/_shared/bench.js`.
 

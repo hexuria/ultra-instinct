@@ -1,10 +1,10 @@
 # Pull-request gate (skill "CI shape": PR tier). Every job runs on the pinned 1.99.0 toolchain from
 # rust-toolchain.toml. `ci-ok` is the single required check.
 #
-# Still deliberately absent (docs/DECISIONS.md, docs/IMPECCABLE-AUDIT.md):
+# Still deliberately absent (AGENTS.md anti-drift #10):
 #   Miri, Loom, Kani, TLA+, Lean — #![forbid(unsafe_code)] everywhere, the CDP
 #   client is blocking and single-threaded, no recovery protocol.
-#   cargo-semver-checks — publish = false until 1.0.
+#   cargo-semver-checks — the public API is 0.1 and unstable until 1.0.
 name: ci
 
 on:

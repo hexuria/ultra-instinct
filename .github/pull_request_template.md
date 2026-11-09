@@ -37,4 +37,4 @@ Tests or proofs updated:
 Miri, Loom, Kani, TLA+ and Lean boxes stay empty on purpose: `#![forbid(unsafe_code)]`
 everywhere, the CDP client is blocking and single-threaded, and there is no recovery
 protocol (AGENTS.md anti-drift #10). If this PR introduces any of those, update the
-anti-drift block and `docs/IMPECCABLE-AUDIT.md` first.
+anti-drift block in `AGENTS.md` first.

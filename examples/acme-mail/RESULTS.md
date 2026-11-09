@@ -3,8 +3,7 @@
 ## Mac remasure 2026-10-06 — A3 vs A8 (fair parity)
 
 > Tip `acb3a33`. Seed 42, n=1, Luna up. Vendor pin `1231850a…`.
-> Run id `20261006-081905`. Full writeup:
-> [`../../bench/results/MAC-A3-A8-COMPARE.md`](../../bench/results/MAC-A3-A8-COMPARE.md).
+> Run id `20261006-081905`. The full writeup is in the private stow repo.
 
 **Accuracy:** A8 **7/7**, A3 **5/7** (press-only both 5/5). A3 type failures
 were browser_harness IPC timeouts. **Speed:** mixed (~26s vs ~34s pass mean;
