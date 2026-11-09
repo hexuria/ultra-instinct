@@ -1,7 +1,7 @@
 # cargo-mutants config. Nightly job: .github/workflows/mutants.yml.
-# How to run locally: docs/IMPECCABLE-AUDIT.md#mutation-testing.
+# How to run locally: AGENTS.md, "Verification owners" (mutation testing).
 
-# Equivalent for testing purposes (see docs/IMPECCABLE-AUDIT.md):
+# Equivalent for testing purposes:
 # `mix` ends each segment with `*hash ^= 0xff`. Mutating that to `|= 0xff`
 # keeps a working (weaker) separator; telling them apart needs a 64-bit
 # collision, which no deterministic test can construct cheaply. `^= byte` →

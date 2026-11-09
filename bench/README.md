@@ -1,15 +1,16 @@
 # Uniform ultra-instinct benchmark
 
 One harness, eight arms, six local scenario sites, the same Chrome, the same loopback
-server, the same 1280×800 viewport, and the same caps for everyone. Results:
-[`results/HISTORICAL-A1-A8.md`](results/HISTORICAL-A1-A8.md) and `examples/<scenario>/RESULTS.md`.
+server, the same 1280×800 viewport, and the same caps for everyone. Per-scenario
+results: `examples/<scenario>/RESULTS.md`. Earlier result files live in the private
+stow repo.
 
 **n = 1 per arm per task** (up to 3 fresh tries). It is a side-by-side comparison,
 not statistics.
 
 ## Arms
 
-Product-direction ablation (ActionTicket): see [`arms/B01.md`](arms/B01.md) (B0 Browser Use alone · B1 invisible guard ticket). A1–A8 below are the historical uniform suite. A5–A8 (and B0/B1) call the removed `locate` / `inspect` / `act` tools and cannot be re-run on the current build (ADR 0012).
+Product-direction ablation (ActionTicket): see [`arms/B01.md`](arms/B01.md) (B0 Browser Use alone · B1 invisible guard ticket). A1–A8 below are the historical uniform suite. A5–A8 (and B0/B1) call the removed `locate` / `inspect` / `act` tools and cannot be re-run on the current build.
 
 
 | Arm | Wiring | Model calls |
@@ -54,7 +55,7 @@ cd bench
 UV_PROJECT_ENVIRONMENT=.venv uv sync --python 3.12
 (cd envs/cua && UV_PROJECT_ENVIRONMENT=.venv uv sync --python 3.12)
 cargo build --release -p aui-cli && cargo build --release -p aui-cli --features jev --example live_drive
-# vendor pins (gitignored): see RESULTS.md manifest
+# vendor pins (gitignored): see the report's manifest
 bench/bench run --mock --arms mock-oracle,mock-saboteur     # no keys: validates pages, checkers, harness
 bench/bench run --config bench/bench.toml --seed 42         # the real run
 bench/bench report                                           # RESULTS.md files
@@ -84,5 +85,5 @@ present and not equal, a list = any of.
 
 `run.py` harness · `checker.py` scoring · `tasks.py` loader · `server.py` sites + journal ·
 `proxy.py` counting model proxy · `chrome.py` throwaway Chrome · `arms/` wrappers ·
-`report.py` RESULTS.md · `probe.py` debug helper · `runs/` raw artifacts (gitignored) ·
-`results/<run-id>.json` compact committed results.
+`report.py` writes RESULTS.md files · `probe.py` debug helper · `runs/` raw artifacts (gitignored) ·
+`results/<run-id>.json` compact results.

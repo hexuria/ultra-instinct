@@ -14,3 +14,11 @@
 /bench/runs/
 bench/.env
 proptest-regressions/
+# private stow companion repo (hexuria/ultra-instinct-stow)
+/.stow/
+/history/
+/.stow-README.md
+
+# bench/report.py and run.py output; results live in the private stow repo
+/RESULTS.md
+/bench/results/
