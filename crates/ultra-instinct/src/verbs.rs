@@ -792,7 +792,7 @@ pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
         (Value::String(state), _) => Ok(format!("{line}\n{state}\n")),
         (_, Value::Null) => Ok(format!("{line}\n")),
         (_, error) => Ok(format!(
-            "{line}\n✗ could not read the page after it ({}) · run aui snap\n",
+            "{line}\nnote: the press ran, but reading the page after it failed ({}); run aui snap\n",
             error["message"].as_str().unwrap_or("read failed")
         )),
     }
@@ -949,7 +949,7 @@ fn render_error(text: &str) -> String {
         Some("snapshot_required") => {
             return "✗ refused: no aui snap on this session yet · run aui snap".into()
         }
-        Some("unknown_snapshot") => {
+        Some("unknown_snapshot" | "snapshot_evicted") => {
             return "✗ refused: the last aui snap expired · run aui snap".into()
         }
         _ => {}
@@ -1411,9 +1411,10 @@ mod tests {
         let failed = json!({"acted": "click", "ticket": 41,
                             "state_error": {"code": "dialog_open", "message": "a dialog is open"}});
         let out = render(&click, &reply(&failed.to_string(), false)).unwrap();
+        assert!(out.ends_with("(a dialog is open); run aui snap\n"), "{out}");
         assert!(
-            out.ends_with("(a dialog is open) · run aui snap\n"),
-            "{out}"
+            !out.contains('✗'),
+            "the press ran: not an error line: {out}"
         );
     }
 

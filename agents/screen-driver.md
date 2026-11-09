@@ -19,7 +19,8 @@ Stay headless and leave the user's browser alone. Use ultra-instinct (`mcp__ultr
 Start that Chrome yourself and never attach to the user's. Pick a port P from 9300–9399 that `curl` shows is free, and a fresh profile dir. The binary is `$CHROME` when set, else `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` (macOS) or the first of `google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser` on PATH:
 
 ```bash
-CHROME="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+MAC="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+[ -n "$CHROME" ] || { [ -x "$MAC" ] && CHROME="$MAC"; } || CHROME=$(command -v google-chrome google-chrome-stable chromium chromium-browser | head -1)
 "$CHROME" --headless=new --remote-debugging-port=$P --user-data-dir="$(mktemp -d)" --window-size=1440,900 about:blank &
 curl -s http://127.0.0.1:$P/json/version   # repeat until it answers
 ```

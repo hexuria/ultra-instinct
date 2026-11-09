@@ -71,13 +71,20 @@ pub(crate) fn snapshot_arg(arguments: &Value) -> Result<Option<u64>, ToolError> 
     }
 }
 
-/// [`snapshot_arg`] for a press: the id must be recorded, and its absence
+/// [`snapshot_arg`] for a press: the id must be recorded. Without one the
+/// press takes its tab's latest look when the host binds to it, else it
 /// refuses when the host requires snapshots.
 pub(crate) fn required_snapshot(
     server: &dyn BrowserHost,
     arguments: &Value,
 ) -> Result<Option<u64>, ToolError> {
-    let snapshot = snapshot_arg(arguments)?;
+    let snapshot = match snapshot_arg(arguments)? {
+        Some(id) => Some(id),
+        None => {
+            let key = crate::host::session_key(server, &crate::host::endpoint_of(arguments)?);
+            server.latest_snapshot(&origin(&key))
+        }
+    };
     match snapshot {
         // An unknown or evicted id refuses before any CDP call.
         Some(id) => {

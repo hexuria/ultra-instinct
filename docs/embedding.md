@@ -140,7 +140,10 @@ even though the page has an element there. Focus is
 taken from the page now (your own typing moves it). `browser_check` reads
 the checked state from the page now, after the element still matches the
 snapshot, so it never answers `changed: false` from a stale state. With
-`require_snapshot(true)` a bare index refuses `snapshot_required`.
+`require_snapshot(true)` a bare index refuses `snapshot_required`. With
+`bind_to_latest_look(true)` a bare index is read in its tab's latest look
+(the last `browser_get_state`, or a `state: true` reply), as if it had
+passed that `snapshot`; for a host whose caller reads one tab at a time.
 
 An input tool given `state: true` answers with the page after the input as
 well: `state` (the `browser_get_state` text) and its `snapshot`, which the

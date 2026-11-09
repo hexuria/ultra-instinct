@@ -89,6 +89,10 @@ pub struct Server {
     policy: Result<Policy, String>,
     /// Index presses must name the `snapshot` they were read from.
     require_snapshot: bool,
+    /// A press that names no `snapshot` binds to its tab's latest look.
+    bind_to_latest_look: bool,
+    /// The latest snapshot recorded per origin (`browser:<session key>`).
+    latest: BTreeMap<String, u64>,
     limits: ToolLimits,
     downloads: Downloads,
     uploads: Uploads,
@@ -159,6 +163,8 @@ impl Server {
             tools: ToolState::default(),
             policy: Ok(Policy::default()),
             require_snapshot: false,
+            bind_to_latest_look: false,
+            latest: BTreeMap::new(),
             limits: ToolLimits::default(),
             downloads: Downloads::default(),
             uploads: Uploads::default(),
@@ -318,6 +324,15 @@ impl Server {
         self
     }
 
+    /// With `true`, an index press that names no `snapshot` is bound to the
+    /// latest `browser_get_state` (or `state: true` reply) of its tab, as if
+    /// it had passed that id. For a host whose caller reads one tab at a
+    /// time (`aui`'s shell verbs). Default `false`.
+    pub fn bind_to_latest_look(mut self, on: bool) -> Self {
+        self.bind_to_latest_look = on;
+        self
+    }
+
     /// A server that drives the browser at the other end of a caller-owned
     /// `--remote-debugging-pipe`, under an empty policy. No HTTP
     /// endpoint is used: tabs are `Target.*` calls, sessions are flat
@@ -460,12 +475,14 @@ impl BrowserHost for Host<'_> {
         page: PageState,
         shown: usize,
     ) -> SnapshotId {
-        self.0.history.push(Snapshot {
+        let id = self.0.history.push(Snapshot {
             origin: origin.to_owned(),
             manifold,
             page,
             shown,
-        })
+        });
+        self.0.latest.insert(origin.to_owned(), id.get());
+        id
     }
 
     /// The kept session for `url`, or a fresh connection.
@@ -579,6 +596,13 @@ impl BrowserHost for Host<'_> {
 
     fn require_snapshot(&self) -> bool {
         self.0.require_snapshot
+    }
+
+    fn latest_snapshot(&self, origin: &str) -> Option<u64> {
+        match self.0.bind_to_latest_look {
+            true => self.0.latest.get(origin).copied(),
+            false => None,
+        }
     }
 
     fn limits(&self) -> ToolLimits {
