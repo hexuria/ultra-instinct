@@ -99,8 +99,9 @@ aui run --goal "buy the blue mug" --cdp --url https://shop.example/ \
 ```
 
 - `--allow-domain <host>` (repeatable): `shop.example` is that host only,
-  `*.shop.example` is any subdomain of it. Every other host gets no input
-  (`domain-not-allowed`), and `--url` itself must match.
+  `*.shop.example` is any subdomain of it. Input only starts on an allowed
+  host (`domain-not-allowed`), and `--url` itself must match. A click that
+  leads to another host is checked at the next step there.
 - `--confirm-press <glob>` (repeatable, `*` wildcard, case-insensitive): a
   click on a matching label ends the run `blocked` with
   `rerun with --confirm "<label>"`. Ask the user. Only when they say yes,

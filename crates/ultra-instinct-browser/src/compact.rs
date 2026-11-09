@@ -60,45 +60,42 @@ var ATTR='data-hu-k';
 var PROPS=['z-index','position','opacity','transform','filter','isolation','mix-blend-mode','will-change','pointer-events'];
 var nodes={};
 var next=0;
-// A form's implicit-submission button (its first submit button in tree
-// order), as its accessible name (aria-labelledby, aria-label, then its
-// text / value / alt / title, as the AX tree names it); with no submit
-// button, 2 when Enter still submits it (at most one field blocks implicit
-// submission), 1 when it does not. Once per form.
-var FORMS=new Map();
+// `fm` on a form control is its form's index in `forms`, each entry that
+// form's implicit-submission button (its first submit button in tree order)
+// by accessible name (aria-labelledby, aria-label, text / value / alt /
+// title, as the AX tree names it); with no submit button 2 when Enter still
+// submits it (at most one field blocks implicit submission), else 1. No
+// `fm`: Enter there submits no form.
+var FORMS=new Map(),forms=[];
 var BLOCKS={text:1,search:1,url:1,tel:1,email:1,password:1,date:1,month:1,week:1,time:1,'datetime-local':1,number:1};
 function fold(t){return String(t||'').replace(/\s+/g,' ').trim();}
 function accName(b){
-  var ids=fold(b.getAttribute('aria-labelledby'));
-  if(ids){
-    var root=b.getRootNode?b.getRootNode():b.ownerDocument;
-    var parts=ids.split(' ').map(function(id){
-      var t=root.getElementById?root.getElementById(id):b.ownerDocument.getElementById(id);
-      return t?fold(t.innerText||t.textContent):'';
-    }).filter(function(t){return t;});
-    if(parts.length)return parts.join(' ');
-  }
+  var root=b.getRootNode?b.getRootNode():b.ownerDocument;
+  var by=fold(b.getAttribute('aria-labelledby')).split(' ').map(function(id){
+    var t=id&&(root.getElementById?root:b.ownerDocument).getElementById(id);
+    return t?fold(t.innerText||t.textContent):'';
+  }).filter(Boolean).join(' ');
+  if(by)return by;
   var label=fold(b.getAttribute('aria-label'));
   if(label)return label;
-  if(b.nodeName==='INPUT'){
-    var type=String(b.type).toLowerCase();
-    return fold(type==='image'?(b.getAttribute('alt')||b.value):b.value)||fold(b.getAttribute('title'))||(type==='image'?'':'Submit');
-  }
-  return fold(b.innerText||b.textContent)||fold(b.getAttribute('title'));
+  if(b.nodeName!=='INPUT')return fold(b.innerText||b.textContent)||fold(b.getAttribute('title'));
+  var image=String(b.type).toLowerCase()==='image';
+  return fold(image?(b.getAttribute('alt')||b.value):b.value)||fold(b.getAttribute('title'))||(image?'':'Submit');
 }
 function formSubmit(f){
-  if(FORMS.has(f))return FORMS.get(f);
-  var b=null,blocking=0,els=f.elements||[];
-  for(var i=0;i<els.length;i++){
-    var e=els[i],type=String(e.type).toLowerCase();
-    if(!b&&(e.nodeName==='BUTTON'||e.nodeName==='INPUT')&&type==='submit')b=e;
-    if(e.nodeName==='INPUT'&&BLOCKS[type])blocking++;
+  if(!FORMS.has(f)){
+    var b=null,blocking=0,els=f.elements||[];
+    for(var i=0;i<els.length;i++){
+      var e=els[i],type=String(e.type).toLowerCase();
+      if(!b&&(e.nodeName==='BUTTON'||e.nodeName==='INPUT')&&type==='submit')b=e;
+      if(e.nodeName==='INPUT'&&BLOCKS[type])blocking++;
+    }
+    var img=f.querySelector('input[type=image]');
+    if(img&&(!b||(img.compareDocumentPosition(b)&4)))b=img;
+    FORMS.set(f,forms.length);
+    forms.push(b?Array.from(accName(b)).slice(0,200).join(''):(blocking<=1?2:1));
   }
-  var img=f.querySelector('input[type=image]');
-  if(img&&(!b||(img.compareDocumentPosition(b)&4)))b=img;
-  var out=b?Array.from(accName(b)).slice(0,200).join(''):(blocking<=1?2:1);
-  FORMS.set(f,out);
-  return out;
+  return FORMS.get(f);
 }
 function px(v){var n=parseFloat(v);return isFinite(n)?n:0;}
 // Offset of a document's origin in top-viewport coordinates, via the
@@ -259,9 +256,8 @@ function visit(el,doc,off){
       var name=el.nodeName.toUpperCase();
       var inputType=(el.getAttribute('type')||'text').toLowerCase();
       if(name==='INPUT')rec.it=inputType;
-      // Enter in a text area or a select submits no form: 0, as for no form.
-      if(name==='INPUT'||name==='BUTTON')rec.fm=el.form?formSubmit(el.form):0;
-      else if(name==='TEXTAREA'||name==='SELECT')rec.fm=0;
+      // Enter in a text area or a select submits no form.
+      if((name==='INPUT'||name==='BUTTON')&&el.form)rec.fm=formSubmit(el.form);
       // A destination only for real navigations: not `javascript:`, not `#`/`` back to this page.
       if(name==='A'&&el.href&&/^https?:$/.test(el.protocol)&&!(el.hash===''&&el.href.split('#')[0]===location.href.split('#')[0])){
         rec.hr=Array.from(String(el.href)).slice(0,500).join('');
@@ -319,7 +315,7 @@ function visit(el,doc,off){
   var top=document.children;
   for(var i=0;i<top.length;i++)visit(top[i],document,off);
 })();
-return{nodes:nodes};
+return{nodes:nodes,forms:forms};
 })()"#;
 
 /// Per-element evidence from one [`COMPACT_JS`] run.
@@ -410,6 +406,19 @@ pub(crate) fn parse(eval_result_json: &str) -> Result<CompactSnapshot, BrowserEr
                 message: "compact snapshot result has no nodes object".into(),
             })
         })?;
+    // The per-form table `fm` indexes: a label, or 1 / 2 for a form with no
+    // submit button that Enter does not / does submit.
+    let forms: Vec<Option<FormSubmit>> = value["result"]["value"]["forms"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|form| match form {
+            Value::String(label) => Some(FormSubmit::Button(truncate_chars(label, 200))),
+            Value::Number(n) if n.as_u64() == Some(1) => Some(FormSubmit::NoSubmitButton),
+            Value::Number(n) if n.as_u64() == Some(2) => Some(FormSubmit::Implicit),
+            _ => None,
+        })
+        .collect();
     let mut out = CompactSnapshot::default();
     for (k, record) in nodes {
         let k: u32 = k.parse().map_err(|_| CdpError::BadJson {
@@ -449,7 +458,7 @@ pub(crate) fn parse(eval_result_json: &str) -> Result<CompactSnapshot, BrowserEr
                 Hit::Key(key)
             }
         };
-        let state = parse_element_state(record);
+        let state = parse_element_state(record, &forms);
         let click_hint = record.get("ck").is_some_and(|ck| ck.as_i64() == Some(1));
         let scrollable = record.get("sc").is_some_and(|sc| sc.as_i64() == Some(1));
         let drag_hint = record.get("dg").is_some_and(|dg| dg.as_i64() == Some(1));
@@ -481,7 +490,7 @@ pub(crate) fn parse(eval_result_json: &str) -> Result<CompactSnapshot, BrowserEr
     Ok(out)
 }
 
-fn parse_element_state(record: &Value) -> ElementState {
+fn parse_element_state(record: &Value, forms: &[Option<FormSubmit>]) -> ElementState {
     let options = record
         .get("o")
         .and_then(Value::as_array)
@@ -508,12 +517,13 @@ fn parse_element_state(record: &Value) -> ElementState {
             .get("hr")
             .and_then(Value::as_str)
             .map(|href| truncate_chars(href, 500)),
+        // No `fm`: Enter there submits no form; an index the table lacks
+        // is unread evidence.
         form: match record.get("fm") {
-            Some(Value::Number(n)) if n.as_u64() == Some(0) => Some(FormSubmit::NotInForm),
-            Some(Value::Number(n)) if n.as_u64() == Some(1) => Some(FormSubmit::NoSubmitButton),
-            Some(Value::Number(n)) if n.as_u64() == Some(2) => Some(FormSubmit::Implicit),
-            Some(Value::String(label)) => Some(FormSubmit::Button(truncate_chars(label, 200))),
-            _ => None,
+            None => Some(FormSubmit::NotInForm),
+            Some(index) => index
+                .as_u64()
+                .and_then(|i| forms.get(usize::try_from(i).ok()?).cloned().flatten()),
         },
     }
 }
@@ -528,7 +538,8 @@ mod tests {
     use serde_json::json;
 
     fn parse_state(record: Value) -> Result<ElementState, BrowserError> {
-        let input = json!({"result":{"value":{"nodes":{"1":record}}}}).to_string();
+        let forms = json!(["Pay $18", 1, 2, "", true]);
+        let input = json!({"result":{"value":{"nodes":{"1":record},"forms":forms}}}).to_string();
         Ok(parse(&input)?.node(1).unwrap().state.clone())
     }
 
@@ -554,7 +565,7 @@ mod tests {
                 "sel":"UTC, Asia/Manila",
                 "o":["UTC", "Asia/Manila"],
                 "hr":"https://example.com/a",
-                "fm":"Pay $18"
+                "fm":0
             }))
             .unwrap(),
             ElementState {
@@ -568,21 +579,30 @@ mod tests {
                 form: Some(FormSubmit::Button("Pay $18".to_owned())),
             }
         );
-        // 0: in no form; 1 / 2: a form with no submit button that Enter
-        // does not / does submit; else unread.
-        let form = |fm: Value| parse_state(json!({ "fm": fm })).unwrap().form;
-        assert_eq!(form(json!(0)), Some(FormSubmit::NotInForm));
-        assert_eq!(form(json!(1)), Some(FormSubmit::NoSubmitButton));
-        assert_eq!(form(json!(2)), Some(FormSubmit::Implicit));
-        assert_eq!(form(json!(3)), None);
-        assert_eq!(form(json!(true)), None);
+        // `fm` indexes the per-form table: a label (an empty one too), 1 / 2
+        // for no submit button that Enter does not / does submit; no `fm`:
+        // no form; an index past the table or a bad entry: unread.
+        let form = |record: Value| parse_state(record).unwrap().form;
+        assert_eq!(form(json!({})), Some(FormSubmit::NotInForm));
+        assert_eq!(form(json!({"fm": 1})), Some(FormSubmit::NoSubmitButton));
+        assert_eq!(form(json!({"fm": 2})), Some(FormSubmit::Implicit));
+        assert_eq!(
+            form(json!({"fm": 3})),
+            Some(FormSubmit::Button(String::new()))
+        );
+        assert_eq!(form(json!({"fm": 4})), None);
+        assert_eq!(form(json!({"fm": 9})), None);
+        assert_eq!(form(json!({"fm": "Pay $18"})), None);
     }
 
     #[test]
     fn wrong_typed_control_state_fields_are_ignored() {
         assert_eq!(
             parse_state(json!({"v":5,"c":"yes","o":"x","sel":[1]})).unwrap(),
-            ElementState::default()
+            ElementState {
+                form: Some(FormSubmit::NotInForm),
+                ..ElementState::default()
+            }
         );
     }
 

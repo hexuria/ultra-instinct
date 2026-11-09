@@ -218,3 +218,16 @@ fn server_run_goal_uses_the_current_tab_and_the_server_policy() {
         [ultra_instinct_cdp::DEFAULT_CDP_HTTP]
     );
 }
+
+/// `BlockKind::code` is the code of the `ToolError` for the same refusal.
+#[test]
+fn block_kind_codes_are_the_tool_error_codes() {
+    assert_eq!(
+        BlockKind::NeedsConfirm.code(),
+        ultra_instinct_mcp::ToolError::NeedsConfirm { label: "x".into() }.code()
+    );
+    assert_eq!(
+        BlockKind::DomainNotAllowed { host: None }.code(),
+        ultra_instinct_mcp::ToolError::DomainNotAllowed { host: "x".into() }.code()
+    );
+}

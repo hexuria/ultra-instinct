@@ -789,7 +789,7 @@ fn gated_input(
         }
         let done = executed.map_err(|err| {
             let fresh_url = session.page().and_then(|p| p.url().map(str::to_owned));
-            exec_error(err, &label, fresh_url.as_deref())
+            exec_error(err, fresh_url.as_deref())
         })?;
         let mut body = json!({
             "acted": input_kind,
@@ -1714,7 +1714,7 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             props.insert("verify".into(), verify_prop());
             props.insert("confirm".into(), confirm_prop());
             required.push("key");
-            "One key event (Enter, Tab, Escape, arrows, letters...) via Input.dispatchKeyEvent. With index: a ticketed KEY on that element (it must take keys; key is one of ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Home, End, PageUp, PageDown, Enter, Escape). Without index the key goes to the focus: off the domain allow-list it refuses, and Enter / Space on a focused control whose label needs a confirm needs `confirm`."
+            "One key event (Enter, Tab, Escape, arrows, letters...) via Input.dispatchKeyEvent. With index: a ticketed KEY on that element (it must take keys; key is one of ArrowLeft, ArrowRight, ArrowUp, ArrowDown, Home, End, PageUp, PageDown, Enter, Escape). Without index the key goes to the focus: on a page off the domain allow-list it refuses (where the key leads is checked on the next call), and Enter / Space on a focused control whose label needs a confirm needs `confirm`."
         }
         "browser_hold_key" => {
             props.insert("key".into(), json!({"type": "string"}));
@@ -1722,7 +1722,7 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             props.insert("hold_ms".into(), json!({"type": "integer"}));
             props.insert("confirm".into(), confirm_prop());
             required.push("key");
-            "Hold a key for a duration (seconds or hold_ms, capped 10s). Off the domain allow-list it refuses; Enter / Space on a focused control whose label needs a confirm needs `confirm`."
+            "Hold a key for a duration (seconds or hold_ms, capped 10s). On a page off the domain allow-list it refuses (where the key leads is checked on the next call); Enter / Space on a focused control whose label needs a confirm needs `confirm`."
         }
         "browser_file_upload" => {
             props.insert("index".into(), index_prop());

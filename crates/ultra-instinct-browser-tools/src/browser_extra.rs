@@ -448,7 +448,7 @@ fn check(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
         server.keep_ledger(key, ledger);
         executed.map_err(|err| {
             let url = session.page().and_then(|p| p.url().map(str::to_owned));
-            exec_error(err, &ticket.target_label, url.as_deref())
+            exec_error(err, url.as_deref())
         })?;
         let after = session.observe().map_err(browser_err)?;
         let read = after.get(&id).and_then(|r| r.state().checked);
@@ -531,21 +531,23 @@ fn keyboard(
         )));
     }
     // The policy first (host, and a confirm for an Enter / Space on the
-    // focused control), on an observation taken now when one is set. Text
-    // with a Tab before an Enter / Space presses a control not known yet.
+    // focused control), on an observation taken now when one is set. Insert
+    // mode sends no keys: it presses nothing. In type mode an Enter after a
+    // Tab, or a Space right after one, would press a control not seen yet.
     let policy = press_policy(server, arguments)?;
+    let keys = mode == "type";
     let tab_then_press = text
         .find('\t')
-        .is_some_and(|tab| text[tab..].contains(['\n', ' ']));
-    if tab_then_press && !policy.confirm_press.is_empty() {
+        .is_some_and(|tab| text[tab..].contains('\n') || text.contains("\t "));
+    if keys && tab_then_press && !policy.confirm_press.is_empty() {
         return Err(ToolError::InvalidArguments(
-            "with confirm patterns set, send the Enter / Space after a Tab in its own call".into(),
+            "with confirm patterns set, send an Enter after a Tab (or a Space right after one) in its own call".into(),
         ));
     }
     let now = crate::press::focus_now(server, key, !policy.is_empty())?;
     let pressed = [('\n', "Enter"), (' ', " ")]
         .into_iter()
-        .find(|(ch, _)| text.contains(*ch))
+        .find(|(ch, _)| keys && text.contains(*ch))
         .map(|(_, key)| key);
     crate::press::check_focused(&policy, &now, pressed)?;
     // Fail closed: unless a current observation shows a focused field that
@@ -601,20 +603,8 @@ fn keyboard(
 fn type_char(session: &mut LiveSession, ch: char) -> Result<(), BrowserError> {
     let named = match ch {
         '\r' => return Ok(()),
-        '\n' => {
-            // Enter must carry its text ("\r") to insert a line or submit.
-            let enter = json!({"key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13,
-                "nativeVirtualKeyCode": 13});
-            let mut down = enter.clone();
-            down["type"] = json!("keyDown");
-            down["text"] = json!("\r");
-            down["unmodifiedText"] = json!("\r");
-            let mut up = enter;
-            up["type"] = json!("keyUp");
-            session.page_input("Input.dispatchKeyEvent", &down.to_string())?;
-            session.page_input("Input.dispatchKeyEvent", &up.to_string())?;
-            return Ok(());
-        }
+        // Enter carries its text ("\r") to insert a line or submit.
+        '\n' => "Enter".to_owned(),
         '\t' => "Tab".to_owned(),
         other => other.to_string(),
     };
@@ -988,7 +978,7 @@ pub(crate) fn spec(name: &str) -> (String, Map<String, Value>, Vec<&'static str>
             );
             props.insert("confirm".into(), crate::browser_tools::confirm_prop());
             required.push("text");
-            "Type text at the focused element, no target: mode type (default) sends key events per char, insert sends one Input.insertText. Refuses when nothing is focused, or off the domain allow-list; an Enter / Space on a focused control whose label needs a confirm needs `confirm`."
+            "Type text at the focused element, no target: mode type (default) sends key events per char, insert sends one Input.insertText. Refuses when nothing is focused, or on a page off the domain allow-list (where the text leads is checked on the next call); an Enter / Space on a focused control whose label needs a confirm needs `confirm`."
         }
         "browser_get" => {
             props.insert("index".into(), index());

@@ -4,9 +4,12 @@
 //! A [`Policy`] is a hard refusal next to the gate, never a score. An empty
 //! policy allows everything (the behaviour without one).
 //!
-//! - **Domains** ([`Policy::allow_domains`]): when the list is non-empty, a
-//!   page whose URL host matches no [`HostPattern`] gets no input
-//!   ([`GuardReason::DomainNotAllowed`]). A URL with no host (`about:blank`,
+//! - **Domains** ([`Policy::allow_domains`]): when the list is non-empty,
+//!   input begins only on a page whose URL host matches a [`HostPattern`]
+//!   (else [`GuardReason::DomainNotAllowed`]). The check is on the page the
+//!   input lands on, before it is sent: a navigation the input causes (a
+//!   link, a submitted form) goes wherever it goes, and the next input there
+//!   is checked. A URL with no host (`about:blank`,
 //!   `file:///…`, fixtures) is allowed. An *unknown* URL (the observation
 //!   could not read one) is refused while the list is non-empty.
 //! - **Confirm** ([`Policy::confirm_press`]): a press whose label matches a
@@ -21,7 +24,9 @@
 
 use std::fmt;
 
-use ultra_instinct_core::{Action, FormSubmit, InteractionManifold, InteractionRegion, RegionId};
+use ultra_instinct_core::{
+    Action, FormSubmit, InteractionManifold, InteractionRegion, RegionId, Role,
+};
 use ultra_instinct_protocol::{ActionTicket, GuardReason, TicketInvalid};
 
 use crate::ticket::{revalidate, ConsumeError, TicketLedger};
@@ -184,7 +189,8 @@ impl Policy {
         }
     }
 
-    /// May `region` on the page at `url` receive `action`? `url` is `None`
+    /// May `region` on the page at `url` receive `action`? The page it is
+    /// on now, not where the input may lead. `url` is `None`
     /// when the observation could not read it; `key` is a KEY's key (`None`
     /// for other actions; a KEY without one is taken as Enter).
     pub fn check(
@@ -211,13 +217,15 @@ impl Policy {
     /// - the CLICK family (click, toggle, surface point): the target's label;
     /// - an activating KEY (Enter / Space / NumpadEnter, any modifiers) on a
     ///   button-like target (it clicks, toggles or takes points, and takes
-    ///   no text or select): the target's label;
+    ///   no text or select): the target's label, except Enter on a checkbox
+    ///   / radio, which submits its form (below; the box's own label when it
+    ///   is in no form);
     /// - Enter / NumpadEnter in any other form control: the label of the
     ///   button its form's implicit submission presses (observe evidence,
     ///   [`FormSubmit`]); none when it is in no form or its form does not
-    ///   submit on Enter; [`FORM_SUBMIT_UNKNOWN`] when the form submits with
-    ///   no button or observe could not read it (then any confirm pattern
-    ///   refuses).
+    ///   submit on Enter; [`FORM_SUBMIT_UNKNOWN`] when the submit button has
+    ///   no name, the form submits with no button, or observe could not read
+    ///   it (then any confirm pattern refuses).
     ///
     /// Space in a field is text; other keys press nothing.
     pub fn press_label<'a>(
@@ -240,16 +248,23 @@ impl Policy {
         let takes_text = acts
             .iter()
             .any(|a| matches!(a, Action::Type | Action::Select));
-        if !takes_text && acts.iter().any(|a| is_press(*a)) {
+        let button_like = !takes_text && acts.iter().any(|a| is_press(*a));
+        // Enter on a box submits its form; only a button or link presses itself.
+        let toggle = region.role() == Role::Checkbox || acts.contains(&Action::Toggle);
+        if button_like && !(toggle && is_enter_key(key)) {
             return Some(region.label());
         }
         if !is_enter_key(key) {
             return None;
         }
         match &region.state().form {
-            Some(FormSubmit::Button(label)) => Some(label.as_str()),
-            Some(FormSubmit::NotInForm | FormSubmit::NoSubmitButton) => None,
-            Some(FormSubmit::Implicit) | None => Some(FORM_SUBMIT_UNKNOWN),
+            Some(FormSubmit::Button(label)) if !label.trim().is_empty() => Some(label.as_str()),
+            Some(FormSubmit::NotInForm | FormSubmit::NoSubmitButton) => {
+                button_like.then(|| region.label())
+            }
+            // A nameless submit button, a button-less form Enter still
+            // submits, or evidence observe could not read.
+            _ => Some(FORM_SUBMIT_UNKNOWN),
         }
     }
 
@@ -605,6 +620,87 @@ mod tests {
             policy("", "").check(url, &unknown, Action::Key, None),
             Ok(())
         );
+    }
+
+    /// Enter on a checkbox (or radio) in a form submits the form, which
+    /// presses its submit button: that label is checked, not the box's.
+    /// Space only toggles the box: its own label. A submit button with no
+    /// name fails closed as an unknown submission.
+    #[test]
+    fn enter_on_a_box_submits_its_form_and_a_nameless_submit_fails_closed() {
+        use ultra_instinct_core::{ElementState, FormSubmit, Role};
+        let m = parse_fixture(PAGE).unwrap();
+        let in_form = |role: Role, label: &str, actions: &[Action], form: FormSubmit| {
+            let mut parts = m
+                .get(&RegionId::try_new("pay").unwrap())
+                .unwrap()
+                .to_parts();
+            parts.role = role;
+            parts.label = label.into();
+            parts.actions = actions.to_vec();
+            InteractionRegion::try_new(parts)
+                .unwrap()
+                .with_state(ElementState {
+                    form: Some(form),
+                    ..ElementState::default()
+                })
+        };
+        let p = policy("", "pay*, accept*");
+        let url = Some("https://shop.example/");
+        let pay = FormSubmit::Button("Pay $18".into());
+        let terms = in_form(
+            Role::Checkbox,
+            "Accept terms",
+            &[Action::Click, Action::Toggle],
+            pay.clone(),
+        );
+        assert_eq!(
+            p.press_label(&terms, Action::Key, Some("Enter")),
+            Some("Pay $18")
+        );
+        let confirmed = p.clone().with_confirmed("Accept terms");
+        assert_eq!(
+            confirmed.check(url, &terms, Action::Key, Some("Enter")),
+            Err(GuardReason::NeedsConfirm)
+        );
+        assert_eq!(
+            p.press_label(&terms, Action::Key, Some(" ")),
+            Some("Accept terms")
+        );
+        // A box in no form: Enter is taken as pressing the box itself.
+        let lone = in_form(
+            Role::Checkbox,
+            "Accept terms",
+            &[Action::Click, Action::Toggle],
+            FormSubmit::NotInForm,
+        );
+        assert_eq!(
+            p.press_label(&lone, Action::Key, Some("Enter")),
+            Some("Accept terms")
+        );
+        // A button presses itself, in a form or not.
+        let go = in_form(Role::Button, "Continue", &[Action::Click], pay);
+        assert_eq!(
+            p.press_label(&go, Action::Key, Some("Enter")),
+            Some("Continue")
+        );
+        // An icon-only submit button has no name: unknown, so it needs a confirm.
+        for name in ["", "   "] {
+            let field = in_form(
+                Role::TextField,
+                "Email",
+                &[Action::Click, Action::Type, Action::Key],
+                FormSubmit::Button(name.into()),
+            );
+            assert_eq!(
+                p.press_label(&field, Action::Key, Some("Enter")),
+                Some(FORM_SUBMIT_UNKNOWN)
+            );
+            assert_eq!(
+                p.check(url, &field, Action::Key, Some("Enter")),
+                Err(GuardReason::NeedsConfirm)
+            );
+        }
     }
 
     #[test]

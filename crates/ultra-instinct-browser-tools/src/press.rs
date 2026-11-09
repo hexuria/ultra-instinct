@@ -56,14 +56,13 @@ pub(crate) fn refusal_for(reason: GuardReason, label: &str, url: Option<&str>) -
 }
 
 /// Executor failures: the user's policy (confirm / domain) is its typed
-/// refusal for `label` on `url`; ticket drift is a stale ref; other ticket
-/// and gate refusals are `TicketInvalid` (never silently retried);
-/// observe / dispatch / page rejection are `Browser`.
-pub(crate) fn exec_error(err: ExecError, label: &str, url: Option<&str>) -> ToolError {
+/// refusal for the label the executor checked, on `url`; ticket drift is a
+/// stale ref; other ticket and gate refusals are `TicketInvalid` (never
+/// silently retried); observe / dispatch / page rejection are `Browser`.
+pub(crate) fn exec_error(err: ExecError, url: Option<&str>) -> ToolError {
     match err {
-        ExecError::Gate(reason @ (GuardReason::DomainNotAllowed | GuardReason::NeedsConfirm)) => {
-            refusal_for(reason, label, url)
-        }
+        // The label the executor's fresh look checked.
+        ExecError::Policy { reason, label } => refusal_for(reason, &label, url),
         ExecError::Ticket(invalid) => ticket_error(invalid, err.to_string()),
         ExecError::Gate(_) => ToolError::TicketInvalid(err.to_string()),
         other => ToolError::Browser(other.to_string()),

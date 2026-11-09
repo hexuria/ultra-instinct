@@ -105,17 +105,13 @@ pub enum BlockKind {
 
 impl BlockKind {
     /// The [`ToolError`](crate::ToolError) code of the same refusal:
-    /// `needs_confirm` / `domain_not_allowed`.
+    /// `needs_confirm` / `domain_not_allowed` (pinned to it by
+    /// `tests/run_goal.rs`).
     pub fn code(&self) -> &'static str {
         match self {
-            Self::NeedsConfirm => crate::ToolError::NeedsConfirm {
-                label: String::new(),
-            },
-            Self::DomainNotAllowed { .. } => crate::ToolError::DomainNotAllowed {
-                host: String::new(),
-            },
+            Self::NeedsConfirm => "needs_confirm",
+            Self::DomainNotAllowed { .. } => "domain_not_allowed",
         }
-        .code()
     }
 }
 

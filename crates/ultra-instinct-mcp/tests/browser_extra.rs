@@ -838,3 +838,21 @@ fn read_console_turns_console_and_log_events_into_entries() {
     assert_eq!(out["entries"][0]["level"], "error");
     assert_eq!(out["entries"][0]["text"], "boom");
 }
+
+/// Index-less `browser_send_key` Enter carries its text ("\r"), so the
+/// page gets a keypress and a field's form submits (as a ticketed KEY does).
+#[test]
+fn send_key_enter_carries_its_text() {
+    let script = ScriptBuilder::new()
+        .call("Input.dispatchKeyEvent", json!({}))
+        .call("Input.dispatchKeyEvent", json!({}));
+    let (mut server, log) = server(script);
+    call(
+        &mut server,
+        "browser_send_key",
+        json!({"cdp": CDP, "key": "Enter"}),
+    );
+    let keys = calls(&log, "Input.dispatchKeyEvent");
+    assert_eq!(keys[0]["type"], "keyDown");
+    assert_eq!(keys[0]["text"], "\r", "{keys:?}");
+}

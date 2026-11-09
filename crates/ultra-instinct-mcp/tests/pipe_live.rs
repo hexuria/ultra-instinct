@@ -380,3 +380,80 @@ fn implicit_submission_and_labelledby_submit_buttons_need_confirm() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&profile);
 }
+
+/// Index-less Enter carries "\r", so a focused field's form submits; Enter
+/// on a checkbox in a Pay form is checked against the form's Pay button; a
+/// nameless (icon-only) submit button is an unknown submission.
+#[test]
+#[ignore = "needs a local Chrome"]
+fn enter_submits_from_fields_and_boxes_under_the_form_rule() {
+    let (mut child, profile, browser) = launch();
+    let mut server = Server::with_pipe(browser);
+    let form = |id: &str, inner: &str| {
+        format!("<form onsubmit=\"document.title+='{id}';return false\">{inner}</form>")
+    };
+    let url = format!(
+        "data:text/html,<title>t</title>{}{}{}",
+        form("A", "<label>Search <input></label><button>Go</button>"),
+        form(
+            "B",
+            "<label><input type=checkbox> Accept terms</label><button>Pay $18</button>"
+        ),
+        form(
+            "C",
+            "<label>Code <input></label><button><svg width=12 height=12></svg></button>"
+        ),
+    );
+    call(&mut server, "browser_navigate", json!({ "url": url }));
+    let state = call(&mut server, "browser_get_state", json!({"format": "json"}));
+    let at = |label: &str| json!({"index": index_of(&state, label), "snapshot": state["snapshot"]});
+    let title = |server: &mut Server| {
+        call(
+            server,
+            "browser_exec",
+            json!({"expression": "document.title"}),
+        )["result"]
+            .clone()
+    };
+    call(&mut server, "browser_focus", at("Search"));
+    call(&mut server, "browser_send_key", json!({"key": "Enter"}));
+    assert_eq!(
+        title(&mut server),
+        "tA",
+        "index-less Enter submits the form"
+    );
+    call(&mut server, "browser_focus", at("Accept terms"));
+    call(&mut server, "browser_send_key", json!({"key": "Enter"}));
+    let from_box = title(&mut server);
+    println!(
+        "pipe live: Enter on a checkbox submits its form: {}",
+        from_box == "tAB"
+    );
+
+    server.set_policy(ultra_instinct_mcp::Policy::from_lists("", "Pay*").unwrap());
+    call(&mut server, "browser_focus", at("Accept terms"));
+    let err = server
+        .call_tool("browser_send_key", &json!({"key": "Enter"}))
+        .expect_err("Enter on the box submits the Pay form");
+    assert_eq!(
+        err,
+        ToolError::NeedsConfirm {
+            label: "Pay $18".into()
+        }
+    );
+    let mut code = at("Code");
+    code["key"] = json!("Enter");
+    let err = server
+        .call_tool("browser_send_key", &code)
+        .expect_err("a nameless submit button");
+    assert_eq!(
+        err,
+        ToolError::NeedsConfirm {
+            label: "(form submit)".into()
+        }
+    );
+    assert_eq!(title(&mut server), from_box, "nothing more submitted");
+    drop(server);
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&profile);
+}

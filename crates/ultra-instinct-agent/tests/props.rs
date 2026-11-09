@@ -149,8 +149,8 @@ proptest! {
             5 => ExecError::Gate(GuardReason::Occluded),
             6 => ExecError::Observe("x".into()),
             7 => ExecError::Rejected("x".into()),
-            8 => ExecError::Gate(GuardReason::DomainNotAllowed),
-            9 => ExecError::Gate(GuardReason::NeedsConfirm),
+            8 => ExecError::Policy { reason: GuardReason::DomainNotAllowed, label: "x".into() },
+            9 => ExecError::Policy { reason: GuardReason::NeedsConfirm, label: "x".into() },
             _ => ExecError::Dispatch("x".into()),
         };
         let expect = matches!(

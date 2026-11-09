@@ -1067,18 +1067,7 @@ impl<T: CdpTransport> BrowserSession<T> {
         let binding = self.binding_for(id)?;
         self.stale = true;
         self.semantic_input(&binding, DOM_FOCUS_FUNCTION, "")?;
-        if key != "Enter" {
-            return self.key_event(key, 0);
-        }
-        // Enter must carry its text ("\r") for a field to submit its form.
-        let (k, c, v, _) = key_params(key).expect("Enter is a named key");
-        let down = json!({"type": "keyDown", "key": k, "code": c, "windowsVirtualKeyCode": v,
-            "nativeVirtualKeyCode": v, "text": "\r", "unmodifiedText": "\r"});
-        self.call("Input.dispatchKeyEvent", &down.to_string())?;
-        let up = json!({"type": "keyUp", "key": k, "code": c, "windowsVirtualKeyCode": v,
-            "nativeVirtualKeyCode": v});
-        self.call("Input.dispatchKeyEvent", &up.to_string())?;
-        Ok(())
+        self.key_event(key, 0)
     }
 
     /// One trusted key event (`Input.dispatchKeyEvent` down/up, optional hold).
@@ -1096,6 +1085,7 @@ impl<T: CdpTransport> BrowserSession<T> {
             "windowsVirtualKeyCode": v,
             "nativeVirtualKeyCode": v,
             "text": text,
+            "unmodifiedText": text,
         });
         self.call("Input.dispatchKeyEvent", &down.to_string())?;
         if hold_ms > 0 {
@@ -1539,6 +1529,7 @@ fn focused_region(
 fn key_params(key: &str) -> Option<(String, String, i64, String)> {
     let named: (&str, &str, i64) = match key {
         "Enter" | "Return" => ("Enter", "Enter", 13),
+        "NumpadEnter" => ("Enter", "NumpadEnter", 13),
         "Tab" => ("Tab", "Tab", 9),
         "Escape" | "Esc" => ("Escape", "Escape", 27),
         "Backspace" => ("Backspace", "Backspace", 8),
@@ -1559,12 +1550,14 @@ fn key_params(key: &str) -> Option<(String, String, i64, String)> {
         "CapsLock" => ("CapsLock", "CapsLock", 20),
         _ => return key_char_params(key),
     };
-    // Named keys carry no text — except the spacebar, whose text IS a space.
-    let text = if named.0 == " " {
-        " ".to_owned()
-    } else {
-        String::new()
-    };
+    // Named keys carry no text, except the spacebar (a space) and Enter
+    // ("\r": it fires keypress, so a field submits its form).
+    let text = match named.0 {
+        " " => " ",
+        "Enter" => "\r",
+        _ => "",
+    }
+    .to_owned();
     Some((named.0.to_owned(), named.1.to_owned(), named.2, text))
 }
 
@@ -1681,8 +1674,16 @@ mod tests {
         let (key, code, vkey, text) = key_params("Enter").unwrap();
         assert_eq!(
             (key.as_str(), code.as_str(), vkey, text.as_str()),
-            ("Enter", "Enter", 13, "")
+            ("Enter", "Enter", 13, "\r")
         );
+        // Enter carries its text ("\r") so it fires keypress and submits.
+        let (key, code, _, text) = key_params("NumpadEnter").unwrap();
+        assert_eq!(
+            (key.as_str(), code.as_str(), text.as_str()),
+            ("Enter", "NumpadEnter", "\r")
+        );
+        let (_, _, _, text) = key_params("Space").unwrap();
+        assert_eq!(text, " ");
 
         let (key, code, vkey, text) = key_params("a").unwrap();
         assert_eq!(

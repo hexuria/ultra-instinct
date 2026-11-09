@@ -233,7 +233,8 @@ fn a_ticketed_enter_that_presses_a_confirm_label_needs_confirm() {
     let mut page = PageSpec::of(&[field, handle], "http://127.0.0.1/pay", "Pay");
     page.dom[0] = page.dom[0]
         .clone()
-        .with_compact_state(json!({"it": "text", "fm": "Pay $18"}));
+        .with_compact_state(json!({"it": "text", "fm": 0}));
+    page.forms = vec![json!("Pay $18")];
     page.dom[1] = page.dom[1].clone().with_attr("class", "ui-slider-handle");
     for (index, node) in [(1, 10), (2, 11)] {
         let script = ScriptBuilder::new()
@@ -317,4 +318,110 @@ fn an_activating_key_with_no_observed_focus_needs_confirm() {
     confirmed["confirm"] = json!("(unobserved focus)");
     server.call_tool("browser_send_key", &confirmed).unwrap();
     assert_eq!(inputs(&log), 4);
+}
+
+/// A control that is no form control (a `div` combobox walking its
+/// options) submits no form: observe reads it as in no form, so Enter on it
+/// needs no confirm even with confirm patterns set.
+#[test]
+fn enter_on_a_non_form_control_needs_no_confirm() {
+    let combo = Control {
+        tag: "DIV",
+        role: "combobox",
+        ..Control::button(10, 100, "Country", (20.0, 20.0, 200.0, 28.0))
+    };
+    let page = PageSpec::of(&[combo], "http://127.0.0.1/pick", "Pick");
+    let script = ScriptBuilder::new()
+        .observe_compact(&page)
+        .observe_compact(&page)
+        .observe_compact(&page)
+        .dom_input(10);
+    let (mut server, log) = host(keys(script, 2), policy("", "pay*"));
+    let state = server
+        .call_tool("browser_get_state", &json!({"cdp": CDP}))
+        .unwrap();
+    let out = server
+        .call_tool(
+            "browser_send_key",
+            &json!({"cdp": CDP, "index": 1, "key": "Enter", "snapshot": state["snapshot"]}),
+        )
+        .unwrap_or_else(|err| panic!("{err:?}"));
+    assert_eq!(out["acted"], "key", "{out}");
+    assert_eq!(inputs(&log), 2);
+}
+
+/// The executor's own fresh look decides the label a refusal names: the
+/// caller saw a form that submits with "Continue", the page now submits
+/// with "Pay $18", and the refusal names "Pay $18" (confirming "Continue"
+/// would only loop).
+#[test]
+fn a_refusal_names_the_label_on_the_executors_fresh_look() {
+    let field = Control::text_field(10, 100, "Promo code", (20.0, 20.0, 300.0, 28.0));
+    let with_submit = |label: &str| {
+        let mut page = PageSpec::of(std::slice::from_ref(&field), "http://127.0.0.1/pay", "Pay");
+        page.dom[0] = page.dom[0]
+            .clone()
+            .with_compact_state(json!({"it": "text", "fm": 0}));
+        page.forms = vec![json!(label)];
+        page
+    };
+    let script = ScriptBuilder::new()
+        .observe_compact(&with_submit("Continue"))
+        .observe_compact(&with_submit("Continue"))
+        .observe_compact(&with_submit("Pay $18"));
+    let (mut server, log) = host(script, policy("", "pay*"));
+    let state = server
+        .call_tool("browser_get_state", &json!({"cdp": CDP}))
+        .unwrap();
+    let err = server
+        .call_tool(
+            "browser_send_key",
+            &json!({"cdp": CDP, "index": 1, "key": "Enter", "snapshot": state["snapshot"]}),
+        )
+        .expect_err("needs confirm");
+    assert_eq!(
+        err,
+        ToolError::NeedsConfirm {
+            label: "Pay $18".into()
+        }
+    );
+    assert_eq!(inputs(&log), 0);
+}
+
+/// A Space after a Tab is ordinary text unless it is the first thing after
+/// the Tab; an Enter after a Tab still refuses; insert mode sends no keys,
+/// so nothing in it presses.
+#[test]
+fn only_an_enter_or_a_leading_space_after_a_tab_refuses() {
+    let typed = |text: &str| {
+        let chars = text.chars().count();
+        let script = keys(
+            ScriptBuilder::new()
+                .observe_compact(&page("http://127.0.0.1/form", false))
+                .call("Runtime.evaluate", focused_true()),
+            chars * 2,
+        );
+        let (mut server, _log) = host(script, policy("", "pay*"));
+        server.call_tool("browser_keyboard", &json!({"cdp": CDP, "text": text}))
+    };
+    typed("Jane\tDoe Smith").expect("form fill");
+    for text in ["x\t\n", "x\t y"] {
+        let err = typed(text).expect_err(text);
+        assert!(
+            matches!(err, ToolError::InvalidArguments(_)),
+            "{text}: {err:?}"
+        );
+    }
+    let script = ScriptBuilder::new()
+        .observe_compact(&page("http://127.0.0.1/form", false))
+        .call("Runtime.evaluate", focused_true())
+        .call("Input.insertText", json!({}));
+    let (mut server, log) = host(script, policy("", "pay*"));
+    server
+        .call_tool(
+            "browser_keyboard",
+            &json!({"cdp": CDP, "text": "x\t\n", "mode": "insert"}),
+        )
+        .expect("insert sends no keys");
+    assert_eq!(inputs(&log), 1);
 }

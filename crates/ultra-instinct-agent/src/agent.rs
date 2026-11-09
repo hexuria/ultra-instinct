@@ -1208,7 +1208,7 @@ where
             .check(url, region, action, key)
             .map_err(|reason| AgentError::PolicyRefused {
                 reason,
-                label: refusal_label.clone(),
+                label: refusal_label,
             })?;
 
         let input = match kind {
@@ -1289,13 +1289,9 @@ where
             Ok(executed) => executed,
             Err(err) if err.is_stale() => return Err(AgentError::Stale(err.to_string())),
             Err(ExecError::Rejected(msg)) => return Err(AgentError::InputRejected(msg)),
-            Err(ExecError::Gate(
-                reason @ (GuardReason::DomainNotAllowed | GuardReason::NeedsConfirm),
-            )) => {
-                return Err(AgentError::PolicyRefused {
-                    reason,
-                    label: refusal_label,
-                })
+            // The label the executor's fresh look checked, not the decision's.
+            Err(ExecError::Policy { reason, label }) => {
+                return Err(AgentError::PolicyRefused { reason, label })
             }
             Err(ExecError::Gate(reason)) => {
                 return Err(AgentError::Guard(format!("refuse at executor: {reason}")))
