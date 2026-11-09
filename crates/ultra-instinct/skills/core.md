@@ -104,10 +104,11 @@ aui run --goal "buy the blue mug" --cdp --url https://shop.example/ \
   would be sent to another host is refused too; a link to one is checked
   at the next step there.
 - `--confirm-press <glob>` (repeatable, `*` wildcard, case-insensitive): a
-  click on a matching label ends the run `blocked` with
+  press of a matching label ends the run `blocked` with
   `rerun with --confirm "<label>"`. Ask the user. Only when they say yes,
   rerun with exactly that `--confirm "<label>"`. Never add `--confirm` on
-  your own.
+  your own. Keys are presses too: Enter / Space on a matching button, and
+  Enter in a field whose form submits through a matching button.
 - With no flags nothing is refused by policy.
 
 ## 6. Step by step: shell verbs
@@ -154,7 +155,7 @@ Verbs:
 | `click <ref> [--confirm <label>] [--mouse]` | ticketed click; `--mouse` presses a real pointer |
 | `type <ref> <text>` | set a field's text; the value is read back |
 | `select <ref> <option>` | pick one option of a `<select>` |
-| `key <ref> <key>` | one key on that control: `Enter`, `Escape`, arrows, `Home`, `End`, `PageUp`, `PageDown` |
+| `key <ref> <key>` | one key on that control: `Enter`, `Escape`, arrows, `Home`, `End`, `PageUp`, `PageDown`; an Enter that would press or submit through a `--confirm-press` label is refused like a click |
 | `scroll [up\|down]` | scroll one viewport |
 | `wait --text\|--url\|--control <v> [--timeout s]` | look about every 200 ms until the page shows that text, the URL contains it, or a control label contains it (default 10 s, max 60) |
 | `wait --gone <label>` | until no control has exactly that label (a spinner, a "Loading" button) |
@@ -165,7 +166,7 @@ Verbs:
 | `forward`, `reload [--ignore-cache]` | history forward, reload |
 | `check <ref>`, `uncheck <ref>` | set a checkbox; `--mouse` presses a real pointer |
 | `focus <ref>` | focus a control (ticketed) |
-| `keyboard type\|insert <text> [--confirm <label>]` | keys into whatever has focus (`insert` sends the text in one go); refused off `--allow-domain`; an Enter / space on a focused button matching `--confirm-press` needs `--confirm` like a click |
+| `keyboard type\|insert <text> [--confirm <label>]` | keys into whatever has focus (`insert` sends the text in one go); refused off `--allow-domain`; with `--confirm-press` set, an Enter / space on a focused matching button, Enter in a field whose form submits through one, or Enter / space when no control is seen focused (`(unobserved focus)`) needs `--confirm`; an Enter or space after a Tab in the same text is refused: send it in its own call |
 | `get value\|label\|role\|box <ref>`, `get attr <ref> <name>` | read one fact; never a password value |
 | `is visible\|enabled\|checked\|editable <ref>` | prints `true` or `false` |
 | `count [--label L] [--role R]` | how many controls match, and their refs |
@@ -177,6 +178,10 @@ Verbs:
 | `download <ref> <path> [--overwrite] [--timeout-ms N]` | ticketed click, then save the file |
 | `network block <pattern>…`, `network unblock [<pattern>…]`, `network har start`, `network har stop <path>` | block URLs; record a HAR (no bodies, secrets masked) |
 | `close` | stop the daemon (and the Chrome it launched) |
+
+Only `click` and `keyboard` take `--confirm`. If `key`, `check`, `focus` or
+`download` refuses `NeedsConfirm "<label>"`, ask the user, then press that
+control with `aui click <ref> --confirm "<label>"`.
 
 `--max-output N` on any verb cuts long text output (`snap`) to N chars.
 Relative paths are yours: they resolve against your cwd.
