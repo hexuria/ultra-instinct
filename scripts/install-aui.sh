@@ -45,9 +45,11 @@ fi
 
 # cargo install resolves the rustup toolchain from the invocation cwd, not
 # the source tree — cd into the source so its rust-toolchain.toml (1.99.0)
-# applies even when the caller's default toolchain is older.
+# applies even when the caller's default toolchain is older. --force lets it
+# replace `aui` / `ultra-instinct` binaries another package installed (an
+# older `aui-cli` build, say), which cargo otherwise refuses.
 cd "$SRC"
-cargo install --locked --path crates/ultra-instinct --features "$FEATURES"
+cargo install --locked --force --path crates/ultra-instinct --features "$FEATURES"
 
 BIN_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
 case ":$PATH:" in
