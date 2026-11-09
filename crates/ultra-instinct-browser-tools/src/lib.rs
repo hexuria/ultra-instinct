@@ -26,13 +26,16 @@ pub use browser_state::STATE_TOOLS;
 pub use browser_tools::BROWSER_TOOLS;
 pub use error::ToolError;
 pub use host::{BrowserHost, Downloads, LiveSession, ToolLimits, ToolState};
-pub use secrets::{sensitive, MASK};
+pub use secrets::{sensitive, MASK, MAX_SENSITIVE_SECRETS};
 pub use ultra_instinct_cdp::{CdpConnector, HttpBackend, PageTab, TargetBackend};
 
 use serde_json::{Map, Value};
 
 /// Run a `browser_*` tool on `host`. `None` when `name` is not one; the
 /// caller has already checked that `arguments` is an object.
+///
+/// The result is not masked yet: the host runs every tool's result through
+/// [`ToolState::scrub_result`] at its one exit (the MCP `Server` does).
 pub fn call(
     host: &mut dyn BrowserHost,
     name: &str,
@@ -48,15 +51,7 @@ pub fn call(
     } else {
         return None;
     };
-    // Text typed into a sensitive field never comes back out.
-    let secrets = &host.tool_state().secrets;
-    Some(match result {
-        Ok(mut body) => {
-            secrets.scrub_value(&mut body);
-            Ok(body)
-        }
-        Err(err) => Err(secrets.scrub_error(err)),
-    })
+    Some(result)
 }
 
 /// `err` with the type and message of the dialog open on the tab

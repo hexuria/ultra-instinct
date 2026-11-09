@@ -100,10 +100,16 @@ surface.
   failure they hit and the call's generic `browser` error is swapped for it.
 - **Secrets.** A field is `sensitive` when it is a password / hidden / file
   input, its label names a secret (AGENTS.md 7a, `is_secret_field`), or its
-  type could not be read. Its value is never printed; text typed into it is
-  masked (`••••`) in every later output, error and HAR. `browser_get_html`
-  drops text inputs' `value` attributes. Observe no longer names a text area
-  by its own text (its value).
+  type could not be read. Its value is never printed; text typed into it
+  (any length; under 4 chars only as a whole token) is masked (`••••`) in
+  every later output, error and HAR. Masking is one exit,
+  `Server::call_tool`, for every tool; only the screenshot `base64` and
+  PDF `data` fields are exempt. Sensitive values are never evicted: past
+  64 a new one refuses `secrets_full` before it is typed. `run_goal`
+  remembers each payload before dispatch (non-sensitive ones from 4
+  chars) and returns them in `RunReport::typed` (must not be logged).
+  `browser_get_html` drops text inputs' `value` attributes. Observe no
+  longer names a text area by its own text (its value).
 - **Limits.** `Server::with_limits(ToolLimits)`: state text 100 000 chars,
   1 000 elements, 16 MiB screenshots (one JPEG retry, then
   `output_too_large`), 60 s waits.

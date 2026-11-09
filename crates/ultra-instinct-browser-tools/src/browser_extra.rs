@@ -538,7 +538,7 @@ fn keyboard(
         plain
     })?;
     if !focused_plain {
-        server.tool_state_mut().secrets.remember(text);
+        server.tool_state_mut().secrets.remember(text, true)?;
     }
     let mut session = server.take_session(key)?;
     let outcome = (|| {

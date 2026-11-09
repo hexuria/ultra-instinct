@@ -239,3 +239,197 @@ fn a_typed_password_appears_in_no_output_error_or_file() {
         "{outputs:#?}"
     );
 }
+
+/// A replay whose `Runtime.evaluate` echoes `SECRET` once `echo` is on (the
+/// page shows what was typed); every other call follows the script.
+struct EchoAfter {
+    inner: ReplayTransport,
+    echo: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+impl CdpTransport for EchoAfter {
+    fn call(&mut self, method: &str, params_json: &str) -> Result<String, CdpError> {
+        if self.echo.get() && method == "Runtime.evaluate" {
+            return Ok(string_result(&format!("Signed in with {SECRET}")).to_string());
+        }
+        self.inner.call(method, params_json)
+    }
+}
+
+/// `Server::run_goal` types into the password field through the agent loop
+/// (not a `browser_*` tool): the text is masked in every later output.
+#[test]
+fn a_password_typed_by_run_goal_is_masked_in_later_outputs() {
+    let echo = std::rc::Rc::new(std::cell::Cell::new(false));
+    let on = std::rc::Rc::clone(&echo);
+    let script = (0..6)
+        .fold(ScriptBuilder::new(), |s, _| s.observe_compact(&page()))
+        .dom_input(11);
+    let mut connect = Some(script);
+    let mut server = Server::with_connector(move |_url| {
+        let script = connect.take().ok_or_else(|| CdpError::Transport {
+            message: "one connect".into(),
+        })?;
+        Ok(Box::new(EchoAfter {
+            inner: ReplayTransport::parse(&script.to_json())?,
+            echo: std::rc::Rc::clone(&on),
+        }) as Box<dyn CdpTransport>)
+    });
+    let report = server.run_goal(
+        &format!("type \"{SECRET}\" into Password"),
+        ultra_instinct_mcp::RunLimits {
+            max_steps: 2,
+            deadline: None,
+        },
+    );
+    assert!(
+        report.steps.iter().any(|s| s.action == "TYPE_TEXT") || !report.typed.is_empty(),
+        "the run typed: {report:?}"
+    );
+    assert!(!format!("{report:?}").contains(SECRET), "{report:?}");
+    echo.set(true);
+    let text = server
+        .call_tool("browser_get_text", &json!({"cdp": CDP}))
+        .expect("text");
+    assert_eq!(text["text"], format!("Signed in with {MASK}"), "{text}");
+}
+
+/// Masking runs on every tool's result, not only `browser_*` ones: an
+/// observe label that echoes a typed secret is masked.
+#[test]
+fn observe_output_is_masked_too() {
+    let mut echoed = page();
+    echoed.dom[0].label = format!("Email ({SECRET})");
+    echoed.ax[0].name = format!("Email ({SECRET})");
+    let mut connect = Some(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&page())
+            .dom_input(11)
+            .observe_compact(&echoed),
+    );
+    let mut server = Server::with_connector(move |_url| {
+        let script = connect.take().ok_or_else(|| CdpError::Transport {
+            message: "one connect".into(),
+        })?;
+        Ok(Box::new(ReplayTransport::parse(&script.to_json())?) as Box<dyn CdpTransport>)
+    });
+    server
+        .call_tool(
+            "browser_type",
+            &json!({"cdp": CDP, "index": 2, "text": SECRET}),
+        )
+        .expect("typed");
+    let observed = server
+        .call_tool("observe", &json!({"cdp": CDP}))
+        .expect("observe");
+    let text = observed.to_string();
+    assert!(!text.contains(SECRET), "{text}");
+    assert!(text.contains(MASK), "{text}");
+}
+
+/// A server that has typed `text` into field `index` of `page` (an
+/// unchecked snapshot-free `browser_type`), then answers `then` in order.
+fn typed_server(
+    page: PageSpec,
+    index: i64,
+    text: &str,
+    then: impl FnOnce(ScriptBuilder) -> ScriptBuilder,
+) -> Server {
+    let script = then(
+        ScriptBuilder::new()
+            .observe_compact(&page)
+            .observe_compact(&page)
+            .dom_input(9 + index),
+    );
+    let mut connect = Some(script);
+    let mut server = Server::with_connector(move |_url| {
+        let script = connect.take().ok_or_else(|| CdpError::Transport {
+            message: "one connect".into(),
+        })?;
+        Ok(Box::new(ReplayTransport::parse(&script.to_json())?) as Box<dyn CdpTransport>)
+    });
+    server
+        .call_tool(
+            "browser_type",
+            &json!({"cdp": CDP, "index": index, "text": text}),
+        )
+        .expect("typed");
+    server
+}
+
+/// A 3-digit CVV typed into a CVV field is masked as a whole token; the
+/// same digits inside a longer number stay.
+#[test]
+fn a_short_cvv_is_masked_as_a_whole_token_only() {
+    let mut card = page();
+    card.dom[1].label = "CVV".into();
+    card.ax[1].name = "CVV".into();
+    card.dom[1] = card.dom[1]
+        .clone()
+        .with_compact_state(json!({"it": "text"}));
+    let then = |s: ScriptBuilder| {
+        s.call(
+            "Runtime.evaluate",
+            string_result("CVV 123 accepted for order 41123."),
+        )
+    };
+    let mut server = typed_server(card, 2, "123", then);
+    let text = server
+        .call_tool("browser_get_text", &json!({"cdp": CDP}))
+        .expect("text");
+    assert_eq!(
+        text["text"],
+        format!("CVV {MASK} accepted for order 41123."),
+        "{text}"
+    );
+}
+
+/// `browser_exec` returning `{data: <secret>}` is masked: only the
+/// screenshot / PDF binary field is exempt, not every `data` key.
+#[test]
+fn an_exec_result_under_a_data_key_is_masked() {
+    let then = |s: ScriptBuilder| {
+        s.call(
+            "Runtime.evaluate",
+            json!({"result": {"type": "object", "value": {"data": SECRET, "base64": SECRET}}}),
+        )
+    };
+    let mut server = typed_server(page(), 2, SECRET, then);
+    let out = server
+        .call_tool("browser_exec", &json!({"cdp": CDP, "script": "leak()"}))
+        .expect("exec");
+    assert!(!out.to_string().contains(SECRET), "{out}");
+    assert_eq!(out["result"]["data"], MASK, "{out}");
+}
+
+/// A password stays masked however many other secrets are typed after it
+/// (the list used to keep the newest 32).
+#[test]
+fn a_typed_password_is_never_evicted_by_later_typing() {
+    let then = |mut s: ScriptBuilder| {
+        for _ in 0..40 {
+            s = s
+                .observe_compact(&page())
+                .observe_compact(&page())
+                .dom_input(11);
+        }
+        s.call(
+            "Runtime.evaluate",
+            string_result(&format!("password {SECRET}")),
+        )
+    };
+    let mut server = typed_server(page(), 2, SECRET, then);
+    for n in 0..40 {
+        server
+            .call_tool(
+                "browser_type",
+                &json!({"cdp": CDP, "index": 2, "text": format!("other-pass-{n}")}),
+            )
+            .expect("typed");
+    }
+    let text = server
+        .call_tool("browser_get_text", &json!({"cdp": CDP}))
+        .expect("text");
+    assert_eq!(text["text"], format!("password {MASK}"), "{text}");
+}

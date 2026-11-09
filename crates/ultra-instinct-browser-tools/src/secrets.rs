@@ -10,20 +10,28 @@
 //! console log, a GET form's URL, a confirmation line) does not leak it.
 //! `browser_get_html` drops `value` attributes of text-like inputs.
 
+use std::collections::VecDeque;
+
 use serde_json::Value;
 use ultra_instinct_core::{Action, InteractionRegion};
 
 use crate::error::ToolError;
+use crate::host::ToolState;
 
 /// What a remembered secret reads as in tool output.
 pub const MASK: &str = "••••";
 
-/// Shortest typed secret that is scrubbed: shorter text would blank out
-/// ordinary words.
-const MIN_SECRET_CHARS: usize = 4;
+/// Shortest text typed into a non-sensitive field that is scrubbed: shorter
+/// text would blank out ordinary words.
+const MIN_PLAIN_CHARS: usize = 4;
 
-/// Typed secrets kept for scrubbing; the oldest drop past this.
-const MAX_SECRETS: usize = 32;
+/// Text typed into non-sensitive fields kept for scrubbing; the oldest such
+/// entry drops past this. Sensitive entries are never dropped.
+const MAX_PLAIN: usize = 32;
+
+/// Distinct values typed into sensitive fields one server keeps; past it a
+/// new one refuses (`secrets_full`) before it is typed, never evicting one.
+pub const MAX_SENSITIVE_SECRETS: usize = 64;
 
 /// Whether `region` holds a secret, failing closed.
 pub fn sensitive(region: &InteractionRegion) -> bool {
@@ -36,29 +44,55 @@ pub fn sensitive(region: &InteractionRegion) -> bool {
             && state.value.is_none())
 }
 
-/// Values typed into sensitive fields during this server's life.
+/// Text typed during this server's life, masked in every later output.
 #[derive(Default)]
 pub(crate) struct Secrets {
-    typed: Vec<String>,
+    /// Typed into sensitive fields, any length: pinned, never evicted.
+    pinned: Vec<String>,
+    /// Typed into other fields (4 chars or more), newest [`MAX_PLAIN`].
+    plain: VecDeque<String>,
 }
 
 impl Secrets {
-    /// Remember `text` (typed into a sensitive field) for scrubbing.
-    pub(crate) fn remember(&mut self, text: &str) {
-        if text.chars().count() < MIN_SECRET_CHARS || self.typed.iter().any(|t| t == text) {
-            return;
+    /// Remember `text` typed into a field (`sensitive`: one that holds a
+    /// secret, or whose kind is unknown). A sensitive value is kept
+    /// whatever its length and never evicted; past
+    /// [`MAX_SENSITIVE_SECRETS`] a new one refuses, so the caller must not
+    /// type it. Other text is kept from 4 chars, the oldest dropping first.
+    pub(crate) fn remember(&mut self, text: &str, sensitive: bool) -> Result<(), ToolError> {
+        if text.trim().is_empty() || self.pinned.iter().any(|t| t == text) {
+            return Ok(());
         }
-        if self.typed.len() >= MAX_SECRETS {
-            self.typed.remove(0);
+        if sensitive {
+            if self.pinned.len() >= MAX_SENSITIVE_SECRETS {
+                return Err(ToolError::SecretsFull {
+                    limit: MAX_SENSITIVE_SECRETS,
+                });
+            }
+            self.plain.retain(|t| t != text);
+            self.pinned.push(text.to_owned());
+        } else if text.chars().count() >= MIN_PLAIN_CHARS && !self.plain.iter().any(|t| t == text) {
+            if self.plain.len() >= MAX_PLAIN {
+                self.plain.pop_front();
+            }
+            self.plain.push_back(text.to_owned());
         }
-        self.typed.push(text.to_owned());
+        Ok(())
     }
 
-    /// `text` with every remembered secret masked (longest first).
+    fn is_empty(&self) -> bool {
+        self.pinned.is_empty() && self.plain.is_empty()
+    }
+
+    /// `text` with every remembered secret masked (longest first). A secret
+    /// shorter than 4 chars (a CVV, a PIN) is masked only as a whole token:
+    /// not next to a letter or digit, so `123` hides in `cvv=123` but not
+    /// in `41123`.
     pub(crate) fn scrub_str(&self, text: &str) -> Option<String> {
         let mut hits: Vec<&String> = self
-            .typed
+            .pinned
             .iter()
+            .chain(&self.plain)
             .filter(|s| text.contains(s.as_str()))
             .collect();
         if hits.is_empty() {
@@ -67,15 +101,18 @@ impl Secrets {
         hits.sort_by_key(|s| std::cmp::Reverse(s.len()));
         let mut out = text.to_owned();
         for secret in hits {
-            out = out.replace(secret.as_str(), MASK);
+            out = if secret.chars().count() < MIN_PLAIN_CHARS {
+                mask_tokens(&out, secret)
+            } else {
+                out.replace(secret.as_str(), MASK)
+            };
         }
-        Some(out)
+        (out != text).then_some(out)
     }
 
-    /// Mask secrets in every string of `value` but binary fields (`base64`,
-    /// `data`: a screenshot or PDF).
+    /// Mask secrets in every string of `value`.
     pub(crate) fn scrub_value(&self, value: &mut Value) {
-        if self.typed.is_empty() {
+        if self.is_empty() {
             return;
         }
         match value {
@@ -85,20 +122,30 @@ impl Secrets {
                 }
             }
             Value::Array(items) => items.iter_mut().for_each(|v| self.scrub_value(v)),
-            Value::Object(map) => {
-                for (key, v) in map.iter_mut() {
-                    if !matches!(key.as_str(), "base64" | "data") {
-                        self.scrub_value(v);
-                    }
-                }
-            }
+            Value::Object(map) => map.values_mut().for_each(|v| self.scrub_value(v)),
             _ => {}
         }
     }
 
+    /// [`Self::scrub_value`] on `tool`'s result, but its one binary field:
+    /// `browser_screenshot`'s `base64` and `browser_save_as_pdf`'s `data`
+    /// (masking would corrupt the image; the MCP image item is built from
+    /// that field). Any other `data` / `base64` key is text and is masked.
+    pub(crate) fn scrub_tool_value(&self, tool: &str, value: &mut Value) {
+        let binary = match tool {
+            "browser_screenshot" => "base64",
+            "browser_save_as_pdf" => "data",
+            _ => return self.scrub_value(value),
+        };
+        let kept = value.as_object_mut().and_then(|map| map.remove(binary));
+        self.scrub_value(value);
+        if let (Some(kept), Some(map)) = (kept, value.as_object_mut()) {
+            map.insert(binary.to_owned(), kept);
+        }
+    }
     /// `err` with secrets masked in its free text.
     pub(crate) fn scrub_error(&self, err: ToolError) -> ToolError {
-        if self.typed.is_empty() {
+        if self.is_empty() {
             return err;
         }
         let fix = |text: String| self.scrub_str(&text).unwrap_or(text);
@@ -126,6 +173,59 @@ impl Secrets {
             },
             other => other,
         }
+    }
+}
+
+/// `text` with each whole-token occurrence of `secret` masked: one with no
+/// letter or digit right before or after it.
+fn mask_tokens(text: &str, secret: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = 0;
+    for (at, _) in text.match_indices(secret) {
+        let end = at + secret.len();
+        let before = text[..at].chars().next_back();
+        let after = text[end..].chars().next();
+        if before.is_some_and(char::is_alphanumeric) || after.is_some_and(char::is_alphanumeric) {
+            continue;
+        }
+        out.push_str(&text[rest..at]);
+        out.push_str(MASK);
+        rest = end;
+    }
+    out.push_str(&text[rest..]);
+    out
+}
+
+impl ToolState {
+    /// Remember text typed outside the `browser_*` tools (a host's own
+    /// agent loop): masked in every later output and error. `sensitive`
+    /// as in [`sensitive`]; see [`MAX_SENSITIVE_SECRETS`] for the bound.
+    pub fn remember_typed(&mut self, text: &str, sensitive: bool) -> Result<(), ToolError> {
+        self.secrets.remember(text, sensitive)
+    }
+
+    /// `result` of `tool` with every remembered secret masked: every string
+    /// of the body (but the tool's one binary field) and the error's text.
+    /// A host runs every tool result through this one choke point.
+    pub fn scrub_result(
+        &self,
+        tool: &str,
+        result: Result<Value, ToolError>,
+    ) -> Result<Value, ToolError> {
+        match result {
+            Ok(mut body) => {
+                self.secrets.scrub_tool_value(tool, &mut body);
+                Ok(body)
+            }
+            Err(err) => Err(self.secrets.scrub_error(err)),
+        }
+    }
+
+    /// `text` with every remembered secret masked.
+    pub fn scrub_text(&self, text: &str) -> String {
+        self.secrets
+            .scrub_str(text)
+            .unwrap_or_else(|| text.to_owned())
     }
 }
 

@@ -24,7 +24,7 @@ mod server;
 mod tools;
 
 pub use rpc::{handle_line, serve_stdio};
-pub use run::{run_goal, run_goal_on, RunLimits, RunOutcome, RunReport, RunStep};
+pub use run::{run_goal, run_goal_on, RunLimits, RunOutcome, RunReport, RunStep, Typed, TypedText};
 pub use server::{CdpConnector, Server, ENV_ALLOW_DOMAINS, ENV_CONFIRM_PRESS, MAX_LIVE_SESSIONS};
 pub use tools::call_tool;
 pub use ultra_instinct_browser_tools::{

@@ -9,7 +9,7 @@ use ultra_instinct_cdp::CdpError;
 /// Every `ToolError::code`, in declaration order (docs/embedding.md). A
 /// code never changes meaning once shipped: change this list only by
 /// appending.
-const ERROR_CODES: [&str; 59] = [
+const ERROR_CODES: [&str; 60] = [
     "missing_fixture",
     "missing_before",
     "missing_after",
@@ -69,6 +69,7 @@ const ERROR_CODES: [&str; 59] = [
     "path_not_allowed",
     "downloads_off",
     "output_too_large",
+    "secrets_full",
 ];
 
 fn s(text: &str) -> String {
@@ -162,6 +163,7 @@ fn every_variant() -> Vec<ToolError> {
         },
         ToolError::DownloadsOff,
         ToolError::OutputTooLarge { limit: 1, bytes: 2 },
+        ToolError::SecretsFull { limit: 64 },
     ]
 }
 

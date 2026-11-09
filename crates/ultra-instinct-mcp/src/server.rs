@@ -199,10 +199,17 @@ impl Server {
     /// default endpoint's), under this server's policy. The session stays
     /// open for the next tool call, with the run's last observation. Not a
     /// tool: the allow-list does not apply.
+    ///
+    /// Every payload the run types or selects is remembered before it is
+    /// dispatched and masked in every later tool output, error and HAR, and
+    /// in this report's labels and reasons: a sensitive field's at any
+    /// length, any other field's from 4 chars (typed text is user data).
+    /// [`crate::RunReport::typed`] still holds them: never log it.
     pub fn run_goal(&mut self, goal: &str, limits: crate::RunLimits) -> crate::RunReport {
         let failed = |error: String| crate::RunReport {
             steps: Vec::new(),
             outcome: crate::RunOutcome::Failed { error },
+            typed: crate::TypedText::default(),
         };
         let policy = match &self.policy {
             Ok(policy) => policy.clone(),
@@ -221,8 +228,28 @@ impl Server {
             Err(err) => return failed(err.to_string()),
         };
         self.call_deadline.set(limits.deadline);
-        let (report, mut session) = crate::run::run_goal_on(session, goal, policy, limits);
+        let tools = &mut self.tools;
+        let (mut report, mut session) =
+            crate::run::run_goal_typing(session, goal, policy, limits, |typed| {
+                tools
+                    .remember_typed(&typed.text, typed.sensitive)
+                    .map_err(|err| err.to_string())
+            });
         self.call_deadline.set(None);
+        let scrub = |text: &mut String| *text = self.tools.scrub_text(text);
+        for step in &mut report.steps {
+            scrub(&mut step.target_label);
+        }
+        match &mut report.outcome {
+            crate::RunOutcome::Done { reason } | crate::RunOutcome::Abstained { why: reason } => {
+                scrub(reason)
+            }
+            crate::RunOutcome::Blocked { label, reason } => {
+                scrub(label);
+                scrub(reason);
+            }
+            crate::RunOutcome::Failed { error } => scrub(error),
+        }
         let events = session.transport_mut().drain_events();
         let mut host = Host(self);
         if !events.is_empty() {
@@ -266,7 +293,15 @@ impl Server {
     }
 
     /// Run one tool against this server's state.
+    ///
+    /// Every result and error, of every tool, leaves through one choke
+    /// point that masks the text typed so far (`ToolState::scrub_result`).
     pub fn call_tool(&mut self, name: &str, arguments: &Value) -> Result<Value, ToolError> {
+        let result = self.call_unmasked(name, arguments);
+        self.tools.scrub_result(name, result)
+    }
+
+    fn call_unmasked(&mut self, name: &str, arguments: &Value) -> Result<Value, ToolError> {
         if !self.allows(name) {
             return Err(ToolError::ToolNotAllowed {
                 tool: name.to_owned(),

@@ -131,9 +131,25 @@ and `sensitive`. A field is sensitive when it is a password, hidden or file
 input, when its label names a secret (password, passcode, PIN, CVV, CVC,
 OTP, SSN, card, security, one-time), or when its input type could not be
 read. A sensitive field's value is never shown, and text typed into one
-(4 chars or more) is replaced by `••••` in every later tool output, error,
-and HAR file, so a page that echoes it does not leak it. State files hold
-cookies and storage, never field values.
+(any length) is replaced by `••••` in every later tool output and error
+(every tool: `observe`, `guard` and `verify` too, through the one exit in
+`Server::call_tool`) and in HAR files, so a page that echoes it does not
+leak it. A secret shorter than 4 chars (a CVV, a PIN) is masked only as a
+whole token: `cvv=123` hides it, `41123` does not. Sensitive values are
+never evicted; past 64 distinct ones a press that would type a new one
+refuses `secrets_full` with nothing typed. Only the binary fields are left
+as they are: `browser_screenshot`'s `base64` (and the MCP image item built
+from it) and `browser_save_as_pdf`'s `data`; any other `data` or `base64`
+(a `browser_exec` result, say) is masked.
+
+`Server::run_goal` remembers every TYPE / SELECT payload before it is
+dispatched: a sensitive field's at any length, any other field's from 4
+chars (typed text is user data), the newest 32 of those. Its report's
+labels and reasons are masked too. `RunReport::typed` still holds the
+payloads (its `Debug` prints only a count): never log it. The free
+`run_goal` / `run_goal_on` have no server to mask with; masking their
+`typed` is the caller's. State files hold cookies and storage, never field
+values.
 
 ## Limits
 
@@ -174,6 +190,7 @@ codes are only ever appended.
 | `path_not_allowed` | `path`, `dir` | `Downloads::Dir` forces another folder |
 | `downloads_off` | | `Downloads::Off` |
 | `output_too_large` | `limit`, `bytes` | a screenshot over `max_screenshot_bytes` even as JPEG |
+| `secrets_full` | `limit` | the server already masks 64 typed secrets; the new one was not typed |
 | `invalid_arguments` | `message` | a malformed or missing argument |
 | `ticket_invalid` | `message` | the hard gate refused (disabled, hidden, occluded, …) or the ticket was spent |
 | `browser` | `message` | any other browser / CDP failure |

@@ -769,7 +769,7 @@ fn gated_input(
         // (before dispatch, so a failed press does not leak it either).
         if let (Input::Type(text), Some(region)) = (&input, manifold.get(&region_id)) {
             if crate::secrets::sensitive(region) {
-                server.tool_state_mut().secrets.remember(text);
+                server.tool_state_mut().secrets.remember(text, true)?;
             }
         }
         // The user's policy after the gate, before the ticket is used; the

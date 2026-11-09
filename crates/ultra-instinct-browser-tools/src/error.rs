@@ -164,6 +164,11 @@ pub enum ToolError {
         limit: usize,
         bytes: usize,
     },
+    /// The server already masks `limit` values typed into sensitive
+    /// fields; a new one is refused before it is typed (none is evicted).
+    SecretsFull {
+        limit: usize,
+    },
 }
 
 impl ToolError {
@@ -230,6 +235,7 @@ impl ToolError {
             Self::PathNotAllowed { .. } => "PathNotAllowed",
             Self::DownloadsOff => "DownloadsOff",
             Self::OutputTooLarge { .. } => "OutputTooLarge",
+            Self::SecretsFull { .. } => "SecretsFull",
         }
     }
 
@@ -295,6 +301,7 @@ impl ToolError {
             Self::PathNotAllowed { .. } => "path_not_allowed",
             Self::DownloadsOff => "downloads_off",
             Self::OutputTooLarge { .. } => "output_too_large",
+            Self::SecretsFull { .. } => "secrets_full",
         }
     }
 
@@ -446,6 +453,7 @@ impl ToolError {
             Self::PathNotAbsolute { path } => json!({"path": path}),
             Self::PathNotAllowed { path, dir } => json!({"path": path, "dir": dir}),
             Self::OutputTooLarge { limit, bytes } => json!({"limit": limit, "bytes": bytes}),
+            Self::SecretsFull { limit } => json!({"limit": limit}),
             _ => json!({}),
         };
         if let Some(map) = value.as_object_mut() {
@@ -462,6 +470,7 @@ impl ToolError {
                     | Self::PathNotAllowed { .. }
                     | Self::DownloadsOff
                     | Self::OutputTooLarge { .. }
+                    | Self::SecretsFull { .. }
             ) {
                 map.insert("message".into(), json!(self.to_string()));
             }
@@ -585,6 +594,10 @@ impl fmt::Display for ToolError {
             Self::OutputTooLarge { limit, bytes } => {
                 write!(f, "output is {bytes} bytes, over the {limit}-byte limit")
             }
+            Self::SecretsFull { limit } => write!(
+                f,
+                "this server already masks {limit} typed secrets; refusing to type another"
+            ),
         }
     }
 }
