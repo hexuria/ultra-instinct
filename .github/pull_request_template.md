@@ -1,6 +1,6 @@
 ## What and why
 
-<!-- One paragraph. Link the ADR / docs entry when the change touches the agent path. -->
+<!-- One paragraph. Name the anti-drift rule (AGENTS.md) when the change touches the agent path. -->
 
 ## Checks run locally (toolchain 1.99.0)
 
