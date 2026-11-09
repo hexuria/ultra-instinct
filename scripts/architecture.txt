@@ -24,7 +24,9 @@ ultra-instinct-protocol: ultra-instinct-core
     | tokio axum sqlx reqwest hyper typesafe-sdk
 ultra-instinct-cdp:
     | tokio axum sqlx reqwest hyper typesafe-sdk
-ultra-instinct-browser: ultra-instinct-cdp ultra-instinct-core ultra-instinct-geometry ultra-instinct-observe
+ultra-instinct-chrome:
+    | tokio axum sqlx reqwest hyper typesafe-sdk
+ultra-instinct-browser: ultra-instinct-cdp ultra-instinct-chrome ultra-instinct-core ultra-instinct-geometry ultra-instinct-observe
     | tokio axum sqlx reqwest hyper typesafe-sdk
 ultra-instinct-guard: ultra-instinct-core ultra-instinct-geometry ultra-instinct-protocol
     | tokio axum sqlx reqwest hyper typesafe-sdk
