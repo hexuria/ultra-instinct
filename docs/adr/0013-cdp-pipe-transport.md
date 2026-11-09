@@ -106,7 +106,10 @@ surface.
   its `Page.frameAttached` / `frameNavigated` events named; a
   `downloadProgress` follows its `guid`. A download no tab owns, and every
   other browser-level event, stays on the browser's bounded queue
-  (`PipeBrowser::drain_events` / `take_events_where`). `Server::with_pipe`
+  (`PipeBrowser::drain_events` / `take_events_where`). (A live Chrome sends
+  the download events on the session that called
+  `Browser.setDownloadBehavior`, which reach that tab as session events;
+  the routing covers the ones that come without a `sessionId`.) `Server::with_pipe`
   (`with_backend` for others): `cdp` is ignored in pipe mode (an internal
   re-call passes it, so refusing it would break those), the first call binds
   the first page, and observe / guard / verify read the bound tab.

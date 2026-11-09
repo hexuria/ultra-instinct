@@ -57,9 +57,8 @@ fn index_of(state: &Value, label: &str) -> u64 {
         .unwrap()
 }
 
-#[test]
-#[ignore = "needs a local Chrome"]
-fn the_server_drives_a_real_chrome_over_the_pipe() {
+/// Chrome on a pipe: the child, its profile dir, and the browser handle.
+fn launch() -> (std::process::Child, PathBuf, PipeBrowser) {
     let binary = chrome().expect("set ULTRA_INSTINCT_CHROME or install Chrome");
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -83,7 +82,14 @@ fn the_server_drives_a_real_chrome_over_the_pipe() {
         .expect("spawn chrome");
     let writer = child.stdin.take().expect("stdin");
     let reader = child.stdout.take().expect("stdout");
-    let mut server = Server::with_pipe(PipeBrowser::new(reader, writer))
+    (child, profile, PipeBrowser::new(reader, writer))
+}
+
+#[test]
+#[ignore = "needs a local Chrome"]
+fn the_server_drives_a_real_chrome_over_the_pipe() {
+    let (mut child, profile, browser) = launch();
+    let mut server = Server::with_pipe(browser)
         .require_snapshot(true)
         .with_tool_allowlist([
             "browser_navigate",
@@ -178,6 +184,96 @@ fn the_server_drives_a_real_chrome_over_the_pipe() {
         shot["base64"].as_str().unwrap().len()
     );
 
+    drop(server);
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&profile);
+}
+
+/// A CVV in a plain `type=text` box: masking cannot reach the screenshot's
+/// pixels, so the capture draws it as dots and puts the style back. The page
+/// records the field's computed `-webkit-text-security` on every style
+/// change it sees.
+const CARD: &str = "data:text/html,<title>card</title>\
+<label>CVV <input id=c type=text style='width: 80px'></label>\
+<script>window.seen=[];var c=document.getElementById('c');\
+new MutationObserver(function(){seen.push(getComputedStyle(c).webkitTextSecurity)})\
+.observe(c,{attributes:true,attributeFilter:['style']});</script>";
+
+#[test]
+#[ignore = "needs a local Chrome"]
+fn a_screenshot_hides_a_typed_cvv_and_restores_the_field() {
+    let (mut child, profile, browser) = launch();
+    let mut server = Server::with_pipe(browser);
+    call(&mut server, "browser_navigate", json!({"url": CARD}));
+    let state = call(&mut server, "browser_get_state", json!({"format": "json"}));
+    let cvv = index_of(&state, "CVV");
+    assert_eq!(
+        state["elements"][cvv as usize - 1]["sensitive"],
+        true,
+        "{state}"
+    );
+    call(
+        &mut server,
+        "browser_type",
+        json!({"index": cvv, "text": "4321", "snapshot": state["snapshot"]}),
+    );
+    let before = call(
+        &mut server,
+        "browser_exec",
+        json!({"script": "document.getElementById('c').getAttribute('style')"}),
+    );
+    let shot = call(&mut server, "browser_screenshot", json!({}));
+    assert!(shot["base64"].as_str().unwrap().len() > 1000, "a real PNG");
+    assert!(shot.get("restore_error").is_none(), "{shot}");
+    let after = call(
+        &mut server,
+        "browser_exec",
+        json!({"script": "JSON.stringify({style: document.getElementById('c').getAttribute('style'), \
+                value: document.getElementById('c').value === '4321', seen: window.seen})"}),
+    );
+    let after: Value = serde_json::from_str(after["result"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        after["style"], before["result"],
+        "the style is back: {after}"
+    );
+    assert_eq!(after["value"], true, "the value never changed: {after}");
+    assert_eq!(
+        after["seen"],
+        json!(["disc", "none"]),
+        "hidden, then shown: {after}"
+    );
+    println!("pipe live: screenshot hid the CVV and restored it: {after}");
+    drop(server);
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&profile);
+}
+
+/// A download begun on a second tab reaches that tab's `browser_download`.
+/// (Chrome 14x sends the `Browser.download*` events on the session that set
+/// the download behaviour; ones without a `sessionId` are routed by frame,
+/// pinned by the cdp crate's `tests/pipe.rs`.)
+#[test]
+#[ignore = "needs a local Chrome"]
+fn a_download_on_a_second_tab_reaches_that_tab() {
+    let (mut child, profile, browser) = launch();
+    let mut server = Server::with_pipe(browser);
+    call(&mut server, "browser_get_state", json!({}));
+    call(
+        &mut server,
+        "browser_new_tab",
+        json!({"url": "data:text/html,<a href='data:application/octet-stream,hello' download='r.bin'>Get report</a>"}),
+    );
+    let state = call(&mut server, "browser_get_state", json!({"format": "json"}));
+    let link = index_of(&state, "Get report");
+    let dest = profile.with_extension("bin");
+    let got = call(
+        &mut server,
+        "browser_download",
+        json!({"index": link, "snapshot": state["snapshot"], "path": dest.display().to_string()}),
+    );
+    assert_eq!(std::fs::read(&dest).unwrap(), b"hello", "{got}");
+    println!("pipe live: download on tab two: {got}");
+    let _ = std::fs::remove_file(&dest);
     drop(server);
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&profile);
