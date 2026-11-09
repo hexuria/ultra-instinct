@@ -25,10 +25,12 @@ use ultra_instinct_core::{
     Action, ActionSpace, InteractionManifold, InteractionRegion, RegionId, Role,
 };
 use ultra_instinct_guard::{
-    check_drop_target, consume_ticket_once_checked, gate, gate_drag, host_of, ConsumeError, Policy,
+    check_drop_target, consume_ticket_once_checked, gate, gate_check, gate_drag, host_of,
+    ConsumeError, Policy,
 };
 use ultra_instinct_protocol::GuardReason;
 
+use crate::bound::{self, at_index, ticket_error};
 use crate::error::ToolError;
 use crate::host::{endpoint_of, keep, session_key, BrowserHost};
 
@@ -203,7 +205,8 @@ fn browser_err(err: impl ToString) -> ToolError {
 /// never silently retried); observe/dispatch/page-rejection are `Browser`.
 fn exec_error(err: ExecError) -> ToolError {
     match err {
-        ExecError::Ticket(_) | ExecError::Gate(_) => ToolError::TicketInvalid(err.to_string()),
+        ExecError::Ticket(invalid) => ticket_error(invalid, err.to_string()),
+        ExecError::Gate(_) => ToolError::TicketInvalid(err.to_string()),
         ExecError::Observe(_) | ExecError::Rejected(_) | ExecError::Dispatch(_) => browser_err(err),
         other => browser_err(other),
     }
@@ -213,7 +216,7 @@ fn exec_error(err: ExecError) -> ToolError {
 /// press failure → `Browser` (the ticket is already consumed either way).
 fn consume_error(err: ConsumeError<BrowserError>) -> ToolError {
     match err {
-        ConsumeError::Invalid(_) => ToolError::TicketInvalid(err.to_string()),
+        ConsumeError::Invalid(invalid) => ticket_error(invalid, err.to_string()),
         ConsumeError::Refused(reason) => refused(reason, ""),
         ConsumeError::Press(e) => browser_err(e),
         other => browser_err(other),
@@ -223,18 +226,16 @@ fn consume_error(err: ConsumeError<BrowserError>) -> ToolError {
 /// A policy refusal as the tool error a host matches on (not stale; a
 /// retry gets the same answer): `needs-confirm: "Pay $18"` (the label is a
 /// JSON string; pass it back as `confirm`) or `domain-not-allowed: <host>`.
-fn refused(reason: GuardReason, label_or_url: &str) -> ToolError {
-    let detail = match reason {
-        GuardReason::NeedsConfirm => Value::String(label_or_url.to_owned()).to_string(),
-        GuardReason::DomainNotAllowed => {
-            host_of(label_or_url).unwrap_or_else(|| label_or_url.to_owned())
-        }
-        _ => label_or_url.to_owned(),
-    };
-    if detail.is_empty() {
-        ToolError::TicketInvalid(reason.to_string())
-    } else {
-        ToolError::TicketInvalid(format!("{reason}: {detail}"))
+pub(crate) fn refused(reason: GuardReason, label_or_url: &str) -> ToolError {
+    match reason {
+        GuardReason::NeedsConfirm if !label_or_url.is_empty() => ToolError::NeedsConfirm {
+            label: label_or_url.to_owned(),
+        },
+        GuardReason::DomainNotAllowed if !label_or_url.is_empty() => ToolError::DomainNotAllowed {
+            host: host_of(label_or_url).unwrap_or_else(|| label_or_url.to_owned()),
+        },
+        _ if label_or_url.is_empty() => ToolError::TicketInvalid(reason.to_string()),
+        _ => ToolError::TicketInvalid(format!("{reason}: {label_or_url}")),
     }
 }
 
@@ -553,15 +554,19 @@ fn get_state(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, T
     keep(server, &key, session);
     let (page, manifold) = observed?;
     let order = interactive_index(&manifold);
-    if text {
-        let snapshot = server.record(
-            &format!("cdp:{endpoint}"),
+    // Recorded in both formats: index presses may pass this `snapshot` to
+    // act on what this call printed, or refuse.
+    let snapshot = server
+        .record(
+            &bound::origin(&key),
             manifold.clone(),
             page.clone()
                 .unwrap_or_else(ultra_instinct_browser::PageState::blank),
-        );
-        let body = crate::page_text::page_text(page.as_ref(), &manifold, &order, snapshot.get());
-        return Ok(json!({"format": "text", "text": body}));
+        )
+        .get();
+    if text {
+        let body = crate::page_text::page_text(page.as_ref(), &manifold, &order, snapshot);
+        return Ok(json!({"format": "text", "text": body, "snapshot": snapshot}));
     }
     let elements: Vec<Value> = order
         .iter()
@@ -573,6 +578,7 @@ fn get_state(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, T
         "title": page.as_ref().and_then(|p| p.title().map(str::to_owned)),
         "interactive_elements": elements.len(),
         "elements": elements,
+        "snapshot": snapshot,
     }))
 }
 
@@ -661,6 +667,7 @@ fn gated_input(
     let endpoint = endpoint_of(arguments)?;
     let index = opt_index(arguments, "index")?
         .ok_or_else(|| ToolError::InvalidArguments("missing required `index`".into()))?;
+    let snapshot = bound::required_snapshot(server, arguments)?;
     let input = match input_kind {
         // DOM-side click by default, so existing hosts see no change;
         // `mouse: true` presses like the agent loop does: a trusted pointer
@@ -681,16 +688,13 @@ fn gated_input(
         session.observe().map_err(browser_err)?;
         let focused = session.page().and_then(|p| p.focused().cloned());
         let url = session.page().and_then(|p| p.url().map(str::to_owned));
-        let manifold = session
+        let fresh = session
             .manifold()
             .ok_or_else(|| browser_err(BrowserError::NotObserved))?;
-        let order = interactive_index(manifold);
-        let region_id = order.get(index.wrapping_sub(1)).cloned().ok_or_else(|| {
-            ToolError::InvalidArguments(format!(
-                "no interactive element at index {index} ({} indexed)",
-                order.len()
-            ))
-        })?;
+        // The region the caller saw (with `snapshot`), else the one at
+        // `index` now; the ticket is minted on that observation.
+        let (seen, region_id) = bound::resolve(server, &key, snapshot, fresh, index)?;
+        let manifold = &seen;
         let ticket = match &input {
             // A KEY ticket binds its one key (KEY_NAMES) on a region that claims Key.
             Input::Key(name) => ultra_instinct_guard::gate_key(
@@ -712,7 +716,7 @@ fn gated_input(
         // The user's policy after the gate, before the ticket is used; the
         // executor checks it again on its fresh observation.
         let label = ticket.target_label.clone();
-        if let Some(region) = manifold.get(&region_id) {
+        if let Some(region) = fresh.get(&region_id).or_else(|| manifold.get(&region_id)) {
             policy
                 .check(url.as_deref(), region, action)
                 .map_err(|reason| refusal_for(reason, &label, url.as_deref()))?;
@@ -806,6 +810,7 @@ fn gated_press_at(
     if index == 0 {
         return Err(ToolError::InvalidArguments("`index` is 1-based".into()));
     }
+    let snapshot = bound::required_snapshot(server, arguments)?;
     let policy = press_policy(server, arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
@@ -813,21 +818,22 @@ fn gated_press_at(
         let manifold = session.observe().map_err(browser_err)?.clone();
         let focused = session.page().and_then(|p| p.focused().cloned());
         let url = session.page().and_then(|p| p.url().map(str::to_owned));
-        let order = interactive_index(&manifold);
-        let region_id = order.get(index - 1).cloned().ok_or_else(|| {
-            ToolError::InvalidArguments(format!(
-                "no interactive element at index {index} ({} indexed)",
-                order.len()
-            ))
-        })?;
+        let (seen, region_id) = bound::resolve(server, &key, snapshot, &manifold, index)?;
         let ticket = gate(
-            &manifold,
+            &seen,
             &region_id,
             Action::Click,
             focused.clone(),
-            manifold.captured_at_ms(),
+            seen.captured_at_ms(),
         )
         .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
+        // A ticket minted on the snapshot must still hold on the page now,
+        // and the hard gate re-runs on the fresh region (executor order).
+        bound::still_seen(&ticket, &manifold, focused.clone())?;
+        if let Some(region) = manifold.get(&region_id) {
+            gate_check(&manifold, region, Action::Click)
+                .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
+        }
         let mut ledger = server.take_ledger(&key);
         let result = consume_ticket_once_checked(
             &mut ledger,
@@ -872,17 +878,16 @@ fn hover(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolE
     if index == 0 {
         return Err(ToolError::InvalidArguments("`index` is 1-based".into()));
     }
+    let snapshot = bound::required_snapshot(server, arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
     let outcome = (|| {
         let manifold = session.observe().map_err(browser_err)?.clone();
-        let order = interactive_index(&manifold);
-        let region_id = order.get(index - 1).cloned().ok_or_else(|| {
-            ToolError::InvalidArguments(format!(
-                "no interactive element at index {index} ({} indexed)",
-                order.len()
-            ))
-        })?;
+        let focused = session.page().and_then(|p| p.focused().cloned());
+        let (seen, region_id) = bound::resolve(server, &key, snapshot, &manifold, index)?;
+        if snapshot.is_some() {
+            bound::same_region(&seen, &manifold, &region_id, focused)?;
+        }
         session
             .hover(&region_id)
             .map(|_| json!({"hovered": index}))
@@ -902,22 +907,14 @@ fn drag(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolEr
     if from == 0 || to == 0 {
         return Err(ToolError::InvalidArguments("indexes are 1-based".into()));
     }
+    let snapshot = bound::required_snapshot(server, arguments)?;
     let policy = press_policy(server, arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
     let outcome = (|| {
-        let manifold = session.observe().map_err(browser_err)?.clone();
-        let order = interactive_index(&manifold);
-        let resolve = |i: usize| -> Result<RegionId, ToolError> {
-            order.get(i - 1).cloned().ok_or_else(|| {
-                ToolError::InvalidArguments(format!(
-                    "no interactive element at index {i} ({} indexed)",
-                    order.len()
-                ))
-            })
-        };
-        let from_id = resolve(from)?;
-        let to_id = resolve(to)?;
+        let fresh = session.observe().map_err(browser_err)?.clone();
+        let (manifold, from_id) = bound::resolve(server, &key, snapshot, &fresh, from)?;
+        let to_id = at_index(&interactive_index(&manifold), to)?;
         let focused = session.page().and_then(|p| p.focused().cloned());
         let url = session.page().and_then(|p| p.url().map(str::to_owned));
         // Drag is a mutation: the source goes through the same
@@ -954,11 +951,16 @@ fn drag(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolEr
             })
         }
         .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
+        // Both ends as the caller saw them, on the page now.
+        bound::still_seen(&ticket, &fresh, focused.clone())?;
+        if ticket.dest.is_none() {
+            bound::same_region(&manifold, &fresh, &to_id, None)?;
+        }
         let mut ledger = server.take_ledger(&key);
         let result = consume_ticket_once_checked(
             &mut ledger,
             &ticket,
-            &manifold,
+            &fresh,
             focused,
             &policy,
             url.as_deref(),
@@ -1068,13 +1070,7 @@ fn get_dropdown_options(
     let mut session = take(server, &key)?;
     let outcome = (|| {
         let manifold = session.observe().map_err(browser_err)?.clone();
-        let order = interactive_index(&manifold);
-        let region_id = order.get(index - 1).cloned().ok_or_else(|| {
-            ToolError::InvalidArguments(format!(
-                "no interactive element at index {index} ({} indexed)",
-                order.len()
-            ))
-        })?;
+        let region_id = at_index(&interactive_index(&manifold), index)?;
         let region = manifold.get(&region_id).ok_or_else(|| {
             ToolError::InvalidArguments(format!("element {index} resolved to a stale region"))
         })?;
@@ -1268,13 +1264,7 @@ fn scroll_to(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, T
     let mut session = take(server, &key)?;
     let outcome = (|| {
         let manifold = session.observe().map_err(browser_err)?;
-        let order = interactive_index(manifold);
-        let region_id = order.get(index - 1).cloned().ok_or_else(|| {
-            ToolError::InvalidArguments(format!(
-                "no interactive element at index {index} ({} indexed)",
-                order.len()
-            ))
-        })?;
+        let region_id = at_index(&interactive_index(manifold), index)?;
         session
             .scroll_into_view(&region_id)
             .map(|_| json!({"scrolled": true, "index": index}))

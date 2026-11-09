@@ -177,7 +177,7 @@ fn verify_by_snapshot_ids_sees_the_page_change() {
     assert_eq!(err, ToolError::UnknownSnapshot(9));
     assert_eq!(
         err.to_value(),
-        json!({"variant": "UnknownSnapshot", "id": 9})
+        json!({"code": "unknown_snapshot", "variant": "UnknownSnapshot", "id": 9})
     );
     let err = server
         .call_tool(

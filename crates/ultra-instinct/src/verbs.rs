@@ -897,7 +897,12 @@ fn render_network(body: &Value, arguments: &Value) -> String {
 /// refusal, `✗ error: …` otherwise.
 fn render_error(text: &str) -> String {
     let error: Value = serde_json::from_str(text).unwrap_or(Value::Null);
-    let message = error["message"].as_str().unwrap_or(text);
+    // A `dialog_open` error's `message` is the dialog's text; the failure is `detail`.
+    let message = match error["code"].as_str() {
+        Some("dialog_open") => error["detail"].as_str(),
+        _ => error["message"].as_str(),
+    }
+    .unwrap_or(text);
     if error["variant"] != "TicketInvalid" {
         return format!("✗ error: {message}");
     }

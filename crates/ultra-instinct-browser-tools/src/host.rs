@@ -109,6 +109,17 @@ pub trait BrowserHost {
         page: PageState,
     ) -> SnapshotId;
 
+    /// The origin and manifold of a snapshot the host recorded.
+    fn snapshot(&self, id: u64) -> Result<(&str, &InteractionManifold), ToolError> {
+        Err(ToolError::UnknownSnapshot(id))
+    }
+
+    /// Whether index presses must name the `snapshot` they were read from
+    /// (an index-only press refuses with `snapshot_required`). Default: no.
+    fn require_snapshot(&self) -> bool {
+        false
+    }
+
     /// The policy navigation and presses run under.
     fn policy(&self) -> Result<&Policy, ToolError>;
 

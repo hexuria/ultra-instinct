@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+mod bound;
 mod browser_env;
 mod browser_extra;
 mod browser_state;
@@ -22,7 +23,7 @@ pub use browser_env::ENV_TOOLS;
 pub use browser_extra::EXTRA_TOOLS;
 pub use browser_state::STATE_TOOLS;
 pub use browser_tools::BROWSER_TOOLS;
-pub use error::ToolError;
+pub use error::{ToolError, ERROR_CODES};
 pub use host::{BrowserHost, LiveSession, ToolState};
 
 use serde_json::{Map, Value};

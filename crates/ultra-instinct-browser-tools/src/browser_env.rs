@@ -637,7 +637,14 @@ fn download(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, To
     check_destination(&path, overwrite)?;
 
     let dir = download_dir()?;
-    let outcome = download_into(server, &endpoint, index, mouse, timeout_ms, &dir);
+    // The press takes this call's `snapshot` and `confirm` like browser_click.
+    let mut press = json!({"cdp": endpoint, "index": index, "mouse": mouse});
+    for key in ["snapshot", "confirm"] {
+        if let Some(value) = arguments.get(key).filter(|v| !v.is_null()) {
+            press[key] = value.clone();
+        }
+    }
+    let outcome = download_into(server, &endpoint, &press, timeout_ms, &dir);
     // Back to Chrome's default so later clicks do not land in a temp dir.
     // Best effort: the download result stands either way.
     let restore = with_session(server, &json!({"cdp": endpoint}), |_, _, session| {
@@ -673,8 +680,7 @@ fn download(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, To
 fn download_into(
     server: &mut dyn BrowserHost,
     endpoint: &str,
-    index: u64,
-    mouse: bool,
+    press: &Value,
     timeout_ms: u64,
     dir: &Path,
 ) -> Result<(PathBuf, Option<String>), ToolError> {
@@ -696,11 +702,7 @@ fn download_into(
 
     // The press: the exact `browser_click` path (gate → ticket →
     // `execute_ticketed`). A page that drifted refuses here.
-    crate::browser_tools::call(
-        server,
-        "browser_click",
-        &json!({"cdp": endpoint, "index": index, "mouse": mouse}),
-    )?;
+    crate::browser_tools::call(server, "browser_click", press)?;
 
     let mut seen = DownloadSeen::default();
     scan_downloads(server, &key, &mut seen);
@@ -1222,7 +1224,12 @@ pub(crate) fn spec(name: &str) -> (String, Map<String, Value>, Vec<&'static str>
         }
         "browser_download" => {
             props.insert("index".into(), json!({"type": ["integer", "string"], "description": "1-based index from browser_get_state: 5, \"5\" or \"@e5\""}));
-            props.insert("path".into(), json!({"type": "string"}));
+            props.insert("snapshot".into(), crate::bound::snapshot_prop());
+            props.insert("confirm".into(), json!({"type": "string", "description": "The label of a press the user confirmed, this call only."}));
+            props.insert(
+                "path".into(),
+                json!({"type": "string", "description": "Absolute file path."}),
+            );
             props.insert("overwrite".into(), json!({"type": "boolean"}));
             props.insert("mouse".into(), json!({"type": "boolean"}));
             props.insert("timeout_ms".into(), json!({"type": "integer"}));

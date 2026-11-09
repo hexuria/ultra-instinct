@@ -501,7 +501,9 @@ fn download_on_a_drifted_page_refuses_without_pressing() {
             &json!({"cdp": CDP, "index": 2, "path": dest.to_str().unwrap()}),
         )
         .unwrap_err();
-    assert!(matches!(err, ToolError::TicketInvalid(_)), "{err:?}");
+    // A drifted page is a stale ref (sent as `TicketInvalid`, as before).
+    assert!(matches!(err, ToolError::StaleRef { .. }), "{err:?}");
+    assert_eq!(err.to_value()["variant"], "TicketInvalid");
     assert_eq!(presses(&calls), 0, "{:?}", methods(&calls));
     assert!(params_of(&calls, "Browser.getVersion").is_empty());
     assert_eq!(

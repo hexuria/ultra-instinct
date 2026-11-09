@@ -883,8 +883,17 @@ fn navigate_off_the_allowlist_is_refused_before_cdp() {
         let err = server
             .call_tool("browser_navigate", &json!({"cdp": CDP, "url": url}))
             .expect_err("off the allowlist");
+        // Typed now (`domain_not_allowed`); the wire variant and message
+        // are what they were.
         assert!(
-            matches!(&err, ToolError::TicketInvalid(m) if m.starts_with("domain-not-allowed")),
+            matches!(&err, ToolError::DomainNotAllowed { .. }),
+            "{url}: {err:?}"
+        );
+        assert_eq!(err.to_value()["variant"], "TicketInvalid");
+        assert!(
+            err.to_value()["message"]
+                .as_str()
+                .is_some_and(|m| m.starts_with("domain-not-allowed")),
             "{url}: {err:?}"
         );
     }
@@ -912,7 +921,18 @@ fn click_needs_confirm_until_confirm_names_the_label() {
         .expect_err("needs confirm");
     assert_eq!(
         err,
-        ToolError::TicketInvalid("needs-confirm: \"Sign in\"".into())
+        ToolError::NeedsConfirm {
+            label: "Sign in".into()
+        }
+    );
+    assert_eq!(
+        err.to_value(),
+        json!({"code": "needs_confirm", "variant": "TicketInvalid",
+               "message": "needs-confirm: \"Sign in\"", "label": "Sign in"})
+    );
+    assert_eq!(
+        err.to_string(),
+        ToolError::TicketInvalid("needs-confirm: \"Sign in\"".into()).to_string()
     );
     assert!(log.borrow().iter().all(|m| m != "DOM.resolveNode"));
 
@@ -944,7 +964,14 @@ fn double_click_on_a_page_off_the_allowlist_is_refused() {
         .expect_err("off the allowlist");
     assert_eq!(
         err,
-        ToolError::TicketInvalid("domain-not-allowed: 127.0.0.1".into())
+        ToolError::DomainNotAllowed {
+            host: "127.0.0.1".into()
+        }
+    );
+    assert_eq!(
+        err.to_value(),
+        json!({"code": "domain_not_allowed", "variant": "TicketInvalid",
+               "message": "domain-not-allowed: 127.0.0.1", "host": "127.0.0.1"})
     );
     assert!(log.borrow().iter().all(|m| m != "Input.dispatchMouseEvent"));
 }

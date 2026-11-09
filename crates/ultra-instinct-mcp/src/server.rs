@@ -71,6 +71,8 @@ pub struct Server {
     /// The user's policy for navigation and presses, or why the configured
     /// one is invalid (then every navigate and press refuses).
     policy: Result<Policy, String>,
+    /// Index presses must name the `snapshot` they were read from.
+    require_snapshot: bool,
 }
 
 impl SignedSnapshot for Snapshot {
@@ -127,7 +129,18 @@ impl Server {
             domains: BTreeMap::new(),
             tools: ToolState::default(),
             policy: Ok(Policy::default()),
+            require_snapshot: false,
         }
+    }
+
+    /// With `true`, every index press (click, type, select, check, focus,
+    /// key on an index, right / middle / double / triple click, file upload,
+    /// hover, drag, download) must pass the `snapshot` id its
+    /// `browser_get_state` returned; an index alone refuses with
+    /// `snapshot_required` before any CDP call. Default `false`.
+    pub fn require_snapshot(mut self, on: bool) -> Self {
+        self.require_snapshot = on;
+        self
     }
 
     /// One inbound JSON-RPC line. `None` means the client must not be answered.
@@ -302,6 +315,16 @@ impl BrowserHost for Host<'_> {
     /// Mark a diagnostic domain bit as enabled for `key`.
     fn enable_domain(&mut self, key: &str, bit: u8) {
         *self.0.domains.entry(key.to_owned()).or_default() |= bit;
+    }
+
+    fn snapshot(&self, id: u64) -> Result<(&str, &InteractionManifold), ToolError> {
+        self.0
+            .snapshot(id)
+            .map(|snapshot| (snapshot.origin.as_str(), &snapshot.manifold))
+    }
+
+    fn require_snapshot(&self) -> bool {
+        self.0.require_snapshot
     }
 
     fn policy(&self) -> Result<&Policy, ToolError> {

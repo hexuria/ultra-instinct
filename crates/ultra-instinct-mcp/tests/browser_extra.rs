@@ -177,10 +177,16 @@ fn dialog_status_accept_dismiss_and_the_blocked_tool_hint() {
     let err = server
         .call_tool("browser_get_text", &json!({"cdp": CDP}))
         .expect_err("blocked behind a dialog");
+    // Typed (`dialog_open`, with the dialog's type and message); the
+    // failure text with the hint is `detail`.
     assert!(
-        matches!(&err, ToolError::Browser(m) if m.ends_with("a prompt dialog is open; call browser_dialog")),
+        matches!(&err, ToolError::DialogOpen { kind, message, detail }
+            if kind == "prompt" && message == "Your name?"
+                && detail.ends_with("a prompt dialog is open; call browser_dialog")),
         "{err:?}"
     );
+    assert_eq!(err.to_value()["code"], "dialog_open");
+    assert_eq!(err.to_value()["variant"], "Browser");
 
     let status = call(&mut server, "browser_dialog", json!({"cdp": CDP}));
     assert_eq!(status["open"], true, "{status}");
@@ -260,9 +266,15 @@ fn a_press_that_opens_an_alert_fails_fast_with_the_hint_and_is_not_retried() {
     let err = server
         .call_tool("browser_click", &json!({"cdp": CDP, "index": "@e2"}))
         .expect_err("the alert interrupts the press");
-    let ToolError::Browser(message) = &err else {
+    let ToolError::DialogOpen {
+        kind,
+        detail: message,
+        ..
+    } = &err
+    else {
         panic!("{err:?}");
     };
+    assert_eq!(kind, "alert");
     assert!(
         message.contains("dialog opened while `Runtime.callFunctionOn` ran")
             && message.ends_with("a alert dialog is open; call browser_dialog"),

@@ -28,13 +28,14 @@ use std::borrow::Cow;
 
 use serde_json::{json, Map, Value};
 
-use ultra_instinct_agent::{execute_ticketed, ExecError, Input};
+use ultra_instinct_agent::{execute_ticketed_with, ExecError, Input};
 use ultra_instinct_browser::BrowserError;
 use ultra_instinct_cdp::{CdpError, CdpEvent, DEFAULT_CDP_HTTP};
 use ultra_instinct_core::{Action, InteractionManifold, InteractionRegion, RegionId, Role};
-use ultra_instinct_guard::{consume_ticket_once, gate, ConsumeError};
+use ultra_instinct_guard::{consume_ticket_once_checked, gate, gate_check, ConsumeError, Policy};
 
-use crate::browser_tools::interactive_index;
+use crate::bound::{self, at_index, ticket_error};
+use crate::browser_tools::{interactive_index, refused};
 use crate::error::ToolError;
 use crate::host::{endpoint_of, keep, session_key, BrowserHost, LiveSession};
 
@@ -217,13 +218,31 @@ fn with_dialog_hint(server: &dyn BrowserHost, key: &str, err: ToolError) -> Tool
         return err;
     };
     let hint = format!("a {} dialog is open; call browser_dialog", dialog.kind);
+    let open = |detail: String| ToolError::DialogOpen {
+        kind: dialog.kind.clone(),
+        message: dialog.message.clone(),
+        detail,
+    };
     match err {
-        ToolError::Browser(message) => ToolError::Browser(format!("{message}; {hint}")),
+        ToolError::Browser(message)
+        | ToolError::DialogOpen {
+            detail: message, ..
+        } => open(format!("{message}; {hint}")),
         ToolError::TicketInvalid(message) => ToolError::TicketInvalid(format!("{message}; {hint}")),
         ToolError::InvalidArguments(message) => {
             ToolError::InvalidArguments(format!("{message}; {hint}"))
         }
-        other => ToolError::Browser(format!("{other}; {hint}")),
+        // Typed refusals already say what refused; a dead pipe or tab is
+        // the cause, not the dialog.
+        typed @ (ToolError::NeedsConfirm { .. }
+        | ToolError::DomainNotAllowed { .. }
+        | ToolError::StaleRef { .. }
+        | ToolError::UnknownRef { .. }
+        | ToolError::SnapshotRequired
+        | ToolError::PipeClosed { .. }
+        | ToolError::FrameTooLarge { .. }
+        | ToolError::TargetGone { .. }) => typed,
+        other => open(format!("{other}; {hint}")),
     }
 }
 
@@ -377,9 +396,11 @@ fn check(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
     } else {
         Input::ScriptClick
     };
+    let snapshot = bound::required_snapshot(server, arguments)?;
+    let policy = press_policy(server, arguments)?;
     let mut session = server.take_session(key)?;
     let outcome = (|| {
-        let (manifold, id) = resolve(&mut session, index)?;
+        let (manifold, id) = resolve(server, key, &mut session, snapshot, index)?;
         let region = present(&manifold, &id, index)?;
         let now = region.state().checked.ok_or_else(|| {
             ToolError::InvalidArguments(format!("element {index} has no checked state"))
@@ -397,9 +418,15 @@ fn check(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
         )
         .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
         let mut ledger = server.take_ledger(key);
-        let executed = execute_ticketed(&mut session, &mut ledger, &ticket, &input);
+        let executed = execute_ticketed_with(&mut session, &mut ledger, &ticket, &input, &policy);
         server.keep_ledger(key, ledger);
-        executed.map_err(exec_error)?;
+        executed.map_err(|err| match err {
+            ExecError::Gate(reason) if is_policy(reason) => {
+                let url = session.page().and_then(|p| p.url().map(str::to_owned));
+                policy_refusal(reason, &ticket.target_label, url.as_deref())
+            }
+            other => exec_error(other),
+        })?;
         let after = session.observe().map_err(browser_err)?;
         let read = after.get(&id).and_then(|r| r.state().checked);
         if read != Some(want) {
@@ -418,11 +445,15 @@ fn check(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
 /// `consume_ticket_once` → `DOM.focus` on its node.
 fn focus(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<Value, ToolError> {
     let index = index_arg(arguments)?;
+    let snapshot = bound::required_snapshot(server, arguments)?;
+    let policy = press_policy(server, arguments)?;
     let mut session = server.take_session(key)?;
     let outcome = (|| {
-        let (manifold, id) = resolve(&mut session, index)?;
+        let (manifold, id) = resolve(server, key, &mut session, snapshot, index)?;
+        let fresh = fresh(&session)?;
         present(&manifold, &id, index)?;
         let focused = session.page().and_then(|p| p.focused().cloned());
+        let url = session.page().and_then(|p| p.url().map(str::to_owned));
         let ticket = gate(
             &manifold,
             &id,
@@ -431,12 +462,19 @@ fn focus(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
             manifold.captured_at_ms(),
         )
         .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
+        bound::still_seen(&ticket, &fresh, focused.clone())?;
+        if let Some(region) = fresh.get(&id) {
+            gate_check(&fresh, region, Action::Focus)
+                .map_err(|reason| ToolError::TicketInvalid(reason.to_string()))?;
+        }
         let mut ledger = server.take_ledger(key);
-        let result = consume_ticket_once(
+        let result = consume_ticket_once_checked(
             &mut ledger,
             &ticket,
-            &manifold,
+            &fresh,
             focused,
+            &policy,
+            url.as_deref(),
             |target: &RegionId, _action: Action| {
                 let node = node_params(&session, target)?;
                 session
@@ -445,7 +483,12 @@ fn focus(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
             },
         );
         server.keep_ledger(key, ledger);
-        result.map_err(consume_error)?;
+        result.map_err(|err| match err {
+            ConsumeError::Refused(reason) => {
+                policy_refusal(reason, &ticket.target_label, url.as_deref())
+            }
+            other => consume_error(other),
+        })?;
         Ok(json!({"focused": index, "region": id.as_str()}))
     })();
     keep(server, key, session);
@@ -549,9 +592,12 @@ fn get(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<Val
             )))
         }
     }
+    let snapshot = bound::snapshot_arg(arguments)?;
     let mut session = server.take_session(key)?;
     let outcome = (|| {
-        let (manifold, id) = resolve(&mut session, index)?;
+        // Read from the page now; `snapshot` only fixes which element.
+        let (_, id) = resolve(server, key, &mut session, snapshot, index)?;
+        let manifold = fresh(&session)?;
         let region = present(&manifold, &id, index)?;
         let state = region.state();
         let secret = is_secret(region);
@@ -633,9 +679,11 @@ fn is(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<Valu
             "`what` must be visible|enabled|checked|editable, got `{what}`"
         )));
     }
+    let snapshot = bound::snapshot_arg(arguments)?;
     let mut session = server.take_session(key)?;
     let outcome = (|| {
-        let (manifold, id) = resolve(&mut session, index)?;
+        let (_, id) = resolve(server, key, &mut session, snapshot, index)?;
+        let manifold = fresh(&session)?;
         let Some(region) = manifold.get(&id) else {
             // A control that left the page is not visible; the rest is unknown.
             if what == "visible" {
@@ -761,23 +809,34 @@ fn overlay(session: &mut LiveSession, document: &str, boxes: Value) -> Result<()
         .map_err(browser_err)
 }
 
-/// The region id at `index`, and a fresh observation to act on. The index
+/// The region id at `index`, and a fresh observation to act on (or answer
+/// from). With `snapshot` the index reads that snapshot (`bound::resolve`)
+/// and the snapshot's manifold is returned: a press mints its ticket there
+/// and revalidates on the session's fresh observation. Without, the index
 /// reads the last observation when no input ran since (what the host last
 /// saw), else this fresh one.
 fn resolve(
+    server: &dyn BrowserHost,
+    key: &str,
     session: &mut LiveSession,
+    snapshot: Option<u64>,
     index: usize,
 ) -> Result<(InteractionManifold, RegionId), ToolError> {
     let prior = session.fresh_manifold().map(interactive_index);
     let manifold = session.observe().map_err(browser_err)?.clone();
+    if snapshot.is_some() {
+        return bound::resolve(server, key, snapshot, &manifold, index);
+    }
     let order = prior.unwrap_or_else(|| interactive_index(&manifold));
-    let id = order.get(index - 1).cloned().ok_or_else(|| {
-        ToolError::InvalidArguments(format!(
-            "no interactive element at index {index} ({} indexed)",
-            order.len()
-        ))
-    })?;
-    Ok((manifold, id))
+    Ok((manifold, at_index(&order, index)?))
+}
+
+/// The session's observation (taken by [`resolve`]).
+fn fresh(session: &LiveSession) -> Result<InteractionManifold, ToolError> {
+    session
+        .manifold()
+        .cloned()
+        .ok_or_else(|| browser_err(BrowserError::NotObserved))
 }
 
 fn present<'a>(
@@ -868,18 +927,49 @@ fn browser_err(err: impl ToString) -> ToolError {
     ToolError::Browser(err.to_string())
 }
 
-/// Ticket / gate refusals are `TicketInvalid` (never retried); the rest `Browser`.
+/// Ticket / gate refusals are `TicketInvalid` or a stale ref (never
+/// retried); the rest `Browser`.
 fn exec_error(err: ExecError) -> ToolError {
     match err {
-        ExecError::Ticket(_) | ExecError::Gate(_) => ToolError::TicketInvalid(err.to_string()),
+        ExecError::Ticket(invalid) => ticket_error(invalid, err.to_string()),
+        ExecError::Gate(_) => ToolError::TicketInvalid(err.to_string()),
         other => browser_err(other),
     }
 }
 
 fn consume_error(err: ConsumeError<BrowserError>) -> ToolError {
     match err {
-        ConsumeError::Invalid(_) => ToolError::TicketInvalid(err.to_string()),
+        ConsumeError::Invalid(invalid) => ticket_error(invalid, err.to_string()),
         other => browser_err(other),
+    }
+}
+
+/// The server's policy plus this call's `confirm` label (this call only).
+fn press_policy(server: &dyn BrowserHost, arguments: &Value) -> Result<Policy, ToolError> {
+    let policy = server.policy()?.clone();
+    Ok(match opt_str(arguments, "confirm")? {
+        Some(label) => policy.with_confirmed(label),
+        None => policy,
+    })
+}
+
+fn is_policy(reason: ultra_instinct_protocol::GuardReason) -> bool {
+    use ultra_instinct_protocol::GuardReason;
+    matches!(
+        reason,
+        GuardReason::NeedsConfirm | GuardReason::DomainNotAllowed
+    )
+}
+
+/// A policy refusal: the label for a confirm, the URL's host for a domain.
+fn policy_refusal(
+    reason: ultra_instinct_protocol::GuardReason,
+    label: &str,
+    url: Option<&str>,
+) -> ToolError {
+    match reason {
+        ultra_instinct_protocol::GuardReason::NeedsConfirm => refused(reason, label),
+        _ => refused(reason, url.unwrap_or("")),
     }
 }
 
@@ -915,6 +1005,7 @@ pub(crate) fn spec(name: &str) -> (String, Map<String, Value>, Vec<&'static str>
         }
         "browser_check" => {
             props.insert("index".into(), index());
+            props.insert("snapshot".into(), crate::bound::snapshot_prop());
             props.insert("checked".into(), json!({"type": "boolean"}));
             props.insert("mouse".into(), json!({"type": "boolean"}));
             required.extend(["index", "checked"]);
@@ -922,6 +1013,7 @@ pub(crate) fn spec(name: &str) -> (String, Map<String, Value>, Vec<&'static str>
         }
         "browser_focus" => {
             props.insert("index".into(), index());
+            props.insert("snapshot".into(), crate::bound::snapshot_prop());
             required.push("index");
             "Move keyboard focus to the element at an index (gate + one-shot ticket, then DOM.focus)."
         }
@@ -936,6 +1028,7 @@ pub(crate) fn spec(name: &str) -> (String, Map<String, Value>, Vec<&'static str>
         }
         "browser_get" => {
             props.insert("index".into(), index());
+            props.insert("snapshot".into(), crate::bound::snapshot_prop());
             props.insert(
                 "what".into(),
                 json!({"type": "string", "enum": ["value", "attr", "box", "label", "role"]}),
@@ -949,6 +1042,7 @@ pub(crate) fn spec(name: &str) -> (String, Map<String, Value>, Vec<&'static str>
         }
         "browser_is" => {
             props.insert("index".into(), index());
+            props.insert("snapshot".into(), crate::bound::snapshot_prop());
             props.insert(
                 "what".into(),
                 json!({"type": "string", "enum": ["visible", "enabled", "checked", "editable"]}),
@@ -969,6 +1063,9 @@ pub(crate) fn spec(name: &str) -> (String, Map<String, Value>, Vec<&'static str>
                     json!({"type": "integer", "minimum": 0,
                            "description": "Cut the text output to this many chars, appending … [truncated N chars]."}),
                 );
+            }
+            if crate::bound::SNAPSHOT_TOOLS.contains(&other) {
+                props.insert("snapshot".into(), crate::bound::snapshot_prop());
             }
             if other == "browser_screenshot" {
                 props.insert(
