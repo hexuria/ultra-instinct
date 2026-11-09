@@ -133,7 +133,11 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    own text (its value). Observe
 >    also records control state (value, checked,
 >    expanded, select options) as evidence only: it is not in the region
->    fingerprint, and password values are never read. Do not claim cross-origin
+>    fingerprint, and password values are never read. A label (`for`,
+>    wrapping, or `aria-labelledby` text) folds into the one offered control
+>    it names, in fusion, with compact hit evidence; a zero-size, transparent,
+>    or covered checkbox / radio folds the other way, onto its label's box
+>    (ADR 0014). Do not claim cross-origin
 >    iframe or closed-shadow coverage.
 > 8. **Remote escalation is explicit and closed.** Feature `remote`;
 >    reply is exactly a choice id + kind from the offered menu or abstain.
