@@ -402,8 +402,9 @@ fn reload(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<
     outcome
 }
 
-/// Set a checkbox / radio / switch to `checked`: no press when it already
-/// is, else the `browser_click` press, then a read-back that must agree.
+/// Set a checkbox / radio / switch to `checked`: no press when the page
+/// shows it so now, else the `browser_click` press, then a read-back that
+/// must agree. With `snapshot` the element must still be the one shown.
 fn check(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<Value, ToolError> {
     let index = index_arg(arguments)?;
     let want = opt_bool(arguments, "checked")?
@@ -418,14 +419,21 @@ fn check(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
     let mut session = server.take_session(key)?;
     let outcome = (|| {
         let (manifold, id) = resolve(server, key, &mut session, snapshot, index)?;
-        let region = present(&manifold, &id, index)?;
-        let now = region.state().checked.ok_or_else(|| {
+        let focused = session.page().and_then(|p| p.focused().cloned());
+        let fresh = session
+            .manifold()
+            .ok_or_else(|| browser_err(BrowserError::NotObserved))?;
+        // The element the snapshot showed must still be there, and the
+        // state is the page's now, never the snapshot's.
+        if snapshot.is_some() {
+            bound::same_region(&manifold, fresh, &id, focused.clone())?;
+        }
+        let now = present(fresh, &id, index)?.state().checked.ok_or_else(|| {
             ToolError::InvalidArguments(format!("element {index} has no checked state"))
         })?;
         if now == want {
             return Ok(json!({"changed": false, "checked": now, "index": index}));
         }
-        let focused = session.page().and_then(|p| p.focused().cloned());
         let ticket = gate(
             &manifold,
             &id,
@@ -1026,7 +1034,7 @@ pub(crate) fn spec(name: &str) -> (String, Map<String, Value>, Vec<&'static str>
             props.insert("checked".into(), json!({"type": "boolean"}));
             props.insert("mouse".into(), json!({"type": "boolean"}));
             required.extend(["index", "checked"]);
-            "Set a checkbox / radio / switch to `checked`. Already so: {changed: false}, no press. Else the browser_click press through the ticketed executor, then a read-back that must show the new state."
+            "Set a checkbox / radio / switch to `checked`. Already so on the page now: {changed: false}, no press (with snapshot, only after the element still matches it; else stale_ref). Else the browser_click press through the ticketed executor, then a read-back that must show the new state."
         }
         "browser_focus" => {
             props.insert("index".into(), index());

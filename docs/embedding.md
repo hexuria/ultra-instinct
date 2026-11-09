@@ -113,7 +113,9 @@ the page, the press refuses `stale_ref` and nothing is pressed. Only the
 elements `browser_get_state` showed are indexed in its snapshot: an index
 past `max_elements` refuses `unknown_ref` (`indexed` is the shown count),
 even though the page has an element there. Focus is
-taken from the page now (your own typing moves it). With
+taken from the page now (your own typing moves it). `browser_check` reads
+the checked state from the page now, after the element still matches the
+snapshot, so it never answers `changed: false` from a stale state. With
 `require_snapshot(true)` a bare index refuses `snapshot_required`.
 
 ## Which tools to allow-list

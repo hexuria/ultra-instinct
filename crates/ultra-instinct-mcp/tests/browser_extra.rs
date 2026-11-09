@@ -382,6 +382,68 @@ fn check_presses_once_through_the_executor_and_reads_back() {
     assert_eq!(presses(&log), 1, "the ticket was consumed once");
 }
 
+/// The snapshot showed it checked, then the page unchecked it: the state
+/// is read from the page now, so the check presses and reads back checked,
+/// never `changed: false` on the snapshot's old state.
+#[test]
+fn check_with_a_snapshot_reads_the_state_from_the_page_now() {
+    let (mut server, log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&login(true))
+            .observe_compact(&login(false))
+            .observe_compact(&login(false))
+            .dom_click(12)
+            .observe_compact(&login(true)),
+    );
+    let state = call(&mut server, "browser_get_state", json!({"cdp": CDP}));
+    let out = call(
+        &mut server,
+        "browser_check",
+        json!({"cdp": CDP, "index": 3, "checked": true, "snapshot": state["snapshot"]}),
+    );
+    assert_eq!(out["changed"], true, "{out}");
+    assert_eq!(out["checked"], true, "{out}");
+    assert_eq!(calls(&log, "DOM.resolveNode"), [json!({"nodeId": 12})]);
+}
+
+/// Already in the requested state on the page, but the element the
+/// snapshot showed moved: `stale_ref`, not `changed: false`.
+#[test]
+fn check_with_a_snapshot_refuses_a_moved_element_that_already_holds() {
+    // The checkbox moved down 60 px (now checked).
+    let checkbox = Control {
+        tag: "INPUT",
+        role: "checkbox",
+        ..Control::button(12, 102, "Remember me", (20.0, 200.0, 20.0, 20.0))
+    };
+    let mut moved = PageSpec::of(
+        &[
+            Control::text_field(10, 100, "Email", (20.0, 20.0, 300.0, 28.0)),
+            Control::button(11, 101, "Sign in", (20.0, 80.0, 120.0, 28.0)),
+            checkbox,
+        ],
+        "http://127.0.0.1/form",
+        "Form",
+    );
+    moved.dom[2] = moved.dom[2]
+        .clone()
+        .with_compact_state(json!({"c": true, "it": "checkbox"}));
+    let (mut server, log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&login(false))
+            .observe_compact(&moved),
+    );
+    let state = call(&mut server, "browser_get_state", json!({"cdp": CDP}));
+    let err = server
+        .call_tool(
+            "browser_check",
+            &json!({"cdp": CDP, "index": 3, "checked": true, "snapshot": state["snapshot"]}),
+        )
+        .unwrap_err();
+    assert_eq!(err.code(), "stale_ref", "{err:?}");
+    assert_eq!(presses(&log), 0);
+}
+
 #[test]
 fn check_errors_when_the_state_does_not_change() {
     let (mut server, _log) = server(
