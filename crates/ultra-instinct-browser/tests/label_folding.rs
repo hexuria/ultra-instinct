@@ -1,4 +1,4 @@
-//! Label folding (ADR 0014): a label and the control it names are one
+//! Label folding: a label and the control it names are one
 //! region, observed through the real session over a compact replay.
 
 use serde_json::json;

@@ -1,6 +1,6 @@
 //! Browser surface for ultra-instinct.
 //!
-//! Phase 2 speaks Chrome DevTools Protocol through [`CdpTransport`].
+//! The session speaks Chrome DevTools Protocol through [`CdpTransport`].
 //! [`ReplayTransport`] replays a recorded script. [`WebSocketTransport`] is
 //! the same calls on a live `ws://` socket. There is no browser framework and
 //! no computer-use vision path.
@@ -648,7 +648,7 @@ mod compact_observe {
     #[test]
     fn unscripted_compact_eval_falls_through_to_the_per_node_path() {
         // A fixture that never scripted Runtime.evaluate still works: the
-        // probe misses, every element is untagged, the legacy budget runs.
+        // probe misses, every element is untagged, the per-node budget runs.
         let script = ScriptBuilder::new().observe(&page()).to_json();
         let mut session = BrowserSession::new(ReplayTransport::parse(&script).unwrap());
         let manifold = session.observe().unwrap();
@@ -736,7 +736,7 @@ mod compact_observe {
     }
 
     /// Live transport that refuses the compact eval, forcing the per-node
-    /// path on the same page: the legacy oracle for parity.
+    /// path on the same page: the oracle for parity.
     struct NoCompact<T>(T);
 
     impl<T: CdpTransport> CdpTransport for NoCompact<T> {
@@ -789,7 +789,7 @@ mod compact_observe {
                 .1
                  .0
         };
-        // Open shadow content is reachable (ADR 0007), not the host's hit.
+        // Open shadow content is reachable, not the host's hit.
         assert!(!occluded("Shadow action"), "{compact_flags:?}");
         assert!(!occluded("Sign in"), "{compact_flags:?}");
         assert!(!occluded("Frame action"), "{compact_flags:?}");

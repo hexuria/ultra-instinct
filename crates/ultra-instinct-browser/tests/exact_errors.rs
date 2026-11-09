@@ -1,5 +1,5 @@
 //! Exact errors and press bookkeeping of a `BrowserSession` over a replay
-//! script (moved out of `lib.rs` to keep the crate under its line ceiling).
+//! script.
 
 use ultra_instinct_browser::script::{AxSpec, DomSpec, PageSpec, ScriptBuilder};
 use ultra_instinct_browser::*;

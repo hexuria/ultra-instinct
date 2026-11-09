@@ -1,8 +1,8 @@
 //! Protocol-call budget: `observe()` is the hot path of the whole agent loop —
 //! every predict/act/observe cycle calls it, and its CDP round trips are the
 //! wall-clock cost driver (the executor re-observes before every input too).
-//! These tests pin the current call count so a regression (more calls for the
-//! same page) fails CI, and record the number a merged observe must beat.
+//! These tests pin the call count so a regression (more calls for the same
+//! page) fails CI.
 
 use ultra_instinct_browser::script::{Control, PageSpec, ScriptBuilder};
 use ultra_instinct_browser::{BrowserSession, CdpError, CdpTransport, ReplayTransport};
@@ -76,7 +76,7 @@ fn observe_small_page_stays_under_call_budget() {
     ));
     session.observe().unwrap();
     let calls = session.transport().calls;
-    // The scripted legacy path uses 26 calls (25 plus the click-listener
+    // The scripted per-node path uses 26 calls (25 plus the click-listener
     // snapshot); the unscripted compact Runtime.evaluate attempt adds one
     // before falling back.
     assert!(
@@ -92,7 +92,7 @@ fn observe_dense_page_stays_under_call_budget() {
     ));
     session.observe().unwrap();
     let calls = session.transport().calls;
-    // The scripted legacy path uses 206 calls (205 plus the click-listener
+    // The scripted per-node path uses 206 calls (205 plus the click-listener
     // snapshot); the unscripted compact Runtime.evaluate attempt adds one
     // before falling back.
     assert!(

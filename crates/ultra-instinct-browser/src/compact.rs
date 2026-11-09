@@ -16,8 +16,7 @@
 //! Elements the page cannot show to a same-origin walk — cross-origin
 //! iframe content, closed shadow roots — carry no `data-hu-k`; `observe`
 //! falls back to the per-node calls for exactly those. A replay script
-//! that does not script the eval step falls back entirely, which keeps
-//! every pre-compact fixture working unchanged.
+//! that does not script the eval step falls back entirely.
 //!
 //! Semantics preserved from the per-node calls: `display:none` (no client
 //! rects) omits a node like a `getBoxModel` error; the rect is the content

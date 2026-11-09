@@ -23,7 +23,7 @@
 //! - the coverer is neither an ancestor nor a descendant of the victim;
 //! - the coverer's paint key is strictly greater than the victim's.
 //!
-//! Known CDP limits (see docs/DECISIONS.md): we do not rebuild the full
+//! Known CDP limits: we do not rebuild the full
 //! ancestor stacking-context chain through non-kept nodes; clip-path, mask,
 //! canvas, cross-origin iframes, and closed shadow trees are invisible here.
 

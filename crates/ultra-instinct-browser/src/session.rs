@@ -31,7 +31,7 @@
 //! center is not the region or a descendant of it (cookie banner, custom
 //! backdrop, toast outside the kept set), the region is marked `occluded`.
 //! Dialog front-layer logic in `ultra-instinct-guard` still applies on top of that.
-//! Old CDP fixtures without `CSS.enable` skip the stacking pass.
+//! CDP fixtures without `CSS.enable` skip the stacking pass.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -374,7 +374,7 @@ impl<T: CdpTransport> BrowserSession<T> {
     /// Mark clickable regions buried under a higher-painting kept region.
     ///
     /// Uses `CSS.enable` + `CSS.getComputedStyleForNode`. When the next
-    /// scripted CDP step is not `CSS.enable` (older fixtures), this returns
+    /// scripted CDP step is not `CSS.enable` (a fixture without it), this returns
     /// without changing the manifold so hit-test still runs.
     fn apply_stacking_occlusion(
         &mut self,
@@ -522,9 +522,9 @@ impl<T: CdpTransport> BrowserSession<T> {
 
     /// Low-level CDP click used only by browser fixture tests.
     ///
-    /// **Not the product path.** Ultra-Instinct is an action firewall: hosts click
-    /// after [`ultra_instinct_guard::guard`] returns Allow. Do not call this from
-    /// MCP or CLI.
+    /// **Not the product path.** Page input goes through a ticket (the agent's
+    /// executor, or the host's gate and ticket). Do not call this from MCP or
+    /// CLI.
     #[doc(hidden)]
     pub fn press(&mut self, id: &RegionId, action: Action) -> Result<ActMechanism, BrowserError> {
         if action != Action::Click {
