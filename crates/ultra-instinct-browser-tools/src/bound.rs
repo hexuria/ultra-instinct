@@ -110,11 +110,11 @@ pub(crate) enum Seen<'a> {
 }
 
 impl Seen<'_> {
-    /// The snapshot's shared manifold, or a copy of the fresh one.
-    pub(crate) fn into_rc(self) -> Rc<InteractionManifold> {
+    /// The snapshot's shared manifold; `None` for the fresh one.
+    pub(crate) fn snapshot(self) -> Option<Rc<InteractionManifold>> {
         match self {
-            Self::Fresh(manifold) => Rc::new(manifold.clone()),
-            Self::Snapshot(manifold) => manifold,
+            Self::Fresh(_) => None,
+            Self::Snapshot(manifold) => Some(manifold),
         }
     }
 }

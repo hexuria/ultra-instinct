@@ -418,15 +418,13 @@ fn check(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
     let policy = press_policy(server, arguments)?;
     let mut session = server.take_session(key)?;
     let outcome = (|| {
-        let (manifold, id) = resolve(server, key, &mut session, snapshot, index)?;
+        let (seen, id) = resolve(server, key, &mut session, snapshot, index)?;
         let focused = session.page().and_then(|p| p.focused().cloned());
-        let fresh = session
-            .manifold()
-            .ok_or_else(|| browser_err(BrowserError::NotObserved))?;
+        let fresh = fresh(&session)?;
         // The element the snapshot showed must still be there, and the
         // state is the page's now, never the snapshot's.
-        if snapshot.is_some() {
-            bound::same_region(&manifold, fresh, &id, focused.clone())?;
+        if let Some(seen) = &seen {
+            bound::same_region(seen, fresh, &id, focused.clone())?;
         }
         let now = present(fresh, &id, index)?.state().checked.ok_or_else(|| {
             ToolError::InvalidArguments(format!("element {index} has no checked state"))
@@ -434,8 +432,9 @@ fn check(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
         if now == want {
             return Ok(json!({"changed": false, "checked": now, "index": index}));
         }
+        let manifold = seen.as_deref().unwrap_or(fresh);
         let ticket = gate(
-            &manifold,
+            manifold,
             &id,
             Action::Click,
             focused,
@@ -474,13 +473,15 @@ fn focus(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<V
     let policy = press_policy(server, arguments)?;
     let mut session = server.take_session(key)?;
     let outcome = (|| {
-        let (manifold, id) = resolve(server, key, &mut session, snapshot, index)?;
-        let fresh = fresh(&session)?;
-        present(&manifold, &id, index)?;
+        let (seen, id) = resolve(server, key, &mut session, snapshot, index)?;
+        // Owned: the press below borrows the session.
+        let fresh = fresh(&session)?.clone();
+        let manifold = seen.as_deref().unwrap_or(&fresh);
+        present(manifold, &id, index)?;
         let focused = session.page().and_then(|p| p.focused().cloned());
         let url = session.page().and_then(|p| p.url().map(str::to_owned));
         let ticket = gate(
-            &manifold,
+            manifold,
             &id,
             Action::Focus,
             focused.clone(),
@@ -640,8 +641,7 @@ fn get(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<Val
     let outcome = (|| {
         // Read from the page now; `snapshot` only fixes which element.
         let (_, id) = resolve(server, key, &mut session, snapshot, index)?;
-        let manifold = fresh(&session)?;
-        let region = present(&manifold, &id, index)?;
+        let region = present(fresh(&session)?, &id, index)?;
         let state = region.state();
         let secret = crate::secrets::sensitive(region);
         let value = match what {
@@ -718,8 +718,7 @@ fn is(server: &mut dyn BrowserHost, key: &str, arguments: &Value) -> Result<Valu
     let mut session = server.take_session(key)?;
     let outcome = (|| {
         let (_, id) = resolve(server, key, &mut session, snapshot, index)?;
-        let manifold = fresh(&session)?;
-        let Some(region) = manifold.get(&id) else {
+        let Some(region) = fresh(&session)?.get(&id) else {
             // A control that left the page is not visible; the rest is unknown.
             if what == "visible" {
                 return Ok(json!({"index": index, "what": what, "value": false, "gone": true}));
@@ -844,35 +843,33 @@ fn overlay(session: &mut LiveSession, document: &str, boxes: Value) -> Result<()
         .map_err(browser_err)
 }
 
-/// The region id at `index`, and a fresh observation to act on (or answer
-/// from). With `snapshot` the index reads that snapshot (`bound::resolve`)
-/// and the snapshot's manifold is returned: a press mints its ticket there
-/// and revalidates on the session's fresh observation. Without, the index
-/// reads the last observation when no input ran since (what the host last
-/// saw), else this fresh one.
+/// Observe, and the region id at `index`. With `snapshot` the index reads
+/// that snapshot (`bound::resolve`) and the snapshot's manifold is returned:
+/// a press mints its ticket there and revalidates on the session's fresh
+/// observation ([`fresh`]). Without (`None`), the index reads the last
+/// observation when no input ran since (what the host last saw), else this
+/// fresh one, which is also the one the press mints on.
 fn resolve(
     server: &dyn BrowserHost,
     key: &str,
     session: &mut LiveSession,
     snapshot: Option<u64>,
     index: usize,
-) -> Result<(Rc<InteractionManifold>, RegionId), ToolError> {
+) -> Result<(Option<Rc<InteractionManifold>>, RegionId), ToolError> {
     let prior = session.fresh_manifold().map(interactive_index);
     let manifold = session.observe().map_err(browser_err)?;
     if snapshot.is_some() {
         return bound::resolve(server, key, snapshot, manifold, index)
-            .map(|(seen, id)| (seen.into_rc(), id));
+            .map(|(seen, id)| (seen.snapshot(), id));
     }
     let order = prior.unwrap_or_else(|| interactive_index(manifold));
-    let id = at_index(&order, index)?;
-    Ok((Rc::new(manifold.clone()), id))
+    Ok((None, at_index(&order, index)?))
 }
 
-/// The session's observation (taken by [`resolve`]).
-fn fresh(session: &LiveSession) -> Result<InteractionManifold, ToolError> {
+/// The session's observation (taken by [`resolve`]), borrowed.
+fn fresh(session: &LiveSession) -> Result<&InteractionManifold, ToolError> {
     session
         .manifold()
-        .cloned()
         .ok_or_else(|| browser_err(BrowserError::NotObserved))
 }
 
