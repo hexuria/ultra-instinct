@@ -34,25 +34,16 @@
 //! offline policy: no LLM and no MCP are involved; Instinct abstains rather than
 //! guessing. `--policy pua` remains a deprecated alias for `--policy instinct`.
 //!
-//! `--policy jev` (built with `--features jev`) decides through JEV (System
-//! One) instead: the offered ActionSpace becomes one `operation` + one
-//! `<kind>_target` question per element kind in a single call — the
-//! speculative fan-out jev-ultrafast uses. JEV can only pick an offered id,
-//! never a selector or script, and the ticket / gate / revalidate chain is
-//! unchanged. Live runs send each decision's viewport screenshot (JPEG,
-//! `Page.captureScreenshot` on the agent's own socket) as a System One image,
-//! so JEV can read values that exist only on the page; `--no-screenshot`
-//! turns that off. Reads `TYPESAFE_API_KEY` (required), `TYPESAFE_MODEL`,
-//! `TYPESAFE_BASE_URL`. JEV itself does not read `TEXT_MODEL_*`; payloads
-//! come from the text model below.
+//! `--policy jev` (feature `jev`) decides through JEV (System One); see
+//! `typesafe` for the wire. JEV can only pick an offered id, never a selector
+//! or script, and the ticket / gate / revalidate chain still runs. Live runs
+//! send each decision's viewport screenshot unless `--no-screenshot`. Reads
+//! `TYPESAFE_API_KEY` (required), `TYPESAFE_MODEL`, `TYPESAFE_BASE_URL`; JEV
+//! itself does not read `TEXT_MODEL_*`.
 //!
-//! `--policy clef` / `--policy clef-flash` (built with `--features clef`) decide
-//! through Cloudflare Workers AI Clef models — same closed wire and the same
-//! System One body as `jev`, sent by `typesafe-sdk`'s Clef provider to
-//! `…/accounts/{id}/ai/run/@cf/cloudflare/{model}`. Reads `CLOUDFLARE_ACCOUNT_ID`,
-//! `CLOUDFLARE_API_TOKEN` (required), `CLEF_MODEL`, `CLEF_BASE_URL` (the prefix
-//! before `/accounts`). A target head with one offered candidate never reaches the
-//! wire — it is answered locally.
+//! `--policy clef` / `--policy clef-flash` (feature `clef`) decide through
+//! Cloudflare Workers AI Clef models over the same closed wire; see `clef`
+//! for the environment.
 //!
 //! `--text-model-cmd` (built with `--features model-text`) only changes where
 //! TYPE_TEXT / SELECT *payloads* come from: a user program speaking the
