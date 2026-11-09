@@ -34,10 +34,9 @@ pub fn write_diary(dir: &Path, events: &[JournalEvent]) -> Result<PathBuf, CliEr
     // Steps inherit their action's observed input type from the decision
     // that produced them — needed to keep passwords out of the file.
     let mut last_space: Option<&ActionSpace> = None;
-    // A decision's `history` line is the steps journaled before it — the
-    // journal no longer snapshots the vec per decision (a quadratic clone
-    // every policy call), so the writer rebuilds it here. The serialized
-    // `history` field is unchanged.
+    // A decision's `history` line is the steps journaled before it. The
+    // journal does not snapshot the vec per decision (a quadratic clone
+    // every policy call), so the writer rebuilds it here.
     let mut history_so_far: Vec<HistoryLine> = Vec::new();
     for (seq, event) in events.iter().enumerate() {
         if let JournalEvent::Decision { space, .. } = event {

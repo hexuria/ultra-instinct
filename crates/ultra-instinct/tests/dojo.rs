@@ -1,4 +1,4 @@
-//! Scripted-remote acceptance for issue #49, work item 5: a remote
+//! Scripted-remote acceptance for the dojo policy: a remote
 //! choice that verifies becomes a lesson, and an identical rerun
 //! decides locally — zero remote calls.
 

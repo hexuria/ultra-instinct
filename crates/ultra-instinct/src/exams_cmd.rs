@@ -1,5 +1,5 @@
 //! `ultra-instinct exams --diary <dir> [--lessons <store>]` — the belt
-//! exam report (issue #49, work item 6): remote policy calls per 100
+//! exam report: remote policy calls per 100
 //! recorded decisions (the dojo's progress metric, which must fall over
 //! time) plus the belt each pairing and learned move holds.
 //!

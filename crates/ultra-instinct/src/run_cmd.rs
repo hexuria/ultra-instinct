@@ -43,8 +43,8 @@
 //! `Page.captureScreenshot` on the agent's own socket) as a System One image,
 //! so JEV can read values that exist only on the page; `--no-screenshot`
 //! turns that off. Reads `TYPESAFE_API_KEY` (required), `TYPESAFE_MODEL`,
-//! `TYPESAFE_BASE_URL`. It does not read `TEXT_MODEL_*` yet; combine with
-//! `--text-model-cmd` for model-written payloads.
+//! `TYPESAFE_BASE_URL`. JEV itself does not read `TEXT_MODEL_*`; payloads
+//! come from the text model below.
 //!
 //! `--policy clef` / `--policy clef-flash` (built with `--features clef`) decide
 //! through Cloudflare Workers AI Clef models — same closed wire and the same
@@ -97,7 +97,7 @@ struct RunArgs {
     load_state: Option<String>,
     save_state: Option<String>,
     /// `--no-screenshot`: a pixel-reading policy decides without the viewport.
-    /// Only `jev` reads pixels today.
+    /// Only `jev` reads pixels.
     #[cfg_attr(not(feature = "jev"), allow(dead_code))]
     no_screenshot: bool,
     /// `--no-page-text`: remote policies decide without the page's text.
@@ -1298,8 +1298,8 @@ mod tests {
         for (goal, file, needle) in cases {
             let path = root.join(file);
             if !path.exists() {
-                // Fixtures are generated once via WRITE_FIXTURES=1; skip until present
-                // so a fresh checkout mid-PR still compiles.
+                // Fixtures are generated once via WRITE_FIXTURES=1; skip until
+                // present so a checkout without them still passes.
                 eprintln!("skip missing fixture {}", path.display());
                 continue;
             }

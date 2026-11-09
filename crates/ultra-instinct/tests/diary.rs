@@ -1,4 +1,4 @@
-//! Golden diary tests (issue #49, work item 1): `--diary <dir>` writes one
+//! Golden diary tests: `--diary <dir>` writes one
 //! schema-v1 JSONL per run — asserted on a checked-in CDP-replay fixture —
 //! and every written line round-trips through `parse_line`.
 

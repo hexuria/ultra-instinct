@@ -1,4 +1,4 @@
-//! Golden replay tests (issue #49, work item 2): the arena re-scores
+//! Golden replay tests: the arena re-scores
 //! recorded decisions deterministically — a checked-in divergence diary
 //! pins agree / would-abstain / regress, and a fresh `--diary` run replays
 //! to full agreement.
@@ -86,8 +86,8 @@ fn a_fresh_instinct_diary_replays_to_full_agreement() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Learned trust enters scoring only through the capped evidence path
-/// (issue #49, work item 4): a store that agrees with the recorded runs
+/// Learned trust enters scoring only through the capped evidence path:
+/// a store that agrees with the recorded runs
 /// must leave every verdict untouched — replay no-regressions with
 /// evidence present. The bounded flip lives in ultra-instinct-policy unit tests.
 #[test]
