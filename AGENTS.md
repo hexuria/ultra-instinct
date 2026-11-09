@@ -2,12 +2,11 @@
 
 The product is `ultra-instinct`; crates are `ultra-instinct-*` (Autonomous Ultra
 Instinct) and binaries are `ultra-instinct` plus its short alias `aui`.
-The HGRA matcher experiment and the weighted matcher are removed
-([ADR 0012](docs/adr/0012-borrow-and-prune.md)). A crate, binary or feature
+The HGRA matcher experiment and the weighted matcher are removed. A crate,
+binary or feature
 named `hgra` or `resonance` is a bug.
 
-**Product:** Ultra-Instinct is a **Rust-native browser-agent runtime**
-([`docs/PRD.md`](docs/PRD.md), [ADR 0001](docs/adr/0001-agent-runtime-pivot.md)).
+**Product:** Ultra-Instinct is a **Rust-native browser-agent runtime**.
 The library `Agent` **owns the loop**: it observes the page, builds a finite
 `ActionSpace`, lets a policy choose (Instinct first, optional explicit escalation),
 hard-gates the choice, executes only through a one-shot `ActionTicket`, then
@@ -32,11 +31,11 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    actions (scores, threshold / margin, abstain). Ultra-Instinct supplies browser
 >    evidence and builds the action space. No browser concepts in Instinct. No
 >    second float confidence gate on the agent path. Abstain is never turned
->    into "top candidate wins". Habituation (ADR 0008) only lowers the urge of
+>    into "top candidate wins". Habituation only lowers the urge of
 >    a repeated `dispatched-no-visible-change` / wrong-effect action; it never
 >    adds candidates or bypasses the gate. A click whose only change is a
 >    target's control state (checked / expanded / value / selected) verifies
->    as state-changed (ADR 0009), without that state entering the fingerprint.
+>    as state-changed, without that state entering the fingerprint.
 > 3. **Hard invalidity is guard evidence, not a score.** Disabled, readonly
 >    (TYPE / SELECT), hidden / zero-area, occluded, front-layer, offscreen,
 >    missing target, unsupported action → `ultra_instinct_guard::gate` refuses.
@@ -53,7 +52,7 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    dispatch to `ticket.target_id`. The agent's CLICK is a trusted pointer
 >    press at the region center (`Input::Click`); the DOM `this.click()` tiers
 >    are its CDP-refusal fallback and the retry (`Input::ScriptClick`) after a
->    pointer click shows no visible change (ADR 0009). The MCP host's
+>    pointer click shows no visible change. The MCP host's
 >    `browser_click` stays DOM-side unless called with `mouse: true`. The host
 >    helper `consume_ticket_once` uses
 >    the same consume-before-press order. `Predicted` carries no fingerprint of
@@ -98,7 +97,7 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    binds its grid `cell`; a KEY ticket binds its one key. The executor
 >    refuses a swapped destination, another cell, another key, or a two-end /
 >    cell / key ticket on any other input (`TicketMismatch`), and re-checks
->    the drop target (ADR 0010, 0011).
+>    the drop target.
 > 7. **Text is not Instinct.** `TYPE_TEXT` / `SELECT` payloads come from a
 >    `TextResolver`, checked against their context fingerprint, before the
 >    ticket is consumed, so executor revalidation always runs after resolver
@@ -111,14 +110,14 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    whose preceding three goal words share a word with the field label, else
 >    the first untyped literal, else abstains (parity with the bench A3q helper).
 >    A literal right after a press verb (`press "Submit"`) names a control,
->    not a value (ADR 0011).
-> 7a. **Model text is payload-only and grounded** (feature `model-text`,
->    ADR 0006). The model fills the payload of an action Instinct already chose;
+>    not a value.
+> 7a. **Model text is payload-only and grounded** (feature
+>    `model-text`). The model fills the payload of an action Instinct already chose;
 >    replies must echo the context fingerprint, pass shape checks, and occur
 >    in the goal clause and not be a described phrase ("your answer"), else
->    deterministic fallback, else abstain. One exception (ADR 0009; on by
->    default in the CLI whenever a text model is configured, off with
->    `--no-derived-text`, ADR 0011): a value read or worked out
+>    deterministic fallback, else abstain. One exception (on by default in
+>    the CLI whenever a text model is configured, off with
+>    `--no-derived-text`): a value read or worked out
 >    from page text may be typed when the goal quotes no untyped value, the
 >    field is not secret (password / hidden / file inputs; PIN /
 >    CVV / card / one-time-code labels), and the value is one line of ≤ 64
@@ -126,7 +125,7 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    is printed. The model sees the page's reading text (rendered text plus
 >    text-area contents) and the field's near text. CI uses scripted models only; no
 >    provider SDK or key handling in the tree.
-> 7b. **Harder page types** (ADR 0007). Observe pierces open shadow roots and
+> 7b. **Harder page types.** Observe pierces open shadow roots and
 >    same-origin iframes (`pierce: true`). ComboBox / ListBox / Option are
 >    first-class roles. Virtualized lists are the visible window only (scroll
 >    + re-observe). Autocomplete is TYPE then ticketed option act after
@@ -136,10 +135,9 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    options change from the first poll and stabilize; input is never
 >    re-dispatched. A plain element the page made clickable (an `onclick`
 >    attribute or handler property, `tabindex` ≥ 0, or a pointer cursor it
->    sets itself rather than inherits) is offered CLICK (ADR 0009), and so is
+>    sets itself rather than inherits) is offered CLICK, and so is
 >    a plain box Chrome reports `isClickable` (one `DOMSnapshot` call: listeners
->    added by script, ADR 0011). Also kept
->    (ADR 0010): SVG shapes (named by title / text / fill; not an icon inside
+>    added by script). Also kept: SVG shapes (named by title / text / fill; not an icon inside
 >    a click control), `LI` with text,
 >    text-less boxes only with a click hint, `canvas` / `svg` surfaces (claim
 >    `point` only with click evidence), scrollable boxes (claim `scroll`), popup owners (claim
@@ -152,35 +150,35 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    fingerprint, and password values are never read. A label (`for`,
 >    wrapping, or `aria-labelledby` text) folds into the one offered control
 >    it names, in fusion, with compact hit evidence; a zero-size, transparent,
->    or covered checkbox / radio folds the other way, onto its label's box
->    (ADR 0014). Do not claim cross-origin
+>    or covered checkbox / radio folds the other way, onto its label's box.
+>    Do not claim cross-origin
 >    iframe or closed-shadow coverage.
 > 8. **Remote escalation is explicit and closed.** Feature `remote`;
 >    reply is exactly a choice id + kind from the offered menu or abstain.
 >    Selectors, coordinates, scripts, extra fields → hard error. The request
->    may carry evidence a transport asks for (`wants_evidence`, ADR 0009):
+>    may carry evidence a transport asks for (`wants_evidence`):
 >    the viewport JPEG beside it (`jev`: a System One image, `--no-screenshot`),
 >    `page` {url, title, ≤ 6000 chars of visible text} (`jev`, `clef`,
 >    `--no-page-text`), per-target `box` / `near_text`, per-action `tried`
 >    {times, last} when the action was already dispatched with no effect
 >    (evidence only — the reply may still pick it), and the run's
 >    `progress` (clauses, which are satisfied, values typed; secrets masked).
->    Evidence never widens the reply. New kinds (ADR 0010) are still offered
+>    Evidence never widens the reply. New kinds are still offered
 >    ids: `HOVER:<id>`, `SCROLL_IN:<id>`, `DRAG:<src>><dst>` (up to 8
 >    sources × 96 destinations, sent as one compact `drag` block) including
 >    `DRAG:<src>><surface>@c,r` onto a cell of the drawing a source sits on,
 >    surface cells `CLICK:<surface>@c,r` (8×8), `KEY:<id>#<key>` from the
 >    closed `KEY_NAMES` set, and `SELECT_TEXT:<id>` (a trusted triple-click,
->    verified by the page's selection) (ADR 0011). JEV's DONE carries a
+>    verified by the page's selection). JEV's DONE carries a
 >    same-call `goal_satisfied` self-check; DONE below 0.7 (0.5 once every
 >    clause is satisfied) is re-asked without DONE, and BLOCKED below 0.6 is
->    re-asked without BLOCKED (ADR 0011): at most three calls, a second
+>    re-asked without BLOCKED: at most three calls, a second
 >    refused DONE abstains. With `--second-opinion` the text model is asked
 >    when JEV ends on BLOCKED, abstains, or gives its operation < 0.5; its
 >    reply must be exactly an offered id + kind, else JEV's answer stands.
 >    Targets come before page controls in the request;
 >    near text and row text that echo the goal are not sent.
-> 9. **No matcher.** HGRA and the weighted matcher are removed (ADR 0012).
+> 9. **No matcher.** HGRA and the weighted matcher are removed.
 >    Do not reintroduce label ranking on the agent path or in `guard`.
 > 10. **One blocking CDP socket per agent.** Parallelism means separate agents
 >    in separate tabs with no shared state. Formal tools stay unjustified for
@@ -202,7 +200,7 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 | Crate | Owns |
 |---|---|
 | `ultra-instinct-core` | `InteractionManifold`, regions, `ActionSpace`, fixture grammar |
-| `ultra-instinct-cdp` | CDP transport trait, websocket, replay transport, replay script builder; unix `--remote-debugging-pipe` transport (`PipeBrowser` / `PipePage`, caller-owned fds, one thread, ADR 0013); tab backends: `TargetBackend` (list / create / activate / close pages, connect a session key), `HttpBackend` (the `/json` endpoints + a connector, the default) and unix `PipeBackend` (`Target.*` on a `PipeBrowser`, keys `pipe:<targetId>`) |
+| `ultra-instinct-cdp` | CDP transport trait, websocket, replay transport, replay script builder; unix `--remote-debugging-pipe` transport (`PipeBrowser` / `PipePage`, caller-owned fds, one thread); tab backends: `TargetBackend` (list / create / activate / close pages, connect a session key), `HttpBackend` (the `/json` endpoints + a connector, the default) and unix `PipeBackend` (`Target.*` on a `PipeBrowser`, keys `pipe:<targetId>`) |
 | `ultra-instinct-chrome` | Find / start a local Chrome (`find_chrome`, `launch`, `ChromeProcess` killed on drop); std only, re-exported as `ultra_instinct_browser::launch` |
 | `ultra-instinct-browser` | CDP observe (DOM/AX fusion, identity, stacking), raw CDP inputs; `launch` (re-export of `ultra-instinct-chrome`); `storage_state` (save / load cookies + storage, the 0600 state file and its parser) |
 | `ultra-instinct-observe` | Observation history and id diff |
@@ -264,13 +262,15 @@ deliberate eval.
   limits): `crates/ultra-instinct-cdp/tests/pipe.rs` against a fake Chrome on
   `std::io::pipe()`, with the frame-splitter chunking proptests; the
   `pipe_frame` fuzz target; live Chrome in `tests/pipe_live.rs` (`#[ignore]`).
-- Embedding over a pipe (ADR 0013 phase 2, [`docs/embedding.md`](docs/embedding.md)):
+- Embedding over a pipe ([`docs/embedding.md`](docs/embedding.md)):
   `crates/ultra-instinct-mcp/tests/pipe_mode.rs` (`Server::with_pipe` against
   a fake Chrome: tabs as `Target.*`, `target_gone`, `pipe_closed`),
   `snapshot_refs.rs` (a shifted page refuses `stale_ref` with no press;
   `require_snapshot`), `secrets.rs` (a typed password appears in no output,
   error, or HAR), `host_options.rs` (runtime policy, confirm not sticky,
-  limits, absolute paths, downloads, allow-list), `run_goal.rs`; the code
+  limits, absolute paths, downloads, allow-list), `uploads.rs`
+  (`with_uploads`, canonical paths), `keyboard_policy.rs` (the keyboard
+  tools under the policy), `run_goal.rs`; the code
   table: `crates/ultra-instinct-browser-tools/tests/error_codes.rs`; live
   Chrome: `crates/ultra-instinct-mcp/tests/pipe_live.rs` (`#[ignore]`).
 - Observe protocol cost: `crates/ultra-instinct-browser/tests/call_budget.rs`
@@ -284,8 +284,15 @@ deliberate eval.
   stagnation: `.github/dependabot.yml`.
 - Mutation testing: `.github/workflows/mutants.yml` (nightly + manual) on
   `gate.rs`, `ticket.rs`, `executor.rs`, and `world.rs` (`of_target` /
-  `neighborhood_of` / `nearby`). How to run locally:
-  [`docs/IMPECCABLE-AUDIT.md`](docs/IMPECCABLE-AUDIT.md#mutation-testing).
+  `neighborhood_of` / `nearby`). Equivalent mutants are excluded in
+  `.cargo/mutants.toml`. Run locally (`cargo install cargo-mutants --locked`
+  once): `cargo mutants --no-shuffle -j 3 --timeout 180 -o /tmp/mut-a -f
+  crates/ultra-instinct-guard/src/gate.rs -f crates/ultra-instinct-guard/src/ticket.rs
+  -f crates/ultra-instinct-agent/src/executor.rs`, and `-f
+  crates/ultra-instinct-guard/src/world.rs --re 'of_target|neighborhood_of|nearby'`
+  for the world set. Exit 0 = all caught, 2 = missed (`mutants.out/missed.txt`).
+- Label folding: `crates/ultra-instinct-browser/tests/label_folding.rs` and
+  `crates/ultra-instinct-mcp/tests/label_folding.rs`.
 
 Live Chrome tests stay `#[ignore]`; CI uses CDP replay fixtures. The live
 tests are `crates/ultra-instinct-agent/tests/live_smoke.rs` (the owned loop)
@@ -317,7 +324,7 @@ Tests or proofs updated: <owner tests>
 ## MCP (optional adapter)
 
 `ultra-instinct mcp` is a newline-delimited JSON-RPC server: observe, guard,
-verify. The locate, inspect, act and diff helpers are removed (ADR 0012):
+verify. The locate, inspect, act and diff helpers are removed:
 `observe` carries every region's id, label, parent and state, and `verify`
 compares two snapshots. It owns a 16-entry snapshot ring and up to four live
 CDP sessions; a failed live call drops its session, no retry. Guard finds its
@@ -346,7 +353,8 @@ unsolicited frames. Advanced input: `browser_right_click` /
 press runs; `browser_hover`, `browser_drag` (index→index), `browser_zoom`,
 `browser_send_key`/`browser_hold_key`, `browser_save_as_pdf`,
 `browser_get_dropdown_options`/`browser_select_dropdown`,
-`browser_search`, `browser_form_input` (type alias).
+`browser_search`, `browser_form_input` (type alias). Every tool and `aui` verb, one line
+each: [`docs/tools.md`](docs/tools.md).
 
 `browser_get_state` defaults to text: a title / url line, then one line per
 control, `@eN role "label"  state`; `format:"json"` returns `elements[]`
