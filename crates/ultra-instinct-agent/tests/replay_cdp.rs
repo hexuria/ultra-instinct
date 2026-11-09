@@ -636,3 +636,42 @@ fn check_goals_click_the_control_a_label_names() {
         );
     }
 }
+
+/// ADR 0014: when a folded checkbox's evidence flips between observations
+/// (input `opacity: 0` at rest, shown on focus) its id holds but its box
+/// moves between the label and the input. A ticket from the old box is
+/// stale: the executor discards it, re-observes, and decides again, and the
+/// click lands on the box seen now.
+#[test]
+fn a_folded_checkbox_whose_box_moves_is_stale_then_clicked_where_it_is() {
+    let at_rest = PageSpec::labelled_form(false).style(55, vec![("opacity", "0")]);
+    let shown = PageSpec::labelled_form(false);
+    let checked = PageSpec::labelled_form(true);
+    let script = ScriptBuilder::new()
+        .observe_compact(&at_rest) // predict: the label's box
+        .observe_compact(&shown) // executor revalidate: the box moved
+        .observe_compact(&shown) // predict again
+        .observe_compact(&shown) // executor revalidate
+        .pointer_click()
+        .ready_state("complete")
+        .observe_compact(&checked)
+        .observe_compact(&checked);
+    let mut agent = AgentBuilder::new(session(script), InstinctPolicy::default())
+        .max_steps(3)
+        .build("check Remember me");
+    let outcome = agent.run();
+    assert!(matches!(outcome, AgentOutcome::Done { .. }), "{outcome:?}");
+    let steps = outcome.steps();
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    // The id of the first observation (the label's) is carried over.
+    assert_eq!(steps[0].action_id.as_str(), "CLICK:n104");
+    assert_eq!(steps[0].stale_retries, 1);
+    let transport = agent.browser_mut().transport();
+    let presses = calls_of(transport.logged_calls(), "Input.dispatchMouseEvent");
+    assert_eq!(presses.len(), 3, "one click, after the stale discard");
+    assert_eq!(
+        (presses[1]["x"].as_f64(), presses[1]["y"].as_f64()),
+        (Some(28.5), Some(110.5))
+    );
+    assert_eq!(transport.remaining(), 0);
+}

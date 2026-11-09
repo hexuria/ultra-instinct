@@ -183,3 +183,23 @@ fn a_transparent_ancestor_is_not_a_visible_control() {
     assert_eq!(ids(&manifold), ["n111"]);
     assert_eq!(manifold.get_str("n111").unwrap().role(), Role::Checkbox);
 }
+
+#[test]
+fn a_checkbox_whose_evidence_flips_keeps_its_id() {
+    // opacity: 0 at rest, 1 on focus: the folded region is the input's box
+    // one time and the label's the next. Same role and name, nearby: the
+    // IdentityMap carries the id across the flip in both directions.
+    let at_rest = PageSpec::labelled_form(false).style(55, vec![("opacity", "0")]);
+    let focused = PageSpec::labelled_form(false);
+    let seen = observe(&[focused.clone(), at_rest, focused]);
+    for manifold in &seen {
+        let named: Vec<_> = manifold
+            .regions()
+            .filter(|r| r.label() == "Remember me")
+            .map(|r| (r.id().as_str(), r.role()))
+            .collect();
+        assert_eq!(named, [("n105", Role::Checkbox)]);
+    }
+    assert_eq!(seen[0].get_str("n105").unwrap().rect().width(), 13.0);
+    assert_eq!(seen[1].get_str("n105").unwrap().rect().width(), 120.0);
+}

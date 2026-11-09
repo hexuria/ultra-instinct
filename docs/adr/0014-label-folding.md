@@ -27,15 +27,19 @@ is still the only DOM / accessibility merge; no other layer drops regions.
   HTML labelable element with that id in the same tree scope: document,
   open shadow root, or iframe document; a repeated id names nothing) or else
   its first labelable descendant. A generic element names the controls whose
-  `aria-labelledby` points at it, when it holds no other kept element and
-  takes no click of its own. A text element that names more than one
-  control is not linked.
+  `aria-labelledby` points at it; fusion folds it only when it holds no
+  other node and has no CLICK of its own in its final claims (markup, a
+  listener, or its own pointer cursor). A text element that names more than
+  one control is not linked.
 - **Evidence** (`session::control_sight`, from the compact walk, no extra
   CDP call): the control is *visible* when it is rendered with a box, not
   `opacity: 0`, and the hit test at its center lands on it; *faint* when it
   is rendered but has no box, is transparent, or something else is under its
-  center. No compact record, `display: none`, or a hit test that found
-  nothing (an offscreen center) is no evidence, and nothing folds.
+  center. Transparent means `opacity: 0` on the control or on any element
+  above it with a compact record; when that element also holds the label,
+  neither is visible and there is no evidence. No compact record,
+  `display: none`, or a hit test that found nothing (an offscreen center)
+  is no evidence, and nothing folds.
 - **Forward fold**: the control is visible and offered (enabled in both
   trees, not hidden, a box with area, not fully offscreen). The label's DOM
   and accessibility nodes are dropped. The control keeps its id, box, name,
@@ -54,8 +58,20 @@ is still the only DOM / accessibility merge; no other layer drops regions.
   are never dropped. The only visible clickable box is never dropped.
 
 Region fingerprint rules are unchanged. Identity stays the `IdentityMap`'s:
-a folded field keeps `n{control}`, a custom checkbox is `n{label}`, both
-stable while the page's evidence holds.
+a folded field is fused as `n{control}`, a custom checkbox as `n{label}`.
+
+**Evidence that flips** (an input at `opacity: 0` at rest and shown on
+focus) moves the folded region between the label's box and the input's.
+Its id does not flip: the region keeps its role and name and stays near,
+so the `IdentityMap`'s structural match carries the first id over (role
+and name alone score 0.8; centers within 300 px reach the 0.85
+threshold). Its box does change, so a ticket issued on the old box fails
+`revalidate` as stale: the agent discards the prediction, re-observes, and
+decides again within `max_consecutive_stale` (rule 5), and the click lands
+on the box seen now. We accept that bounded staleness. Fusing the
+forward-folded region under the label's id was rejected: fusion derives
+parents from `n{backend}`, so the control would become its own parent and
+a link inside the label would become the checkbox's child.
 
 ## Consequences
 
@@ -78,8 +94,10 @@ stable while the page's evidence holds.
   repeated id, clickable text, hidden input, shadow scope),
   `tests/label_folding.rs` (each form through a compact replay, the custom
   checkbox's box, role, state and stable ids, transparent and covered
-  checkboxes, a covered text field).
+  checkboxes, a covered text field, a pointer-cursor `aria-labelledby` span,
+  transparent ancestors, an id that holds across flipping evidence).
 - `ultra-instinct-mcp`: `tests/label_folding.rs` (`browser_get_state` lists
   each field once; a custom checkbox is clicked on its label's node).
-- `ultra-instinct-agent`: `tests/replay_cdp.rs::check_goals_click_the_control_a_label_names`.
+- `ultra-instinct-agent`: `tests/replay_cdp.rs::check_goals_click_the_control_a_label_names`,
+  `a_folded_checkbox_whose_box_moves_is_stale_then_clicked_where_it_is`.
 - Fixture: `ultra_instinct_cdp::script::PageSpec::labelled_form`.
