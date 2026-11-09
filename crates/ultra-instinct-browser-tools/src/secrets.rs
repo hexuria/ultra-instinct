@@ -8,7 +8,9 @@
 //! remembered ([`Secrets`]) and replaced by [`MASK`] in every later tool
 //! output and error, the HAR file included, so a page that echoes it (a
 //! console log, a GET form's URL, a confirmation line) does not leak it.
-//! `browser_get_html` drops `value` attributes of text-like inputs.
+//! `browser_get_html` drops `value` attributes of text-like inputs. Pixels
+//! cannot be masked: once a secret is typed, screenshots and PDFs hide the
+//! sensitive fields' values around the capture ([`capture_hidden`]).
 
 use std::collections::VecDeque;
 

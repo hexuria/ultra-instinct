@@ -249,7 +249,7 @@ fn a_screenshot_hides_a_typed_cvv_and_restores_the_field() {
 }
 
 /// A download begun on a second tab reaches that tab's `browser_download`.
-/// (Chrome 14x sends the `Browser.download*` events on the session that set
+/// (Chrome 156 sends the `Browser.download*` events on the session that set
 /// the download behaviour; ones without a `sessionId` are routed by frame,
 /// pinned by the cdp crate's `tests/pipe.rs`.)
 #[test]
