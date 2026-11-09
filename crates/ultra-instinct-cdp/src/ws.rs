@@ -361,13 +361,12 @@ fn call_deadline_error(method: &str) -> CdpError {
 }
 
 /// The timeout a call reports when `deadline` passed without its result.
+/// Its text keeps the transport wording: `CDP transport: no CDP result for
+/// `X.y` within 30 s`.
 pub(crate) fn deadline_error(method: &str, deadline: Duration) -> CdpError {
-    let within = match deadline.subsec_millis() {
-        0 => format!("{} s", deadline.as_secs()),
-        _ => format!("{} ms", deadline.as_millis()),
-    };
-    CdpError::Transport {
-        message: format!("no CDP result for `{method}` within {within}"),
+    CdpError::Timeout {
+        method: method.to_owned(),
+        after: deadline,
     }
 }
 

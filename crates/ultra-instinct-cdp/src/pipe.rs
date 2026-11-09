@@ -382,7 +382,10 @@ impl Wire {
 
 /// A browser-level CDP connection over a pipe pair the caller owns.
 ///
-/// `!Send` / `!Sync`: one thread owns it and every page it makes.
+/// `!Send` / `!Sync`: one thread owns it and every page it makes. A clone is
+/// another handle on the same connection (like a [`PipePage`]), not a second
+/// pipe.
+#[derive(Clone)]
 pub struct PipeBrowser {
     wire: Rc<RefCell<Wire>>,
 }

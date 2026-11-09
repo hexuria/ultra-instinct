@@ -192,9 +192,10 @@ fn an_answer_out_of_order_never_reaches_the_wrong_call() {
         let third = fake.expect("Third.call");
         fake.reply(&third, json!({"who": "third"}));
     });
+    // A timeout is typed (`Timeout`), not a free-text transport error.
     assert!(matches!(
         browser.call("Slow.call", "{}"),
-        Err(CdpError::Transport { .. })
+        Err(CdpError::Timeout { .. })
     ));
     assert_eq!(
         browser.call("Next.call", "{}"),
@@ -391,11 +392,18 @@ fn a_silent_browser_times_out_at_the_deadline_and_the_pipe_stays_usable() {
         fake.reply(&request, json!({"ok": true}));
     });
     let started = Instant::now();
+    let timed_out = browser.call("Never.answered", "{}");
     assert_eq!(
-        browser.call("Never.answered", "{}"),
-        Err(CdpError::Transport {
-            message: "no CDP result for `Never.answered` within 200 ms".into()
+        timed_out,
+        Err(CdpError::Timeout {
+            method: "Never.answered".into(),
+            after: Duration::from_millis(200),
         })
+    );
+    // Same wording as the transport error it used to be.
+    assert_eq!(
+        timed_out.unwrap_err().to_string(),
+        "CDP transport: no CDP result for `Never.answered` within 200 ms"
     );
     let waited = started.elapsed();
     assert!(waited >= Duration::from_millis(200), "{waited:?}");

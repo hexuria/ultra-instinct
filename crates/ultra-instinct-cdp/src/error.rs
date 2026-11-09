@@ -50,6 +50,12 @@ pub enum CdpError {
     TargetGone {
         target_id: String,
     },
+    /// No answer to the call to `method` within `after` (the transport's call
+    /// deadline). A websocket or pipe stays usable: a late answer is dropped.
+    Timeout {
+        method: String,
+        after: std::time::Duration,
+    },
 }
 
 impl fmt::Display for CdpError {
@@ -75,6 +81,16 @@ impl fmt::Display for CdpError {
             Self::PipeClosed { message } => write!(f, "CDP pipe closed: {message}"),
             Self::TargetGone { target_id } => {
                 write!(f, "CDP target {target_id} detached or was destroyed")
+            }
+            Self::Timeout { method, after } => {
+                let within = match after.subsec_millis() {
+                    0 => format!("{} s", after.as_secs()),
+                    _ => format!("{} ms", after.as_millis()),
+                };
+                write!(
+                    f,
+                    "CDP transport: no CDP result for `{method}` within {within}"
+                )
             }
         }
     }
