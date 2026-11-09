@@ -179,9 +179,26 @@ surface.
   retry, then `output_too_large`), 60 s waits, 1 000 000 chars of
   `browser_get_text` / `browser_get_html` (cut inside the page script, so
   a huge page rarely makes a frame near the cap).
-- **Paths.** Screenshot, PDF, state, download and HAR paths must be
-  absolute (`path_not_absolute`); nothing invents a default.
-  `Server::with_downloads(Anywhere | Off | Dir)`.
+- **Paths.** Screenshot, PDF, state, download, HAR and upload paths must
+  be absolute (`path_not_absolute`); nothing invents a default.
+  `Server::with_downloads(Anywhere | Off | Dir)`, and (added after the
+  first cut, which left uploads unchecked) `Server::with_uploads(Anywhere
+  | Off | Dir)`: `uploads_off`, or under `Dir` the canonical file inside
+  the canonical folder (`..` and symlinks cannot escape), else
+  `path_not_allowed`; Chrome gets the canonical path. `Anywhere` stays the
+  default, so a host that does not opt in can still hand a page any file
+  it can read.
+- **Keyboard input with no target** (added after the first cut, which
+  sent it unchecked). `browser_keyboard` and `browser_send_key` /
+  `browser_hold_key` without an index observe first when a policy is set
+  and check the host before any `Input.*` call, by the press rule
+  (`Policy::check_url`, an unreadable URL fails closed). Enter / Space on
+  a focused button-like control (clicks or toggles, takes no text) is a
+  press of it: a confirm label needs the call's `confirm`. Not on a field:
+  a ticketed KEY (`Enter` in a field) needs no confirm either, and a
+  button takes no ticketed KEY. Text with an Enter / Space after a Tab is
+  refused while confirm patterns are set (the focus it lands on is not
+  observed). The agent loop is unchanged.
 - **Allow-list.** `Server::with_tool_allowlist`: other tools refuse
   `tool_not_allowed` and `tools/list` shows only the allowed ones.
   `Server::run_goal` is gated by the name `run_goal` (not a tool, never
@@ -201,7 +218,8 @@ surface.
   (`AgentBuilder::deadline`).
 
 Owners: `crates/ultra-instinct-mcp/tests/pipe_mode.rs`, `snapshot_refs.rs`,
-`secrets.rs`, `host_options.rs`, `run_goal.rs`, the ignored live
+`secrets.rs`, `host_options.rs`, `keyboard_policy.rs`, `uploads.rs`,
+`run_goal.rs`, the ignored live
 `pipe_live.rs`; `crates/ultra-instinct-browser-tools/tests/error_codes.rs`.
 
 ## Consequences

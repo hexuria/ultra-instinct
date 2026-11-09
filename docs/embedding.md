@@ -10,7 +10,7 @@ same `browser_*` tools the MCP server serves.
 
 | Crate | Why | Features |
 |---|---|---|
-| `ultra-instinct-mcp` | `Server`, the `browser_*` tools, `run_goal`, `ToolError`, `ToolLimits`, `Downloads`, `Policy` (re-exported) | none |
+| `ultra-instinct-mcp` | `Server`, the `browser_*` tools, `run_goal`, `ToolError`, `ToolLimits`, `Downloads`, `Uploads`, `Policy` (re-exported) | none |
 | `ultra-instinct-cdp` | `PipeBrowser` / `PipeLimits` (and `PipeBackend` if you build the server with `with_backend`) | none |
 | `ultra-instinct-guard` | `Policy` if you prefer it from its home crate | none |
 
@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 use ultra_instinct_cdp::{PipeBrowser, PipeLimits};
-use ultra_instinct_mcp::{Downloads, Policy, RunLimits, Server, ToolLimits};
+use ultra_instinct_mcp::{Downloads, Policy, RunLimits, Server, ToolLimits, Uploads};
 
 // `reader` is the end Chrome writes (its fd 4), `writer` the end it reads
 // (its fd 3): File, OwnedFd, PipeReader / PipeWriter, ChildStdout / ChildStdin.
@@ -37,6 +37,7 @@ let mut server = Server::with_pipe(browser)
     .require_snapshot(true)
     .with_limits(ToolLimits::default())
     .with_downloads(Downloads::Dir("/srv/box/downloads".into()))
+    .with_uploads(Uploads::Dir("/srv/box/uploads".into()))
     .with_tool_allowlist([
         "browser_navigate", "browser_get_state", "browser_click", "browser_type",
         "browser_select_dropdown", "browser_check", "browser_send_key",
@@ -149,7 +150,25 @@ Leave out, unless you need them and trust the caller:
   sends.
 - `browser_file_upload`, `browser_download`, `browser_save_as_pdf`,
   `browser_screenshot` `path`: touch the host's file system (paths must be
-  absolute; downloads follow `with_downloads`).
+  absolute; downloads follow `with_downloads`, uploads `with_uploads`).
+
+## Files the page may get or write
+
+Every file path a tool takes is absolute or the call refuses
+`path_not_absolute {path}` before any CDP call; nothing resolves a
+relative path against the server's working directory (the `aui` verbs
+absolutize against the shell's before they call).
+
+- `Server::with_downloads(Downloads::Anywhere | Off | Dir(dir))`:
+  `browser_download` writes anywhere (default), refuses `downloads_off`, or
+  only directly in `dir` (else `path_not_allowed {path, dir}`).
+- `Server::with_uploads(Uploads::Anywhere | Off | Dir(dir))`:
+  `browser_file_upload` hands the page any absolute path (default; a page
+  can be given any file the host process can read), refuses `uploads_off`,
+  or only files under `dir`. Under `Dir` the file and the folder are both
+  canonicalized first (`..` and symlinks resolved), the file must be a
+  regular file inside the folder, else `path_not_allowed {path, dir}`, and
+  Chrome gets the canonical path. A missing file refuses the same way.
 
 ## Secrets
 
@@ -190,7 +209,7 @@ Whether typed text is a secret is decided on the page as the input lands:
 `browser_type` checks the field on the executor's own fresh observation as
 well as the one the caller saw (a text box that became a password input in
 between is a secret), and `browser_keyboard` reads the focus again when a
-press ran since the last observation. When neither can tell, the text is
+press ran since the last observation (on every call when a policy is set). When neither can tell, the text is
 treated as a secret.
 
 `Server::run_goal` remembers every TYPE / SELECT payload before it is
@@ -243,8 +262,9 @@ codes are only ever appended.
 | `frame_too_large` | `limit` | this call's reply went past `max_frame_bytes`; it was skipped and the pipe stays usable |
 | `tool_not_allowed` | `tool` | not on the allow-list |
 | `path_not_absolute` | `path` | file paths must be absolute |
-| `path_not_allowed` | `path`, `dir` | `Downloads::Dir` forces another folder |
+| `path_not_allowed` | `path`, `dir` | `Downloads::Dir` / `Uploads::Dir` keeps files in another folder |
 | `downloads_off` | | `Downloads::Off` |
+| `uploads_off` | | `Uploads::Off` |
 | `output_too_large` | `limit`, `bytes` | a screenshot over `max_screenshot_bytes` even as JPEG |
 | `secrets_full` | `limit` | the server already masks 64 typed secrets; the new one was not typed |
 | `secret_on_screen` | `message` | a screenshot / PDF could not hide the page's sensitive fields; nothing was captured |
@@ -272,3 +292,24 @@ observe / guard / verify and the legacy executors.
 `Server::set_policy(Policy)` replaces the policy between calls; sessions
 stay open. A press's `confirm` argument lifts a confirm for that call only:
 the next call is refused again.
+
+Input with no target (`browser_keyboard`, and `browser_send_key` /
+`browser_hold_key` without an `index`) goes to whatever has focus, so it
+runs under the policy like a press. With a policy set, the call observes
+the page first and, before any `Input.*` call:
+
+- checks the page's host exactly as a press does: off the allow-list is
+  `domain_not_allowed {host}`, an unreadable URL while the list is set
+  fails closed (`ticket_invalid`, `domain-not-allowed`, as for a press), a
+  URL with no host (`about:blank`, `data:`) passes;
+- treats Enter or Space on a focused button-like control (it can be
+  clicked or toggled and takes no text) as a press of that control: a
+  label matching a confirm pattern refuses `needs_confirm {label}` unless
+  this call's `confirm` names it. Enter or Space in a text field is text,
+  not a press (as `browser_type` and a ticketed KEY are not), and other
+  keys press nothing. With confirm patterns set, an unreadable focus
+  refuses an Enter / Space, and `browser_keyboard` text with an Enter /
+  Space after a Tab refuses `invalid_arguments` (the Tab moves the focus
+  to a control not observed yet): send it in its own call.
+
+With no policy set these tools send their input as before.
