@@ -1022,7 +1022,8 @@ fn drag(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolEr
     let outcome = (|| {
         let fresh = session.observe().map_err(browser_err)?.clone();
         let (manifold, from_id) = bound::resolve(server, &key, snapshot, &fresh, from)?;
-        let to_id = at_index(&interactive_index(&manifold), to)?;
+        // The drop target reads the same shown prefix as the source.
+        let (_, to_id) = bound::resolve(server, &key, snapshot, &fresh, to)?;
         let focused = session.page().and_then(|p| p.focused().cloned());
         let url = session.page().and_then(|p| p.url().map(str::to_owned));
         // Drag is a mutation: the source goes through the same

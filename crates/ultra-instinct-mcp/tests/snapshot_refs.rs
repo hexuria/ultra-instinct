@@ -329,3 +329,39 @@ fn a_snapshot_press_past_the_shown_elements_is_unknown() {
     );
     assert!(presses(&log).is_empty(), "{:?}", presses(&log));
 }
+
+/// A drag's drop target reads the same shown prefix as its source: with
+/// one element shown, `to_index: 2` names nothing the caller saw and
+/// refuses `unknown_ref` with nothing pressed.
+#[test]
+fn a_drag_onto_an_element_past_the_shown_ones_is_unknown() {
+    let (server, log) = replay(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&page()),
+    );
+    let mut server = server.with_limits(ultra_instinct_mcp::ToolLimits {
+        max_elements: 1,
+        ..ultra_instinct_mcp::ToolLimits::default()
+    });
+    let state = call(
+        &mut server,
+        "browser_get_state",
+        json!({"cdp": CDP, "format": "json"}),
+    );
+    assert_eq!(state["dropped_elements"], 1, "{state}");
+    let err = server
+        .call_tool(
+            "browser_drag",
+            &json!({"cdp": CDP, "from_index": 1, "to_index": 2, "snapshot": snapshot_of(&state)}),
+        )
+        .unwrap_err();
+    assert_eq!(
+        err,
+        ToolError::UnknownRef {
+            index: 2,
+            indexed: 1
+        }
+    );
+    assert!(presses(&log).is_empty(), "{:?}", log.borrow());
+}
