@@ -18,3 +18,7 @@ proptest-regressions/
 /.stow/
 /history/
 /.stow-README.md
+
+# bench/report.py and run.py output; results live in the private stow repo
+/RESULTS.md
+/bench/results/
