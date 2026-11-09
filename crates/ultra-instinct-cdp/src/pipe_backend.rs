@@ -7,7 +7,9 @@
 //! browser, its pages and the server (rule 10: `Rc`, no locks, no reader
 //! thread).
 
-use serde_json::json;
+use std::collections::BTreeSet;
+
+use serde_json::{json, Value};
 
 use crate::{CdpError, CdpEvent, CdpTransport, PageTab, PipeBrowser, PipePage, TargetBackend};
 
@@ -95,6 +97,8 @@ impl TargetBackend for PipeBackend {
         Ok(Box::new(PipeTab {
             page,
             browser: self.browser.clone(),
+            frames: BTreeSet::new(),
+            downloads: BTreeSet::new(),
         }))
     }
 
@@ -103,12 +107,49 @@ impl TargetBackend for PipeBackend {
     }
 }
 
-/// A tab's transport: its page session, plus browser-level download events
-/// (Chrome may send `Browser.download*` without a `sessionId`), so
-/// `browser_download` sees them on the tab that pressed.
+/// Frames and downloads one tab tracks to claim its browser-level events.
+const MAX_TRACKED: usize = 256;
+
+/// A tab's transport: its page session, plus the browser-level
+/// `Browser.download*` events (Chrome sends them without a `sessionId`) of
+/// downloads this tab began, so `browser_download` sees them on the tab that
+/// pressed, whichever tab drains first. A `downloadWillBegin` is this tab's
+/// when its `frameId` is the tab's main frame (Chrome gives a page target's
+/// main frame its target id) or a frame the page's `Page.frameAttached` /
+/// `Page.frameNavigated` events named; a `downloadProgress` is when its
+/// `guid` began here. Any other browser-level event stays on the browser's
+/// queue for its own consumer.
 struct PipeTab {
     page: PipePage,
     browser: PipeBrowser,
+    /// Child frames this tab's page reported.
+    frames: BTreeSet<String>,
+    /// Guids of downloads begun in this tab, until they finish.
+    downloads: BTreeSet<String>,
+}
+
+impl PipeTab {
+    fn track_frames(&mut self, events: &[CdpEvent]) {
+        for event in events {
+            let params = &event.params;
+            let frame = match event.method.as_str() {
+                "Page.frameAttached" => params.get("frameId"),
+                "Page.frameNavigated" => params.get("frame").and_then(|f| f.get("id")),
+                "Page.frameDetached" => {
+                    if let Some(id) = params.get("frameId").and_then(Value::as_str) {
+                        self.frames.remove(id);
+                    }
+                    None
+                }
+                _ => None,
+            };
+            if let Some(id) = frame.and_then(Value::as_str) {
+                if self.frames.len() < MAX_TRACKED && id != self.page.target_id() {
+                    self.frames.insert(id.to_owned());
+                }
+            }
+        }
+    }
 }
 
 impl CdpTransport for PipeTab {
@@ -118,12 +159,32 @@ impl CdpTransport for PipeTab {
 
     fn drain_events(&mut self) -> Vec<CdpEvent> {
         let mut events = self.page.drain_events();
-        events.extend(
-            self.browser
-                .drain_events()
-                .into_iter()
-                .filter(|event| event.method.starts_with("Browser.download")),
-        );
+        self.track_frames(&events);
+        let main = self.page.target_id();
+        let (frames, downloads) = (&self.frames, &mut self.downloads);
+        events.extend(self.browser.take_events_where(|event| {
+            if !event.method.starts_with("Browser.download") {
+                return false;
+            }
+            let params = &event.params;
+            let guid = params.get("guid").and_then(Value::as_str);
+            let ours = match params.get("frameId").and_then(Value::as_str) {
+                Some(frame) => frame == main || frames.contains(frame),
+                None => guid.is_some_and(|g| downloads.contains(g)),
+            };
+            if let (true, Some(guid)) = (ours, guid) {
+                match params.get("state").and_then(Value::as_str) {
+                    Some("completed" | "canceled") => {
+                        downloads.remove(guid);
+                    }
+                    _ if downloads.len() < MAX_TRACKED => {
+                        downloads.insert(guid.to_owned());
+                    }
+                    _ => {}
+                }
+            }
+            ours
+        }));
         events
     }
 }

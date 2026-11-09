@@ -799,3 +799,55 @@ fn dropping_a_page_while_chrome_is_not_reading_returns_at_once() {
     assert!(dropped_in < Duration::from_millis(500), "{dropped_in:?}");
     assert_eq!(next, Ok(r#"{"product":"Fake/1"}"#.into()));
 }
+
+/// Browser-level `Browser.download*` events (no `sessionId`) go to the tab
+/// whose frame began the download, whichever tab drains first; a download
+/// of a frame no tab owns, and every other browser-level event, stays on
+/// the browser's queue.
+#[test]
+fn browser_level_download_events_reach_the_tab_that_began_them() {
+    use ultra_instinct_cdp::{PipeBackend, TargetBackend};
+
+    let (browser, fake) = fake(|fake| {
+        let request = fake.expect("Target.setDiscoverTargets");
+        fake.reply(&request, json!({}));
+        for session in ["SA", "SB"] {
+            fake.attach(session);
+            let request = fake.expect("Emulation.setFocusEmulationEnabled");
+            fake.reply(&request, json!({}));
+        }
+        let request = fake.expect("Runtime.evaluate");
+        assert_eq!(request["sessionId"], "SA");
+        fake.send(json!({"method": "Browser.downloadWillBegin",
+            "params": {"frameId": "TB", "guid": "g-b", "url": "https://x/r.pdf", "suggestedFilename": "r.pdf"}}));
+        fake.send(json!({"method": "Target.targetInfoChanged", "params": {}}));
+        fake.send(json!({"method": "Browser.downloadWillBegin",
+            "params": {"frameId": "F-unknown", "guid": "g-x", "url": "https://x/y", "suggestedFilename": "y"}}));
+        fake.send(json!({"method": "Browser.downloadProgress",
+            "params": {"guid": "g-b", "state": "completed", "receivedBytes": 5, "totalBytes": 5}}));
+        fake.reply(&request, json!({"result": {"value": 1}}));
+        while fake.recv().is_some() {}
+    });
+    let mut backend = PipeBackend::new(browser.clone());
+    let mut a = backend.connect("pipe:TA").expect("tab A");
+    let mut b = backend.connect("pipe:TB").expect("tab B");
+    a.call("Runtime.evaluate", r#"{"expression":"1"}"#).expect("A's call");
+    let methods = |events: Vec<ultra_instinct_cdp::CdpEvent>| {
+        events.into_iter().map(|e| e.method).collect::<Vec<_>>()
+    };
+    assert!(a.drain_events().is_empty(), "A drained first; nothing is A's");
+    let ours = b.drain_events();
+    assert_eq!(
+        methods(ours.clone()),
+        ["Browser.downloadWillBegin", "Browser.downloadProgress"]
+    );
+    assert_eq!(ours[0].params["guid"], "g-b");
+    assert_eq!(ours[1].params["state"], "completed");
+    assert_eq!(
+        methods(browser.drain_events()),
+        ["Target.targetInfoChanged", "Browser.downloadWillBegin"],
+        "the unowned download and other browser events stay queued"
+    );
+    drop((a, b, backend, browser));
+    fake.join().unwrap();
+}

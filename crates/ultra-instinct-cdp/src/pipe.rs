@@ -614,6 +614,15 @@ impl PipeBrowser {
         self.wire.borrow_mut().browser_events.drain(..).collect()
     }
 
+    /// Take the browser-level events `take` picks, in order; every other
+    /// one stays queued (still bounded) for another consumer.
+    pub fn take_events_where(&self, mut take: impl FnMut(&CdpEvent) -> bool) -> Vec<CdpEvent> {
+        let mut wire = self.wire.borrow_mut();
+        let (taken, kept) = wire.browser_events.drain(..).partition(|event| take(event));
+        wire.browser_events = kept;
+        taken.into()
+    }
+
     /// Attach to `target_id` (`Target.attachToTarget`, `flatten: true`).
     pub fn page(&self, target_id: &str) -> Result<PipePage, CdpError> {
         let body = self.call(

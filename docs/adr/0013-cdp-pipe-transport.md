@@ -97,8 +97,16 @@ surface.
   the default; `PipeBackend` drives `Target.*` on a `PipeBrowser` and
   attaches flat `PipePage`s keyed `pipe:<targetId>` (focus emulation on, as
   the websocket connect does). It turns on `Target.setDiscoverTargets` once,
-  so `Target.targetDestroyed` reaches pages, and hands browser-level
-  `Browser.download*` events to the tab that drains. `Server::with_pipe`
+  so `Target.targetDestroyed` reaches pages. Browser-level
+  `Browser.download*` events (no `sessionId`) go to the tab that began the
+  download, whichever tab drains first (revised; the first draft gave them
+  to the first tab that drained and dropped every other browser-level
+  event): a `downloadWillBegin` is a tab's when its `frameId` is the tab's
+  main frame (a page target's main frame id is its target id) or a frame
+  its `Page.frameAttached` / `frameNavigated` events named; a
+  `downloadProgress` follows its `guid`. A download no tab owns, and every
+  other browser-level event, stays on the browser's bounded queue
+  (`PipeBrowser::drain_events` / `take_events_where`). `Server::with_pipe`
   (`with_backend` for others): `cdp` is ignored in pipe mode (an internal
   re-call passes it, so refusing it would break those), the first call binds
   the first page, and observe / guard / verify read the bound tab.
