@@ -1,4 +1,4 @@
-//! Belt exams (issue #49, work item 6): how proven a learned pairing is.
+//! Belt exams: how proven a learned pairing is.
 //!
 //! A pairing (context, label) earns belts only on verified wins and is
 //! demoted by losses — the grade is a pure function of the trust record,

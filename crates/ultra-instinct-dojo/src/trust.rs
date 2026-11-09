@@ -1,7 +1,7 @@
 //! Trust → evidence: turn a situation+label win/loss record into the
 //! capped integer bonus `ultra-instinct-policy` applies inside Instinct's scoring.
 //!
-//! The formula is deliberately small and inspectable (issue #49, item 4):
+//! The formula is deliberately small and inspectable:
 //!
 //! ```text
 //! raw    = clamp((wins - losses) * 10, -75, +75)
