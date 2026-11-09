@@ -323,14 +323,29 @@ the page first and, before any `Input.*` call:
   `domain_not_allowed {host}`, an unreadable URL while the list is set
   fails closed (`ticket_invalid`, `domain-not-allowed`, as for a press), a
   URL with no host (`about:blank`, `data:`) passes;
-- treats Enter or Space on a focused button-like control (it can be
-  clicked or toggled and takes no text) as a press of that control: a
-  label matching a confirm pattern refuses `needs_confirm {label}` unless
-  this call's `confirm` names it. Enter or Space in a text field is text,
-  not a press (as `browser_type` and a ticketed KEY are not), and other
-  keys press nothing. With confirm patterns set, an unreadable focus
-  refuses an Enter / Space, and `browser_keyboard` text with an Enter /
-  Space after a Tab refuses `invalid_arguments` (the Tab moves the focus
-  to a control not observed yet): send it in its own call.
+- runs the key on the focused control through the guard's press rule
+  (below), as a ticketed KEY on that control would be. With confirm
+  patterns set, an unreadable focus refuses an Enter / Space, and
+  `browser_keyboard` text with an Enter / Space after a Tab refuses
+  `invalid_arguments` (the Tab moves the focus to a control not observed
+  yet): send it in its own call.
+
+Keys are presses for the confirm rule, on every path (the agent loop and
+`Server::run_goal`, a ticketed `browser_send_key` with an index, and the
+keyboard tools above), checked by the guard on the observation the input
+lands on:
+
+- Enter, Space or NumpadEnter (with any modifiers) on a button-like
+  control (it can be clicked or toggled and takes no text) presses it: its
+  label is checked.
+- Enter in a field (or another form control) submits its form, which
+  presses the form's first submit button: that button's label is checked,
+  and `needs_confirm` names it (`label: "Pay $18"`, though the target was
+  the field). Observe records the form evidence; a field in no form, a
+  form with no submit button, a text area and a select submit nothing.
+  When observe could not read it, any confirm pattern refuses with the
+  label `(form submit)`; confirm that label to send it.
+- Space in a field is text, and other keys (Tab, arrows, Escape) press
+  nothing.
 
 With no policy set these tools send their input as before.

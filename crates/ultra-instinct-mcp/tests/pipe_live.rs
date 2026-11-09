@@ -278,3 +278,56 @@ fn a_download_on_a_second_tab_reaches_that_tab() {
     let _ = child.wait();
     let _ = std::fs::remove_dir_all(&profile);
 }
+
+/// Enter in a field submits its form: observe records the form's submit
+/// button ("Pay $18") and the guard refuses the ticketed Enter until the
+/// call confirms that label; a field in no form takes Enter as before.
+#[test]
+#[ignore = "needs a local Chrome"]
+fn enter_in_a_form_that_submits_with_pay_needs_confirm() {
+    let (mut child, profile, browser) = launch();
+    let mut server = Server::with_pipe(browser)
+        .with_policy(ultra_instinct_mcp::Policy::from_lists("", "Pay*").unwrap());
+    call(
+        &mut server,
+        "browser_navigate",
+        json!({"url": "data:text/html,<title>pay</title><form onsubmit=\"document.title='paid';return false\">\
+<label>Promo code <input id=c></label><button>Pay $18</button></form>\
+<label>Search <input id=s></label>"}),
+    );
+    let state = call(&mut server, "browser_get_state", json!({"format": "json"}));
+    let enter = |index: u64| json!({"index": index, "key": "Enter", "snapshot": state["snapshot"]});
+    let err = server
+        .call_tool("browser_send_key", &enter(index_of(&state, "Promo code")))
+        .expect_err("needs confirm");
+    assert_eq!(
+        err,
+        ToolError::NeedsConfirm {
+            label: "Pay $18".into()
+        }
+    );
+    call(
+        &mut server,
+        "browser_send_key",
+        enter(index_of(&state, "Search")),
+    );
+    let title = call(
+        &mut server,
+        "browser_exec",
+        json!({"expression": "document.title"}),
+    );
+    assert_eq!(title["result"], "pay", "nothing submitted: {title}");
+    let mut confirmed = enter(index_of(&state, "Promo code"));
+    confirmed["confirm"] = json!("Pay $18");
+    call(&mut server, "browser_send_key", confirmed);
+    let title = call(
+        &mut server,
+        "browser_exec",
+        json!({"expression": "document.title"}),
+    );
+    assert_eq!(title["result"], "paid", "{title}");
+    println!("pipe live: Enter in the Pay form needed its confirm");
+    drop(server);
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&profile);
+}

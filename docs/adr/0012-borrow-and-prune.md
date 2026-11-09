@@ -55,7 +55,10 @@ second way to press.
    (`HostPattern`) and confirm-before-press labels (`LabelGlob`), checked
    after `revalidate` and the hard gate, before consume. `run
    --allow-domain / --confirm-press / --confirm`, the MCP env vars and the
-   `confirm` argument set it. A refusal is BLOCKED, not stale.
+   `confirm` argument set it. A refusal is BLOCKED, not stale. Keys are
+   presses too (added with ADR 0013's follow-ups): an Enter / Space KEY on
+   a button-like target checks its label, and Enter in a form control checks
+   the label of the button its form submits with (`Policy::press_label`).
 4. **Wait-for.** `browser_wait` / `aui wait` with `text`, `url`, `control`,
    `gone` (no control has that exact label) or `load` (`document.readyState`;
    never network idle), polling a fresh observe about every 200 ms.

@@ -63,7 +63,14 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    after `revalidate` and the hard gate, before mark-consumed;
 >    `execute_ticketed` runs it with an empty policy. The agent also checks it
 >    after the gate; `consume_ticket_once_checked` runs it after `revalidate`,
->    before consume. An empty policy allows everything.
+>    before consume. An empty policy allows everything. A confirm applies to
+>    a press (`Policy::press_label`): the CLICK family on the target, an
+>    activating KEY (Enter / Space / NumpadEnter, any modifiers) on a
+>    button-like target, and Enter in a form control, which presses its
+>    form's implicit-submission button (observe's `ElementState::form`
+>    evidence; unread → `FORM_SUBMIT_UNKNOWN` refuses while any pattern is
+>    set). Space in a field and other keys press nothing. One rule for the
+>    agent, the executor's fresh re-check and the host tools.
 > 5. **Stale ≠ spent.** `WorldChanged` / `TargetChanged` / `TargetGone` are
 >    stale → discard the prediction, re-observe, decide again (bounded by
 >    `max_consecutive_stale`). `TicketConsumed` / `TicketMismatch` / gate
@@ -213,7 +220,9 @@ deliberate eval.
 - User policy (allowed domains, confirm-before-press): guard
   `tests/policy_props.rs`; the `executor.rs` policy tests; the
   `tests/mock_loop.rs` policy tests (`needs_confirm_ends_blocked_without_pressing`,
-  `domain_off_the_allowlist_ends_blocked`).
+  `domain_off_the_allowlist_ends_blocked`,
+  `enter_in_a_field_whose_form_submits_with_a_confirm_label_blocks_unpressed`);
+  the guard's `activating_keys_are_presses_of_the_target_or_its_form`.
 - Shell verbs and the session daemon: `verbs.rs` / `batch.rs` unit tests and
   the `daemon.rs` socket tests (round trip, spawn / stale socket, idle exit,
   `--idle`, failed launch, session list). `browser_*` families over CDP
@@ -355,8 +364,9 @@ replaces the policy between calls). Ticketed inputs return `ticket`;
 ticketed KEY. Input with no target (`browser_keyboard`, `browser_send_key`
 / `browser_hold_key` without `index`) checks the page host on an
 observation taken now, before any `Input.*` call, the way presses do;
-Enter / Space on a focused button-like control whose label needs a
-confirm is that press and needs `confirm`. `browser_file_upload` paths
+the focused region then goes through the guard's press rule (Enter /
+Space on a button-like control, Enter in a field whose form submits with
+a confirm label, needs `confirm`), as a ticketed KEY does. `browser_file_upload` paths
 must be absolute; `Server::with_uploads(Anywhere | Off | Dir)` limits
 which files (`Dir`: canonical path inside the canonical folder).
 

@@ -196,13 +196,31 @@ surface.
   sent it unchecked). `browser_keyboard` and `browser_send_key` /
   `browser_hold_key` without an index observe first when a policy is set
   and check the host before any `Input.*` call, by the press rule
-  (`Policy::check_url`, an unreadable URL fails closed). Enter / Space on
-  a focused button-like control (clicks or toggles, takes no text) is a
-  press of it: a confirm label needs the call's `confirm`. Not on a field:
-  a ticketed KEY (`Enter` in a field) needs no confirm either, and a
-  button takes no ticketed KEY. Text with an Enter / Space after a Tab is
-  refused while confirm patterns are set (the focus it lands on is not
-  observed). The agent loop is unchanged.
+  (`Policy::check_url`, an unreadable URL fails closed), then run the key
+  on the focused region through the guard's press rule below. Text with an
+  Enter / Space after a Tab is refused while confirm patterns are set (the
+  focus it lands on is not observed).
+- **Keys are presses** (guard policy + world evidence; the second
+  follow-up, replacing a first cut that checked only the keyboard tools).
+  `Policy::check` takes the KEY's key, and `Policy::press_label` names
+  what a confirm is checked against: the CLICK family on the target; an
+  Enter / Space / NumpadEnter KEY (any modifiers) on a button-like target
+  (clicks, toggles or takes points; no text / select); Enter in another
+  form control: its form's implicit-submission button. Observe records
+  that as evidence (`ElementState::form`, not in the fingerprint): inside
+  the existing compact walk, no new CDP call, the first submit button in
+  tree order (`button` / `input type=submit|image`) of `el.form`, by label;
+  a text area or select submits nothing. No form or no submit button:
+  nothing to confirm. Not read (the per-node fallback, a replayed or
+  fixture page) while confirm patterns are set: `needs_confirm` with the
+  label `(form submit)` (`FORM_SUBMIT_UNKNOWN`), lifted only by confirming
+  that label. Space in a field and other keys press nothing. One rule for
+  the agent's pre-ticket check (a refusal ends `Blocked` with the button's
+  label), `execute_ticketed_with`'s fresh re-check, the host's
+  `consume_ticket_once_checked` and the `browser_*` tools; no second gate,
+  no score. Owners: guard `policy.rs` unit tests, `executor.rs`
+  `enter_whose_fresh_form_submits_a_confirm_label_is_refused_unconsumed`,
+  `mock_loop.rs`, mcp `keyboard_policy.rs`, the live `pipe_live.rs`.
 - **Allow-list.** `Server::with_tool_allowlist`: other tools refuse
   `tool_not_allowed` and `tools/list` shows only the allowed ones.
   `Server::run_goal` is gated by the name `run_goal` (not a tool, never
