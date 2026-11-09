@@ -281,7 +281,7 @@ fn a_download_on_a_second_tab_reaches_that_tab() {
 
 /// Enter in a field submits its form: observe records the form's submit
 /// button ("Pay $18") and the guard refuses the ticketed Enter until the
-/// call confirms that label; a field in no form takes Enter as before.
+/// call confirms that label; a field in no form takes Enter with no confirm.
 #[test]
 #[ignore = "needs a local Chrome"]
 fn enter_in_a_form_that_submits_with_pay_needs_confirm() {

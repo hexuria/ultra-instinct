@@ -13,7 +13,7 @@
 //! returns a [`ultra_instinct_browser::ReplayTransport`], so the live-session
 //! paths (reuse, stale observation, eviction, a dropped session) run without
 //! Chrome. [`Server::with_pipe`] drives a caller-owned `--remote-debugging-pipe`
-//! instead (`crate::PipeBackend`, ADR 0013): no HTTP endpoint at all.
+//! instead (`crate::PipeBackend`): no HTTP endpoint at all.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
@@ -319,7 +319,7 @@ impl Server {
     }
 
     /// A server that drives the browser at the other end of a caller-owned
-    /// `--remote-debugging-pipe` (ADR 0013), under an empty policy. No HTTP
+    /// `--remote-debugging-pipe`, under an empty policy. No HTTP
     /// endpoint is used: tabs are `Target.*` calls, sessions are flat
     /// [`ultra_instinct_cdp::PipePage`]s, and every call's `cdp` argument is
     /// ignored (session keys are `pipe:<targetId>`). The first call binds the
@@ -448,8 +448,8 @@ impl Server {
 
 /// The [`BrowserHost`] the `browser_*` tools run on: a crate-private view of
 /// a [`Server`]. `Server` itself does not implement the trait, so its ledger,
-/// event and session mutators stay out of the public API (one-shot ledger,
-/// anti-drift #4).
+/// event and session mutators stay out of the public API: no caller can
+/// reset or swap a one-shot ticket ledger.
 pub(crate) struct Host<'a>(pub(crate) &'a mut Server);
 
 impl BrowserHost for Host<'_> {

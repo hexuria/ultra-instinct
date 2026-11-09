@@ -1,4 +1,4 @@
-//! agent-browser ports over the replay harness: dialogs, forward / reload,
+//! agent-browser-style tools over the replay harness: dialogs, forward / reload,
 //! check, focus, keyboard, get / is / count, annotated screenshots, and the
 //! `max_chars` output limit. Each test pins the CDP calls a tool emits.
 

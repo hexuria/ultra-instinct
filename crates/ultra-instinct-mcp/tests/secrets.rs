@@ -404,7 +404,7 @@ fn an_exec_result_under_a_data_key_is_masked() {
 }
 
 /// A password stays masked however many other secrets are typed after it
-/// (the list used to keep the newest 32).
+/// (only plain entries are capped).
 #[test]
 fn a_typed_password_is_never_evicted_by_later_typing() {
     let then = |mut s: ScriptBuilder| {

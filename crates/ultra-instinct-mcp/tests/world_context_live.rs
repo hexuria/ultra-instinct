@@ -200,8 +200,8 @@ fn live_twin_suspend_within_the_focused_row_picks_beta() {
         other => panic!("expected escalate ambiguous without context, got {other:?}"),
     }
 
-    // The host scopes by the focused field's row (`near` went with the
-    // matcher): the innermost ancestor of focus that holds a Suspend.
+    // The host scopes by the focused field's row (`near` is not supported):
+    // the innermost ancestor of focus that holds a Suspend.
     let row = manifold
         .ancestors(&focused)
         .into_iter()

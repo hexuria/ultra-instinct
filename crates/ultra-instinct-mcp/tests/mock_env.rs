@@ -1,8 +1,8 @@
-//! Mock environment: firewall flows against a scripted Chrome.
+//! Mock environment: guard flows against a scripted Chrome.
 //!
 //! Each test drives one [`Server`] through `call_tool` over a `cdp` endpoint.
 //! A connector hands the server a [`ReplayTransport`] instead of a websocket.
-//! Ultra-Instinct never clicks: these tests assert `guard` decisions and that no
+//! Guard never clicks: these tests assert `guard` decisions and that no
 //! press CDP methods are logged.
 
 use std::cell::RefCell;

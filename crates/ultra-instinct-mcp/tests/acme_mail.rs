@@ -1,4 +1,5 @@
-//! Acme Mail replica: the old live drive's t7 and t8 against a scripted Chrome.
+//! Acme Mail replica: guard cases t7 and t8 from a live drive, against a
+//! scripted Chrome.
 //!
 //! The page is a [`ScriptBuilder`] replica of the Acme Mail site at
 //! 1280x800 with the "Q3 launch checklist" thread open, as the live drive saw
@@ -7,10 +8,6 @@
 //! (`image`) and unnamed or named containers (`group`, `toolbar`, `article`,
 //! `region`, `dialog`) that extract as `generic`. Rectangles follow the live
 //! layout. It is not a capture and not a model of Chrome.
-//!
-//! In the live run, "Send" asked as a link tied 63 candidates at 0.50 under
-//! the removed matcher and an unnamed AX node won on region id; the twin Send
-//! refused as ambiguous. Guard now matches the exact label instead.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -203,8 +200,8 @@ fn guard_with_compose_open_blocks_nothing_outside_the_compose_box() {
     assert_eq!(presses(&log), 0);
 }
 
-/// t7: "Send" asked as a link. No link is named Send. The removed matcher
-/// tied 63 near-misses; the exact-label guard has no match and refuses.
+/// t7: "Send" asked as a link. No link is named Send, so the exact-label
+/// guard has no match and refuses.
 #[test]
 fn t7_send_as_a_link_is_a_missing_target_and_does_not_click() {
     let page = thread_page(false);

@@ -993,7 +993,7 @@ fn policy(allow: &str, confirm: &str) -> ultra_instinct_guard::Policy {
 }
 
 /// `browser_navigate` checks the URL against the allowlist before any CDP
-/// call; an allowed host navigates as before.
+/// call; an allowed host navigates.
 #[test]
 fn navigate_off_the_allowlist_is_refused_before_cdp() {
     let (server_, log) =
@@ -1003,8 +1003,8 @@ fn navigate_off_the_allowlist_is_refused_before_cdp() {
         let err = server
             .call_tool("browser_navigate", &json!({"cdp": CDP, "url": url}))
             .expect_err("off the allowlist");
-        // Typed now (`domain_not_allowed`); the wire variant and message
-        // are what they were.
+        // Typed (`domain_not_allowed`); the wire variant and message stay
+        // stable.
         assert!(
             matches!(&err, ToolError::DomainNotAllowed { .. }),
             "{url}: {err:?}"

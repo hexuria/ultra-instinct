@@ -272,8 +272,8 @@ fn within_resolves_twin_suspend_buttons() {
     assert_eq!(bare["decision"], "escalate", "{bare}");
     assert_eq!(bare["reason"], "ambiguous");
 
-    // The focused field's row scopes the twin; `near: "focus"` went with the
-    // matcher, so the host names that row with `within`.
+    // The focused field's row scopes the twin; `near: "focus"` is not
+    // supported, so the host names that row with `within`.
     let focused_row = call(
         &mut server,
         "guard",
@@ -453,8 +453,7 @@ fn seen_snapshot_escalates_when_occlusion_appears() {
         page
     };
     let covered = clear.clone().cover(100, 200);
-    // observe clear, then re-observe covered twice for two guards... actually:
-    // flow: observe clear -> snapshot; observe covered -> guard with seen.
+    // Flow: observe clear -> snapshot; observe covered -> guard with seen.
     let script = ScriptBuilder::new()
         .observe(&clear)
         .observe(&covered)
@@ -479,8 +478,7 @@ fn seen_snapshot_escalates_when_occlusion_appears() {
 }
 
 /// A `browser_get_state` snapshot (either format) is what the host saw:
-/// guard's `seen_snapshot` takes it for the same tab, as it did when
-/// get_state recorded under `cdp:<endpoint>`.
+/// guard's `seen_snapshot` takes it for the same tab.
 #[test]
 fn guard_takes_a_get_state_snapshot_of_the_same_tab_as_seen() {
     for format in ["text", "json"] {

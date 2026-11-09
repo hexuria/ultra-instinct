@@ -428,7 +428,7 @@ fn a_click_that_opens_an_alert_carries_its_type_and_message() {
 
 /// `browser_download` presses through the `browser_tools` path directly:
 /// an `alert()` its press opens still answers `dialog_open` with the
-/// dialog's type and message (they used to come back empty).
+/// dialog's type and message, not empty fields.
 #[test]
 fn a_download_press_that_opens_an_alert_carries_its_type_and_message() {
     let mut setup = Setup::page(
