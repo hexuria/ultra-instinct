@@ -43,6 +43,11 @@ pub struct ToolLimits {
     pub max_screenshot_bytes: usize,
     /// Longest `browser_wait`, whatever the argument says. Default 60 s.
     pub max_wait: Duration,
+    /// Longest `browser_get_text` / `browser_get_html` text, in UTF-16
+    /// units. Cut inside the page script, so the rest never crosses the
+    /// wire; the text ends `… [truncated N chars]` with `truncated: true`.
+    /// Default 1 000 000.
+    pub max_text_chars: usize,
 }
 
 impl Default for ToolLimits {
@@ -52,6 +57,7 @@ impl Default for ToolLimits {
             max_elements: 1_000,
             max_screenshot_bytes: 16 << 20,
             max_wait: Duration::from_secs(60),
+            max_text_chars: 1_000_000,
         }
     }
 }

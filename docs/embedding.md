@@ -166,6 +166,11 @@ values.
 | `max_elements` | 1 000 | the element list stops there; `dropped_elements: N`, `truncated: true` |
 | `max_screenshot_bytes` | 16 MiB (decoded) | taken once more as JPEG (quality 70); still over: `output_too_large` |
 | `max_wait` | 60 s | `browser_wait` never waits longer |
+| `max_text_chars` | 1 000 000 | `browser_get_text` / `browser_get_html` are cut inside the page script (the rest never crosses the pipe), end `… [truncated N chars]`; `truncated: true` |
+
+`max_elements` also caps `observe`'s `regions` (`dropped_regions: N`,
+`truncated: true`). These keep ordinary huge pages far below
+`max_frame_bytes`.
 
 `browser_screenshot` returns `base64` (and `format`) unless it fails; with
 `path` it also writes the file.

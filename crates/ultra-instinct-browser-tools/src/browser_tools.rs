@@ -612,21 +612,52 @@ fn get_html(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, To
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
     // A copy without text inputs' `value` attributes (crate::secrets).
+    let max = server.limits().max_text_chars;
     let outcome = session
-        .evaluate(crate::secrets::SAFE_HTML_JS)
-        .map(|html| json!({"html": html.as_str().unwrap_or_default()}))
+        .evaluate(&capped_js(crate::secrets::SAFE_HTML_JS, max))
+        .map(|html| capped_body("html", &html))
         .map_err(browser_err);
     keep(server, &key, session);
     outcome
+}
+
+/// `expression`'s text cut to `max` UTF-16 units in the page (never inside
+/// a surrogate pair), as `{t, cut}`: the cut text and how much was cut.
+/// The limit is the host's number, not caller text.
+fn capped_js(expression: &str, max: usize) -> String {
+    format!(
+        "(function(n){{var t=String({expression});if(t.length<=n)return {{t:t,cut:0}};var c=n;if(c>0){{var k=t.charCodeAt(c-1);if(k>=0xD800&&k<=0xDBFF)c--;}}return {{t:t.slice(0,c),cut:t.length-c}};}})({max})"
+    )
+}
+
+/// `{field: text}` from a [`capped_js`] value (or a plain string), with the
+/// truncation marker and `truncated: true` when the page cut it.
+fn capped_body(field: &str, value: &Value) -> Value {
+    let text = value
+        .get("t")
+        .or(Some(value))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match value.get("cut").and_then(Value::as_u64).filter(|&n| n > 0) {
+        Some(cut) => json!({
+            field: format!("{text}{}", crate::browser_extra::truncated_marker(cut as usize)),
+            "truncated": true,
+        }),
+        None => json!({ field: text }),
+    }
 }
 
 fn get_text(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let key = session_key(server, &endpoint);
     let mut session = take(server, &key)?;
+    let max = server.limits().max_text_chars;
     let outcome = session
-        .page_text()
-        .map(|text| json!({"text": text}))
+        .evaluate(&capped_js(
+            "document.body ? document.body.innerText : ''",
+            max,
+        ))
+        .map(|text| capped_body("text", &text))
         .map_err(browser_err);
     keep(server, &key, session);
     outcome

@@ -163,6 +163,7 @@ fn defaults_are_documented_values() {
     assert_eq!(limits.max_elements, 1_000);
     assert_eq!(limits.max_screenshot_bytes, 16 << 20);
     assert_eq!(limits.max_wait, Duration::from_secs(60));
+    assert_eq!(limits.max_text_chars, 1_000_000);
     assert_eq!(Downloads::default(), Downloads::Anywhere);
 }
 
@@ -353,4 +354,80 @@ fn the_allow_list_refuses_other_tools_and_lists_only_its_own() {
         all["result"]["tools"].as_array().unwrap().len(),
         ultra_instinct_mcp::TOOLS.len()
     );
+}
+
+/// Logs each `Runtime.evaluate` expression.
+struct Expressions {
+    inner: ReplayTransport,
+    seen: Log,
+}
+
+impl CdpTransport for Expressions {
+    fn call(&mut self, method: &str, params_json: &str) -> Result<String, CdpError> {
+        if method == "Runtime.evaluate" {
+            let params: Value = serde_json::from_str(params_json).unwrap();
+            self.seen
+                .borrow_mut()
+                .push(params["expression"].as_str().unwrap_or_default().to_owned());
+        }
+        self.inner.call(method, params_json)
+    }
+}
+
+/// A huge page cannot make a huge frame from get_text / get_html: the page
+/// script cuts the text at `max_text_chars` and the tool marks the cut.
+/// observe lists at most `max_elements` regions.
+#[test]
+fn text_and_html_are_cut_in_the_page_and_observe_caps_its_regions() {
+    let cut =
+        |text: &str, n: u64| json!({"result": {"type": "object", "value": {"t": text, "cut": n}}});
+    let seen: Log = Rc::default();
+    let shared = Rc::clone(&seen);
+    let mut script = Some(
+        ScriptBuilder::new()
+            .call("Runtime.evaluate", cut("abc", 5))
+            .call("Runtime.evaluate", cut("<ht", 7))
+            .call("Runtime.evaluate", cut("ok", 0))
+            .observe_compact(&page()),
+    );
+    let server = Server::with_connector(move |_url| {
+        let script = script.take().ok_or_else(|| CdpError::Transport {
+            message: "one connect per test".into(),
+        })?;
+        Ok(Box::new(Expressions {
+            inner: ReplayTransport::parse(&script.to_json())?,
+            seen: Rc::clone(&shared),
+        }) as Box<dyn CdpTransport>)
+    });
+    let mut server = server.with_limits(ToolLimits {
+        max_text_chars: 3,
+        max_elements: 1,
+        ..ToolLimits::default()
+    });
+    let text = call(&mut server, "browser_get_text", json!({"cdp": CDP}));
+    assert_eq!(
+        text,
+        json!({"text": "abc… [truncated 5 chars]", "truncated": true})
+    );
+    let html = call(&mut server, "browser_get_html", json!({"cdp": CDP}));
+    assert_eq!(
+        html,
+        json!({"html": "<ht… [truncated 7 chars]", "truncated": true})
+    );
+    let whole = call(&mut server, "browser_get_text", json!({"cdp": CDP}));
+    assert_eq!(whole, json!({"text": "ok"}));
+    for expression in seen.borrow().iter() {
+        assert!(
+            expression.ends_with("})(3)"),
+            "the cap rides in the script: {expression}"
+        );
+    }
+    let observed = call(&mut server, "observe", json!({"cdp": CDP}));
+    assert_eq!(
+        observed["regions"].as_array().unwrap().len(),
+        1,
+        "{observed}"
+    );
+    assert_eq!(observed["truncated"], true);
+    assert_eq!(observed["dropped_regions"], 1);
 }

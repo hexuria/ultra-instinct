@@ -129,8 +129,10 @@ surface.
   `browser_get_html` drops text inputs' `value` attributes. Observe no
   longer names a text area by its own text (its value).
 - **Limits.** `Server::with_limits(ToolLimits)`: state text 100 000 chars,
-  1 000 elements, 16 MiB screenshots (one JPEG retry, then
-  `output_too_large`), 60 s waits.
+  1 000 elements (observe's regions too), 16 MiB screenshots (one JPEG
+  retry, then `output_too_large`), 60 s waits, 1 000 000 chars of
+  `browser_get_text` / `browser_get_html` (cut inside the page script, so
+  a huge page rarely makes a frame near the cap).
 - **Paths.** Screenshot, PDF, state, download and HAR paths must be
   absolute (`path_not_absolute`); nothing invents a default.
   `Server::with_downloads(Anywhere | Off | Dir)`.

@@ -105,8 +105,12 @@ fn observe(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     let (snapshot, raw, page) = observe_origin(server, &resolve_origin(arguments)?)?;
     // State as a person sees it: regions behind an open dialog read occluded.
     let manifold = with_front_layer(&raw);
+    // The host's element cap (`ToolLimits::max_elements`) bounds the list.
+    let max = Host(server).limits().max_elements;
+    let dropped = manifold.regions().count().saturating_sub(max);
     let regions: Vec<Value> = manifold
         .regions()
+        .take(max)
         .map(|region| {
             json!({
                 "id": region.id().as_str(),
@@ -133,6 +137,10 @@ fn observe(server: &mut Server, arguments: &Value) -> Result<Value, ToolError> {
     insert(&mut body, "focused", focused);
     insert(&mut body, "front_layer", front_layer);
     insert(&mut body, "snapshot", json!(snapshot.get()));
+    if dropped > 0 {
+        insert(&mut body, "truncated", json!(true));
+        insert(&mut body, "dropped_regions", json!(dropped));
+    }
     Ok(body)
 }
 

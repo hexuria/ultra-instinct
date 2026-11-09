@@ -113,7 +113,7 @@ pub(crate) fn truncate_output(text: &str, max_chars: usize) -> Cow<'_, str> {
     }
 }
 
-fn truncated_marker(dropped: usize) -> String {
+pub(crate) fn truncated_marker(dropped: usize) -> String {
     format!("… [truncated {dropped} chars]")
 }
 
