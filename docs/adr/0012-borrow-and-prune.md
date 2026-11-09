@@ -154,11 +154,14 @@ not a tty prompt; and `guard` matches the exact label (see Prune 1).
   download, network block and HAR, the alert dialog, close and `--idle`
   lifecycle, `--headed` and stdin batch through what the page or the server
   sees. All passed on Chrome 156.0.8078.81 (macOS, 2026-11-09).
-- The HAR reads `Network.requestWillBeSent` / `responseReceived` headers,
-  which in Chrome carry no `Cookie` / `Set-Cookie` (those are only in the
-  `*ExtraInfo` events, not read). Cookie values therefore never reach a HAR,
-  and the cookie headers are absent rather than listed as `•••`;
-  `Authorization` is listed, masked.
+- In Chrome, `Network.requestWillBeSent` / `responseReceived` carry no
+  `Cookie` / `Set-Cookie`; only the `*ExtraInfo` events do. The HAR also
+  records `requestWillBeSentExtraInfo` / `responseReceivedExtraInfo`, pairs
+  them with their request by position per `requestId` (they can arrive
+  before or after the main event, and a redirect reuses the id), and adds
+  each wire header the main event lacks. `Cookie`, `Set-Cookie`,
+  `Authorization` and `Proxy-Authorization` are listed with the value `•••`;
+  their values never reach the file (`live_borrow.rs` checks both).
 - A press whose handler opens `alert()` / `confirm()` used to wait the
   websocket's 30 s deadline; the transport now stops at
   `Page.javascriptDialogOpening` (`CdpError::DialogOpened`) and the tool
