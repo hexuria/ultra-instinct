@@ -721,7 +721,7 @@ fn a_field_that_cannot_be_hidden_refuses_the_capture() {
     assert!(!capture_calls(&log).contains(&"Page.captureScreenshot".to_owned()));
 }
 
-/// Nothing secret typed yet: a screenshot is the one capture call it was.
+/// Nothing secret typed yet: a screenshot is one plain capture call.
 #[test]
 fn a_screenshot_with_no_typed_secret_hides_nothing() {
     let log: CallLog = std::rc::Rc::default();
