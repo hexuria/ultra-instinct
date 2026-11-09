@@ -2,8 +2,8 @@
 //!
 //! The guides live in `crates/ultra-instinct/skills/` and are embedded with
 //! `include_str!`, so a crates.io install prints the same text as a
-//! checkout. `skills/ultra-instinct/SKILL.md` in the repo is a stub that
-//! points here.
+//! checkout. `skills/ultra-instinct/SKILL.md` in the repo gives the first steps and
+//! sends the agent here for the rest.
 
 use crate::CliError;
 
