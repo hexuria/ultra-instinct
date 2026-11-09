@@ -36,7 +36,7 @@ use ultra_instinct_guard::{consume_ticket_once, gate, ConsumeError};
 
 use crate::browser_tools::interactive_index;
 use crate::error::ToolError;
-use crate::host::{BrowserHost, LiveSession};
+use crate::host::{endpoint_of, keep, session_key, BrowserHost, LiveSession};
 
 /// The tools this module serves itself.
 pub const EXTRA_TOOLS: [&str; 9] = [
@@ -827,29 +827,6 @@ pub(crate) fn index_arg(arguments: &Value) -> Result<usize, ToolError> {
         Some(index) if index > 0 => Ok(index),
         _ => Err(bad(&arguments["index"])),
     }
-}
-
-fn endpoint_of(arguments: &Value) -> Result<String, ToolError> {
-    Ok(opt_str(arguments, "cdp")?
-        .unwrap_or(DEFAULT_CDP_HTTP)
-        .to_owned())
-}
-
-/// The page-websocket key a `cdp` endpoint currently drives.
-fn session_key(server: &dyn BrowserHost, endpoint: &str) -> String {
-    server
-        .current_tab(endpoint)
-        .map(str::to_owned)
-        .unwrap_or_else(|| endpoint.to_owned())
-}
-
-/// Keep the session; buffer the events that arrived during the call.
-fn keep(server: &mut dyn BrowserHost, key: &str, mut session: LiveSession) {
-    let events = session.transport_mut().drain_events();
-    if !events.is_empty() {
-        server.push_events(key, events);
-    }
-    server.keep_session(key, session);
 }
 
 fn opt_str<'a>(arguments: &'a Value, key: &str) -> Result<Option<&'a str>, ToolError> {

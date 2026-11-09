@@ -3,13 +3,17 @@
 //! The host owns live CDP sessions, the current-tab binding, per-key ticket
 //! ledgers, buffered CDP events, the snapshot ring and the user's policy.
 //! The tools own [`ToolState`] (HAR taps, blocked URLs, open dialogs); the
-//! host only stores it, forwards each buffered event batch to
-//! [`ToolState::tee`] and drops a key's entry with [`ToolState::remove`].
+//! host only stores it. The host supplies raw storage; the trait's default
+//! [`BrowserHost::push_events`], [`BrowserHost::keep_session`] and
+//! [`BrowserHost::drop_session`] forward each buffered event batch to
+//! [`ToolState::tee`] and drop a key's entry with [`ToolState::remove`], so
+//! no host can skip either.
 
 use std::collections::BTreeMap;
 
+use serde_json::Value;
 use ultra_instinct_browser::{BrowserSession, CdpTransport, PageState};
-use ultra_instinct_cdp::CdpEvent;
+use ultra_instinct_cdp::{CdpEvent, DEFAULT_CDP_HTTP};
 use ultra_instinct_core::InteractionManifold;
 use ultra_instinct_guard::{Policy, TicketLedger};
 use ultra_instinct_observe::history::SnapshotId;
@@ -46,16 +50,25 @@ impl ToolState {
 
 /// The state access the `browser_*` tools need. A session key is a CDP
 /// endpoint or a tab's page-websocket url.
+///
+/// Implementors supply raw storage (the `*_raw` methods). The tools call the
+/// provided [`keep_session`](Self::keep_session),
+/// [`drop_session`](Self::drop_session) and
+/// [`push_events`](Self::push_events), which keep [`ToolState`] in step: the
+/// HAR tap sees every buffered event and a key's tool state goes with its
+/// session.
 pub trait BrowserHost {
     /// The kept session for `url`, or a fresh connection.
     fn take_session(&mut self, url: &str) -> Result<LiveSession, ToolError>;
 
-    /// Keep `session` for the next call on `url`.
-    fn keep_session(&mut self, url: &str, session: LiveSession);
+    /// Store `session` for the next call on `url`. When room had to be made,
+    /// return the evicted key, whose per-key host state (session, ledger,
+    /// events, domain bits) is already dropped. Do not touch [`ToolState`].
+    fn keep_session_raw(&mut self, url: &str, session: LiveSession) -> Option<String>;
 
-    /// Drop a kept session without keeping a replacement, with every
-    /// per-key state (ledger, events, domain bits, [`ToolState`]).
-    fn drop_session(&mut self, url: &str);
+    /// Drop a kept session and every per-key host state (ledger, events,
+    /// domain bits). Do not touch [`ToolState`].
+    fn drop_session_raw(&mut self, url: &str);
 
     /// Page-websocket url `browser_*` tools drive for `endpoint`, when bound.
     fn current_tab(&self, endpoint: &str) -> Option<&str>;
@@ -72,9 +85,9 @@ pub trait BrowserHost {
     /// Put the ledger back after a ticketed input.
     fn keep_ledger(&mut self, key: &str, ledger: TicketLedger);
 
-    /// Buffer events drained from a session's transport under `key`. Must
-    /// pass them to [`ToolState::tee`] first.
-    fn push_events(&mut self, key: &str, events: Vec<CdpEvent>);
+    /// Append events to `key`'s buffer, applying the host's buffer cap. Do
+    /// not touch [`ToolState`].
+    fn push_events_raw(&mut self, key: &str, events: Vec<CdpEvent>);
 
     /// Drain all buffered events for `key`.
     fn take_events(&mut self, key: &str) -> Vec<CdpEvent>;
@@ -102,8 +115,62 @@ pub trait BrowserHost {
     /// The tools' own state, stored on the host.
     fn tool_state(&self) -> &ToolState;
 
-    /// The tools' own state, stored on the host.
+    /// Mutable access to the tools' own state.
     fn tool_state_mut(&mut self) -> &mut ToolState;
+
+    /// Keep `session` for the next call on `url`. An evicted key's
+    /// [`ToolState`] is dropped with it.
+    fn keep_session(&mut self, url: &str, session: LiveSession) {
+        if let Some(evicted) = self.keep_session_raw(url, session) {
+            self.tool_state_mut().remove(&evicted);
+        }
+    }
+
+    /// Drop a kept session without keeping a replacement, with every
+    /// per-key state (ledger, events, domain bits, [`ToolState`]).
+    fn drop_session(&mut self, url: &str) {
+        self.drop_session_raw(url);
+        self.tool_state_mut().remove(url);
+    }
+
+    /// Buffer events drained from a session's transport under `key`. The
+    /// HAR tap ([`ToolState::tee`]) sees them before the buffer cap applies.
+    fn push_events(&mut self, key: &str, events: Vec<CdpEvent>) {
+        self.tool_state_mut().tee(key, &events);
+        self.push_events_raw(key, events);
+    }
+}
+
+/// The `cdp` endpoint a call names, or the default one.
+pub(crate) fn endpoint_of(arguments: &Value) -> Result<String, ToolError> {
+    let endpoint = match arguments.get("cdp") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(s.as_str()),
+        Some(other) => {
+            return Err(ToolError::InvalidArguments(format!(
+                "`cdp` must be a string, got {other}"
+            )))
+        }
+    };
+    Ok(endpoint.unwrap_or(DEFAULT_CDP_HTTP).to_owned())
+}
+
+/// The page-websocket key a `cdp` endpoint currently drives.
+pub(crate) fn session_key(server: &dyn BrowserHost, endpoint: &str) -> String {
+    server
+        .current_tab(endpoint)
+        .map(str::to_owned)
+        .unwrap_or_else(|| endpoint.to_owned())
+}
+
+/// Keep the session, buffering any events its transport saw during the call
+/// (the buffer, and through it the HAR tap, sees every event exactly once).
+pub(crate) fn keep(server: &mut dyn BrowserHost, key: &str, mut session: LiveSession) {
+    let events = session.transport_mut().drain_events();
+    if !events.is_empty() {
+        server.push_events(key, events);
+    }
+    server.keep_session(key, session);
 }
 
 impl dyn BrowserHost + '_ {

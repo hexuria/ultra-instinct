@@ -178,7 +178,8 @@ impl Server {
         &self.session_order
     }
 
-    /// Remove `url` from the sessions map/order and every per-key state map.
+    /// Remove `url` from the sessions map/order and every per-key host state
+    /// map. [`ToolState`] is the trait's to drop (`BrowserHost::drop_session`).
     fn drop_keyed_state(&mut self, url: &str) {
         self.sessions.remove(url);
         self.session_order.retain(|key| key != url);
@@ -186,18 +187,23 @@ impl Server {
         self.events.remove(url);
         self.domains.remove(url);
         self.dropped.remove(url);
-        self.tools.remove(url);
     }
 }
 
-impl BrowserHost for Server {
+/// The [`BrowserHost`] the `browser_*` tools run on: a crate-private view of
+/// a [`Server`]. `Server` itself does not implement the trait, so its ledger,
+/// event and session mutators stay out of the public API (one-shot ledger,
+/// anti-drift #4).
+pub(crate) struct Host<'a>(pub(crate) &'a mut Server);
+
+impl BrowserHost for Host<'_> {
     fn record(
         &mut self,
         origin: &str,
         manifold: InteractionManifold,
         page: PageState,
     ) -> SnapshotId {
-        self.history.push(Snapshot {
+        self.0.history.push(Snapshot {
             origin: origin.to_owned(),
             manifold,
             page,
@@ -206,102 +212,111 @@ impl BrowserHost for Server {
 
     /// The kept session for `url`, or a fresh connection.
     fn take_session(&mut self, url: &str) -> Result<LiveSession, ToolError> {
-        if let Some(session) = self.sessions.remove(url) {
-            self.session_order.retain(|key| key != url);
+        let server = &mut *self.0;
+        if let Some(session) = server.sessions.remove(url) {
+            server.session_order.retain(|key| key != url);
             return Ok(session);
         }
-        let transport = (self.connector)(url).map_err(|err| ToolError::Browser(err.to_string()))?;
+        let transport =
+            (server.connector)(url).map_err(|err| ToolError::Browser(err.to_string()))?;
         Ok(BrowserSession::new(transport))
     }
 
-    /// Keep `session` for the next call on `url`.
-    fn keep_session(&mut self, url: &str, session: LiveSession) {
-        if self.sessions.len() >= MAX_LIVE_SESSIONS && !self.sessions.contains_key(url) {
-            let oldest = self.session_order.remove(0);
-            self.drop_keyed_state(&oldest);
+    /// Keep `session` for the next call on `url`, evicting the oldest key
+    /// past [`MAX_LIVE_SESSIONS`].
+    fn keep_session_raw(&mut self, url: &str, session: LiveSession) -> Option<String> {
+        let server = &mut *self.0;
+        let mut evicted = None;
+        if server.sessions.len() >= MAX_LIVE_SESSIONS && !server.sessions.contains_key(url) {
+            let oldest = server.session_order.remove(0);
+            server.drop_keyed_state(&oldest);
+            evicted = Some(oldest);
         }
-        self.session_order.retain(|key| key != url);
-        self.session_order.push(url.to_owned());
-        self.sessions.insert(url.to_owned(), session);
+        server.session_order.retain(|key| key != url);
+        server.session_order.push(url.to_owned());
+        server.sessions.insert(url.to_owned(), session);
+        evicted
     }
 
     /// Drop a kept session without keeping a replacement. Also clears the
     /// key's ticket ledger, buffered events, and diagnostic-domain bits —
     /// they describe the dropped transport and must not outlive it.
-    fn drop_session(&mut self, url: &str) {
-        self.drop_keyed_state(url);
+    fn drop_session_raw(&mut self, url: &str) {
+        self.0.drop_keyed_state(url);
     }
 
     /// Page-websocket url `browser_*` tools drive for `endpoint`, when bound.
     fn current_tab(&self, endpoint: &str) -> Option<&str> {
-        self.tab_binding.get(endpoint).map(String::as_str)
+        self.0.tab_binding.get(endpoint).map(String::as_str)
     }
 
     /// Point `browser_*` calls on `endpoint` at this tab's websocket.
     fn set_current_tab(&mut self, endpoint: &str, ws_url: &str) {
-        self.tab_binding
+        self.0
+            .tab_binding
             .insert(endpoint.to_owned(), ws_url.to_owned());
     }
 
     /// Unbind `endpoint` (falls back to the endpoint's default page target).
     fn clear_current_tab(&mut self, endpoint: &str) {
-        self.tab_binding.remove(endpoint);
+        self.0.tab_binding.remove(endpoint);
     }
 
     /// The ticket ledger for a session key, fresh when absent.
     fn take_ledger(&mut self, key: &str) -> TicketLedger {
-        self.ledgers.remove(key).unwrap_or_default()
+        self.0.ledgers.remove(key).unwrap_or_default()
     }
 
     /// Put the ledger back after a ticketed input.
     fn keep_ledger(&mut self, key: &str, ledger: TicketLedger) {
-        self.ledgers.insert(key.to_owned(), ledger);
+        self.0.ledgers.insert(key.to_owned(), ledger);
     }
 
-    /// Buffer events drained from a session's transport under `key`.
-    fn push_events(&mut self, key: &str, events: Vec<CdpEvent>) {
-        self.tools.tee(key, &events);
-        let buffer = self.events.entry(key.to_owned()).or_default();
+    /// Buffer events under `key`, oldest dropped past the cap.
+    fn push_events_raw(&mut self, key: &str, events: Vec<CdpEvent>) {
+        let server = &mut *self.0;
+        let buffer = server.events.entry(key.to_owned()).or_default();
         buffer.extend(events);
         if buffer.len() > MAX_BUFFERED_EVENTS {
             let drop = buffer.len() - MAX_BUFFERED_EVENTS;
             buffer.drain(..drop);
-            *self.dropped.entry(key.to_owned()).or_default() += drop as u64;
+            *server.dropped.entry(key.to_owned()).or_default() += drop as u64;
         }
     }
 
     /// Events dropped for `key` by the buffer cap so far.
     fn dropped_events(&self, key: &str) -> u64 {
-        self.dropped.get(key).copied().unwrap_or(0)
+        self.0.dropped.get(key).copied().unwrap_or(0)
     }
 
     /// Drain all buffered events for `key`.
     fn take_events(&mut self, key: &str) -> Vec<CdpEvent> {
-        self.events.remove(key).unwrap_or_default()
+        self.0.events.remove(key).unwrap_or_default()
     }
 
     /// Diagnostic domains already enabled for `key` (bit0 console, bit1 network).
     fn enabled_domains(&self, key: &str) -> u8 {
-        self.domains.get(key).copied().unwrap_or(0)
+        self.0.domains.get(key).copied().unwrap_or(0)
     }
 
     /// Mark a diagnostic domain bit as enabled for `key`.
     fn enable_domain(&mut self, key: &str, bit: u8) {
-        *self.domains.entry(key.to_owned()).or_default() |= bit;
+        *self.0.domains.entry(key.to_owned()).or_default() |= bit;
     }
 
     fn policy(&self) -> Result<&Policy, ToolError> {
-        self.policy
+        self.0
+            .policy
             .as_ref()
             .map_err(|err| ToolError::InvalidArguments(err.clone()))
     }
 
     fn tool_state(&self) -> &ToolState {
-        &self.tools
+        &self.0.tools
     }
 
     fn tool_state_mut(&mut self) -> &mut ToolState {
-        &mut self.tools
+        &mut self.0.tools
     }
 }
 

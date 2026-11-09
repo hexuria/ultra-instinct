@@ -30,7 +30,7 @@ use ultra_instinct_guard::{
 use ultra_instinct_protocol::GuardReason;
 
 use crate::error::ToolError;
-use crate::host::BrowserHost;
+use crate::host::{endpoint_of, keep, session_key, BrowserHost};
 
 /// Longest a `browser_wait` sleeps, whatever the argument says.
 const MAX_WAIT_SECS: u64 = 60;
@@ -123,13 +123,6 @@ pub(crate) fn call(
         "browser_read_network" => read_network(server, arguments),
         other => Err(ToolError::UnknownTool(other.to_owned())),
     }
-}
-
-/// `cdp` argument or the documented default endpoint.
-fn endpoint_of(arguments: &Value) -> Result<String, ToolError> {
-    Ok(opt_str(arguments, "cdp")?
-        .unwrap_or(DEFAULT_CDP_HTTP)
-        .to_owned())
 }
 
 fn opt_str<'a>(arguments: &'a Value, key: &str) -> Result<Option<&'a str>, ToolError> {
@@ -262,27 +255,9 @@ fn check_navigation(server: &dyn BrowserHost, url: &str) -> Result<(), ToolError
         .map_err(|reason| refused(reason, url))
 }
 
-/// The page-websocket key a `cdp` endpoint currently drives.
-fn session_key(server: &dyn BrowserHost, endpoint: &str) -> String {
-    server
-        .current_tab(endpoint)
-        .map(str::to_owned)
-        .unwrap_or_else(|| endpoint.to_owned())
-}
-
 /// Borrow-free take/keep: the session for `key`, reconnected when absent.
 fn take(server: &mut dyn BrowserHost, key: &str) -> Result<crate::host::LiveSession, ToolError> {
     server.take_session(key)
-}
-
-fn keep(server: &mut dyn BrowserHost, key: &str, mut session: crate::host::LiveSession) {
-    // Events that arrived during the call are buffered for the diagnostics
-    // tools (browser_read_console / browser_read_network).
-    let events = session.transport_mut().drain_events();
-    if !events.is_empty() {
-        server.push_events(key, events);
-    }
-    server.keep_session(key, session);
 }
 
 fn navigate(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {

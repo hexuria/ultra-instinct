@@ -27,7 +27,7 @@ use serde_json::{json, Map, Value};
 use ultra_instinct_cdp::{CdpEvent, DEFAULT_CDP_HTTP};
 
 use crate::error::ToolError;
-use crate::host::{BrowserHost, LiveSession};
+use crate::host::{endpoint_of, keep, session_key, BrowserHost, LiveSession};
 
 /// Tool names this module serves.
 pub const ENV_TOOLS: [&str; 3] = ["browser_set", "browser_download", "browser_network"];
@@ -265,29 +265,6 @@ fn str_list(arguments: &Value, key: &str) -> Result<Option<Vec<String>>, ToolErr
 }
 
 // ---- session plumbing (same take / keep contract as browser_tools) ---------
-
-fn endpoint_of(arguments: &Value) -> Result<String, ToolError> {
-    Ok(opt_str(arguments, "cdp")?
-        .unwrap_or(DEFAULT_CDP_HTTP)
-        .to_owned())
-}
-
-fn session_key(server: &dyn BrowserHost, endpoint: &str) -> String {
-    server
-        .current_tab(endpoint)
-        .map(str::to_owned)
-        .unwrap_or_else(|| endpoint.to_owned())
-}
-
-/// Keep the session, buffering any events its transport saw (the buffer —
-/// and through it the HAR tap — sees every event exactly once).
-fn keep(server: &mut dyn BrowserHost, key: &str, mut session: LiveSession) {
-    let events = session.transport_mut().drain_events();
-    if !events.is_empty() {
-        server.push_events(key, events);
-    }
-    server.keep_session(key, session);
-}
 
 /// One CDP command with JSON params (payloads are CDP arguments, never
 /// spliced into script source).

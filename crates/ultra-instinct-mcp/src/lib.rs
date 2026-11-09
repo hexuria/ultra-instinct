@@ -8,7 +8,13 @@
 //! goes through gate → ticket → `execute_ticketed`, so a stale page refuses
 //! instead of clicking the wrong element; page-level calls are plain CDP.
 //! They live in `ultra-instinct-browser-tools` and run on [`Server`] through
-//! its `BrowserHost` impl.
+//! a crate-private `BrowserHost` adapter. `Server` itself does not implement
+//! the trait, so its ledgers and buffers are not public API:
+//!
+//! ```compile_fail,E0277
+//! fn host<T: ultra_instinct_browser_tools::BrowserHost>(_: T) {}
+//! host(ultra_instinct_mcp::Server::default());
+//! ```
 
 #![forbid(unsafe_code)]
 

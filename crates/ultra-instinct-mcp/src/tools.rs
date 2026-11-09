@@ -22,7 +22,7 @@ use ultra_instinct_protocol::GuardDecision;
 
 use ultra_instinct_browser_tools::BrowserHost as _;
 
-use crate::server::Server;
+use crate::server::{Host, Server};
 use crate::ToolError;
 
 const PRODUCT: &str = "ultra-instinct";
@@ -89,7 +89,7 @@ pub(crate) fn dispatch(
     {
         return Err(ToolError::CoordinatesNotAccepted);
     }
-    if let Some(result) = ultra_instinct_browser_tools::call(server, name, arguments) {
+    if let Some(result) = ultra_instinct_browser_tools::call(&mut Host(server), name, arguments) {
         return result;
     }
     match name {
@@ -531,17 +531,17 @@ fn observe_origin(
     let (manifold, page) = match origin {
         Origin::Fixture(path) => load_observation(path)?,
         Origin::Cdp(url) => {
-            let mut session = server.take_session(url)?;
+            let mut session = Host(server).take_session(url)?;
             let manifold = session
                 .observe()
                 .cloned()
                 .map_err(|err| ToolError::Browser(err.to_string()))?;
             let page = session.page().cloned().unwrap_or_else(PageState::blank);
-            server.keep_session(url, session);
+            Host(server).keep_session(url, session);
             (manifold, page)
         }
     };
-    let id = server.record(&origin_key(origin), manifold.clone(), page.clone());
+    let id = Host(server).record(&origin_key(origin), manifold.clone(), page.clone());
     Ok((id, manifold, page))
 }
 
