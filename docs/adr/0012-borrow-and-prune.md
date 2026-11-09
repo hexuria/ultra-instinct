@@ -52,8 +52,9 @@ second way to press.
    `browser_*` tool. `aui batch` runs several verbs in order on one session;
    `aui session [list]` names the current / live sessions.
 3. **Guard policy.** `Policy` in guard `policy.rs`: allowed domains
-   (`HostPattern`: input begins on an allowed host; where the input leads
-   is checked at the next input) and confirm-before-press labels
+   (`HostPattern`: input begins on an allowed host, and a form submit is
+   refused when its target is off the list; other navigation is checked at
+   the next input) and confirm-before-press labels
    (`LabelGlob`), checked after `revalidate` and the hard gate, before
    consume. `run
    --allow-domain / --confirm-press / --confirm`, the MCP env vars and the

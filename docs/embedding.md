@@ -174,7 +174,9 @@ absolutize against the shell's before they call).
 
 - `Server::with_downloads(Downloads::Anywhere | Off | Dir(dir))`:
   `browser_download` writes anywhere (default), refuses `downloads_off`, or
-  only directly in `dir` (else `path_not_allowed {path, dir}`).
+  only directly in the existing folder `dir`, compared after resolving `..`
+  and symlinks (the destination and the folder are canonicalized, as for
+  uploads), else `path_not_allowed {path, dir}`.
 - `Server::with_uploads(Uploads::Anywhere | Off | Dir(dir))`:
   `browser_file_upload` hands the page any absolute path (default; a page
   can be given any file the host process can read), refuses `uploads_off`,
@@ -274,7 +276,7 @@ codes are only ever appended.
 | `code` | Fields | Meaning |
 |---|---|---|
 | `needs_confirm` | `label` | the policy needs a confirm for this press; repeat with `confirm: label` (that call only) |
-| `domain_not_allowed` | `host` | the page the input starts on, or the URL to navigate to, is off the policy's allow-list |
+| `domain_not_allowed` | `host` | the page the input starts on, the URL to navigate to, or where a form the press submits is sent, is off the policy's allow-list |
 | `stale_ref` | `reason` (`world-changed`, `target-changed`, `target-gone`, `other-tab`) | the element the ref named is not what the caller saw; nothing pressed |
 | `unknown_ref` | `index`, `indexed` | no element at that index (among those the given snapshot showed, or on the page) |
 | `snapshot_required` | | the server requires `snapshot` with an index press |
@@ -315,9 +317,15 @@ observe / guard / verify and the legacy executors.
 `Server::set_policy(Policy)` replaces the policy between calls; sessions
 stay open. The domain allow-list is checked on the page an input starts
 on, before it is sent (and `browser_navigate` checks its URL first): input
-begins on an allowed host. A navigation the input itself causes (a link,
-a form submitted by Enter) is not checked where it goes; the next call on
-that page is. A press's `confirm` argument lifts a confirm for that call only:
+begins on an allowed host. A press that submits a form (a click, Enter or
+Space on a submit button, or Enter in a field or box that submits its
+form) is also refused `domain_not_allowed {host}` when the form would be
+sent off the list: observe reads the target (`formaction`, else `action`;
+an empty one is the page itself), and a `javascript:` or unreadable target
+fails closed. Other navigation the input causes (a link) is not checked
+where it goes; the next call on that page is. With an allow-list set, an
+Enter / Space to a focus no observation names refuses too (it could
+submit any form). A press's `confirm` argument lifts a confirm for that call only:
 the next call is refused again.
 
 Input with no target (`browser_keyboard`, and `browser_send_key` /

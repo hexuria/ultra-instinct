@@ -59,8 +59,9 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    the same consume-before-press order. `Predicted` carries no fingerprint of
 >    its own; do not add a "pre-ticket check" that is not wired into a refusal.
 >    The user's `Policy` (guard `policy.rs`: allowed domains, confirm-before-press)
->    is checked on the page the input starts on (a navigation the input
->    causes is checked at the next input there), by `execute_ticketed_with`
+>    is checked on the page the input starts on, and on where a press that
+>    submits a form sends it (`ElementState::form` / `submit_action`; other
+>    navigation is checked at the next input there), by `execute_ticketed_with`
 >    on the fresh observe's URL and region
 >    after `revalidate` and the hard gate, before mark-consumed;
 >    `execute_ticketed` runs it with an empty policy. The agent also checks it

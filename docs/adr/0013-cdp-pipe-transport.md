@@ -193,10 +193,16 @@ surface.
   default, so a host that does not opt in can still hand a page any file
   it can read.
 - **Domain scope.** The allow-list is checked on the page an input starts
-  on, before it is sent (and on `browser_navigate`'s URL). A navigation the
-  input causes (a clicked link, an Enter that submits a form) is not
-  checked at its destination; the next input there is. Clicks always
-  worked this way; the docs said "gets no input", which overclaimed.
+  on, before it is sent (and on `browser_navigate`'s URL), and on where a
+  press that submits a form would send it: observe records each form's
+  target in the per-form table (the submit button's `formaction`, else the
+  form's `action`, resolved; an empty `action` is the page) and a submit
+  button's own (`fa`); a click / Enter / Space on a submit button, or an
+  Enter in a field or box that submits its form, refuses
+  `domain_not_allowed {host}` when that host is off the list, or the
+  target is `javascript:` or unread (`Policy::check_detail`'s `Refusal`
+  carries the host to every path: agent, executor, host consume, keyboard
+  tools). Other navigation (a clicked link) is checked at the next input.
 - **Form-rule review fixes.** Enter on a checkbox / radio goes through the
   form rule (Chrome submits from it, pinned in `pipe_live.rs`); only a
   button-like control that is no box presses itself on Enter. A nameless
