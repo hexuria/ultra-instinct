@@ -451,7 +451,13 @@ pub fn refused_place(url: &str) -> String {
     if let Some(host) = host_of(url) {
         return host;
     }
-    match scheme_of(url.trim()).map(str::to_ascii_lowercase) {
+    let url = url.trim();
+    // `shop.example:443/cart` or `localhost:8080` is a host and port with no
+    // scheme, not a scheme: a dot in it, or a digit right after the colon.
+    let scheme = scheme_of(url).filter(|scheme| {
+        !scheme.contains('.') && !url[scheme.len() + 1..].starts_with(|c: char| c.is_ascii_digit())
+    });
+    match scheme.map(str::to_ascii_lowercase) {
         Some(web) if web == "http" || web == "https" => format!("an {web}: URL with no host"),
         Some(scheme) => {
             let article = if scheme.starts_with(['a', 'e', 'i', 'o', 'u']) {
@@ -615,6 +621,13 @@ mod tests {
         );
         assert_eq!(refused_place(" DATA:text/html,<b>long</b>"), "a data: page");
         assert_eq!(refused_place("about:srcdoc"), "an about: page");
+        for host_port in ["shop.example:443/cart", "localhost:8080", " 10.0.0.1:80"] {
+            assert_eq!(refused_place(host_port), "(unknown url)", "{host_port}");
+        }
+        assert_eq!(
+            refused_place("view-source:https://x/"),
+            "a view-source: page"
+        );
         assert_eq!(refused_place("https:///x"), "an https: URL with no host");
         assert_eq!(refused_place("https://Evil.test/x"), "evil.test");
         for none in ["", "  ", "no-scheme", ":x"] {
