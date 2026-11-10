@@ -300,7 +300,7 @@ codes are only ever appended.
 | `code` | Fields | Meaning |
 |---|---|---|
 | `needs_confirm` | `label` | the policy needs a confirm for this press; repeat with `confirm: label` (that call only) |
-| `domain_not_allowed` | `host` | the page the input starts on, the URL to navigate to, or where a form the press submits is sent, is off the policy's allow-list |
+| `domain_not_allowed` | `host` | the page the input starts on, the URL to navigate to, or where a form the press submits is sent, is off the policy's allow-list. `host` is that host, or for a URL with none its scheme (`a blob: page`, `a data: page`); the URL itself is never echoed |
 | `stale_ref` | `reason` (`world-changed`, `target-changed`, `target-gone`, `other-tab`) | the element the ref named is not what the caller saw; nothing pressed |
 | `unknown_ref` | `index`, `indexed` | no element at that index (among those the given snapshot showed, or on the page) |
 | `snapshot_required` | | the server requires `snapshot` with an index press |

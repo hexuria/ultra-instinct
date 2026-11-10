@@ -247,8 +247,12 @@ deliberate eval.
   `tests/policy_props.rs`; the `executor.rs` policy tests; the
   `tests/mock_loop.rs` policy tests (`needs_confirm_ends_blocked_without_pressing`,
   `domain_off_the_allowlist_ends_blocked`,
-  `enter_in_a_field_whose_form_submits_with_a_confirm_label_blocks_unpressed`);
-  the guard's `activating_keys_are_presses_of_the_target_or_its_form`.
+  `enter_in_a_field_whose_form_submits_with_a_confirm_label_blocks_unpressed`,
+  `a_blob_page_mid_run_ends_blocked_with_refuse_blob`);
+  the guard's `activating_keys_are_presses_of_the_target_or_its_form`; the
+  `refuse_blob` switch: guard `domains_exact_and_subdomain_patterns`, mcp
+  `browser_tools.rs` `navigate_to_a_blob_is_refused_with_refuse_blob` and
+  `host_options.rs` `the_env_policy_parses_refuse_blob_and_fails_closed`.
 - Shell verbs and the session daemon: `verbs.rs` / `batch.rs` unit tests and
   the `daemon.rs` socket tests (round trip, spawn / stale socket, idle exit,
   `--idle`, failed launch, session list; a press after the page changed

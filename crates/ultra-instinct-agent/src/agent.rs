@@ -1595,15 +1595,9 @@ where
                     _ => {
                         // The page's host, or where a form submit would go;
                         // a URL with no host is named by its scheme.
-                        let host = url.as_deref().map_or_else(
-                            || "(unknown url)".to_owned(),
-                            |url| {
-                                ultra_instinct_guard::host_of(url).unwrap_or_else(|| {
-                                    let scheme = url.trim().split(':').next().unwrap_or_default();
-                                    format!("a {scheme}: page")
-                                })
-                            },
-                        );
+                        let host = url
+                            .as_deref()
+                            .map_or_else(|| "(unknown url)".to_owned(), ultra_instinct_guard::refused_place);
                         format!("{reason}: {host} is not an allowed domain")
                     }
                 };

@@ -7,7 +7,7 @@ use ultra_instinct_agent::ExecError;
 use ultra_instinct_browser::BrowserError;
 use ultra_instinct_core::{Action, InteractionRegion};
 use ultra_instinct_guard::{
-    host_of, is_activating_key, ConsumeError, Policy, Refusal, UNOBSERVED_FOCUS,
+    is_activating_key, refused_place, ConsumeError, Policy, Refusal, UNOBSERVED_FOCUS,
 };
 use ultra_instinct_protocol::GuardReason;
 
@@ -41,7 +41,7 @@ pub(crate) fn refused(reason: GuardReason, label_or_url: &str) -> ToolError {
             label: label_or_url.to_owned(),
         },
         GuardReason::DomainNotAllowed if !label_or_url.is_empty() => ToolError::DomainNotAllowed {
-            host: host_of(label_or_url).unwrap_or_else(|| label_or_url.to_owned()),
+            host: refused_place(label_or_url),
         },
         _ if label_or_url.is_empty() => ToolError::TicketInvalid(reason.to_string()),
         _ => ToolError::TicketInvalid(format!("{reason}: {label_or_url}")),

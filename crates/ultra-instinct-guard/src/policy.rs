@@ -442,6 +442,21 @@ fn scheme_of(url: &str) -> Option<&str> {
         .then_some(scheme)
 }
 
+/// What a domain refusal names for `url`: its host; else, for a URL with
+/// no host, its scheme (`a blob: page`, `an https: URL with no host`); else
+/// `(unknown url)`. Short whatever the URL holds (a `data:` URL is never
+/// echoed).
+pub fn refused_place(url: &str) -> String {
+    if let Some(host) = host_of(url) {
+        return host;
+    }
+    match scheme_of(url.trim()).map(str::to_ascii_lowercase) {
+        Some(web) if web == "http" || web == "https" => format!("an {web}: URL with no host"),
+        Some(scheme) => format!("a {scheme}: page"),
+        None => "(unknown url)".to_owned(),
+    }
+}
+
 /// The lowercase host of `url`, `None` when it has none (`about:blank`,
 /// `file:///…`, `data:…`, a bare path). Only a real scheme followed by
 /// `://` starts an authority, so a URL inside another (`data:…,https://h/`)
@@ -587,6 +602,16 @@ mod tests {
             "blob:about:blank",
         ] {
             assert_eq!(strict.check_url(blob), refused, "{blob}");
+        }
+        assert_eq!(
+            refused_place("blob:https://shop.example/5f1c"),
+            "a blob: page"
+        );
+        assert_eq!(refused_place(" DATA:text/html,<b>long</b>"), "a data: page");
+        assert_eq!(refused_place("https:///x"), "an https: URL with no host");
+        assert_eq!(refused_place("https://Evil.test/x"), "evil.test");
+        for none in ["", "  ", "no-scheme", ":x"] {
+            assert_eq!(refused_place(none), "(unknown url)", "{none:?}");
         }
         // Without a list the switch changes nothing.
         let open = Policy::default().with_refuse_blob(true);
