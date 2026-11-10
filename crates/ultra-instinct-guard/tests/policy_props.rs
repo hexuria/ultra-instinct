@@ -57,6 +57,12 @@ proptest! {
         let policy = Policy::from_lists(&h, "").unwrap();
         prop_assert_eq!(policy.check_url(&url), Ok(()));
         prop_assert_eq!(policy.check_url(&format!("blob:{url}")), Ok(()));
+        // With refuse_blob, the same listed origin refuses as a blob:.
+        prop_assert_eq!(
+            policy.clone().with_refuse_blob(true).check_url(&format!("blob:{url}")),
+            Err(GuardReason::DomainNotAllowed)
+        );
+        prop_assert_eq!(policy.clone().with_refuse_blob(true).check_url(&url), Ok(()));
         // A listed host inside a URL of another scheme is not its host.
         for wrapped in [
             format!("data:text/html,{url}"),

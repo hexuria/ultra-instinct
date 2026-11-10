@@ -1593,11 +1593,11 @@ where
                         "{reason}: {label:?} matches a confirm-press pattern; confirm {label:?} to press it"
                     ),
                     _ => {
-                        // The page's host, or where a form submit would go.
+                        // The page's host, or where a form submit would go;
+                        // a URL with no host is named by its scheme.
                         let host = url
                             .as_deref()
-                            .and_then(ultra_instinct_guard::host_of)
-                            .unwrap_or_else(|| "(unknown url)".to_owned());
+                            .map_or_else(|| "(unknown url)".to_owned(), ultra_instinct_guard::refused_place);
                         format!("{reason}: {host} is not an allowed domain")
                     }
                 };

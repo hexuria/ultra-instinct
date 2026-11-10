@@ -523,3 +523,39 @@ fn a_download_through_a_symlink_out_of_the_folder_is_refused() {
     assert_eq!(std::fs::read(root.join("outside.txt")).unwrap(), b"keep");
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// `ULTRA_INSTINCT_REFUSE_BLOB` (through the pure `policy_from_vars`, so no
+/// test sets the process env): 1 / true on in any case, 0 / false / empty
+/// off, anything else fails closed, and refusing blob: with no list is an
+/// error rather than a switch that does nothing.
+#[test]
+fn the_env_policy_parses_refuse_blob_and_fails_closed() {
+    use ultra_instinct_mcp::policy_from_vars;
+    for on in ["1", "true", " TRUE ", "True"] {
+        let policy = policy_from_vars("shop.example", "", on).unwrap();
+        assert!(policy.refuse_blob, "{on:?}");
+    }
+    for off in ["", "0", "false", " FALSE "] {
+        let policy = policy_from_vars("shop.example", "", off).unwrap();
+        assert!(!policy.refuse_blob, "{off:?}");
+    }
+    let err = policy_from_vars("shop.example", "", "yes").unwrap_err();
+    assert!(err.contains("expected 1, true, 0 or false"), "{err}");
+    let err = policy_from_vars("", "", "1").unwrap_err();
+    assert!(err.contains("needs ULTRA_INSTINCT_ALLOW_DOMAINS"), "{err}");
+    // A bad list still fails as before.
+    assert!(policy_from_vars("https://x/", "", "").is_err());
+    // The parsed switch is what the server's tools refuse by.
+    let (server, _log) = replay(ScriptBuilder::new());
+    let mut server = server.with_policy(policy_from_vars("127.0.0.1", "", "1").unwrap());
+    let err = server
+        .call_tool(
+            "browser_navigate",
+            &json!({"cdp": "http://127.0.0.1:9222", "url": "blob:http://127.0.0.1/x"}),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&err, ToolError::DomainNotAllowed { host } if host == "a blob: page"),
+        "{err:?}"
+    );
+}
