@@ -6,7 +6,13 @@
 //! {targetId, flatten: true}` and every page message carries `sessionId`.
 //! This module never spawns Chrome; whoever launched it hands over the ends.
 //!
-//! **Threading.** One thread owns a [`PipeBrowser`] and every [`PipePage`]
+//! **Two links, one wire.** The routing below (ids, sessions, events,
+//! dialogs, gone targets, limits) runs over a crate-private `Link` that only
+//! moves frames: the pipe here, or Chrome's browser websocket
+//! (`ws_browser.rs`, [`CdpBrowser::connect_websocket`]). [`PipeBrowser`] /
+//! [`PipePage`] are [`CdpBrowser`] / [`CdpPage`] under their old names.
+//!
+//! **Threading.** One thread owns a [`CdpBrowser`] and every [`CdpPage`]
 //! made from it. They share the connection through `Rc<RefCell<..>>`, so all
 //! of them are deliberately `!Send` and `!Sync`. There is no reader thread:
 //! whoever calls pumps the pipe until its own id answers (pump-on-call),
@@ -212,12 +218,170 @@ struct Session {
     gone: bool,
 }
 
-/// The connection every handle shares: one reader, one writer, one id space.
-struct Wire {
+/// Why [`Link::pump`] stopped without progress.
+pub(crate) enum Stop {
+    /// The call's deadline passed.
+    Deadline,
+    /// The link broke (EOF, a read / write / poll error); this is the message.
+    Closed(String),
+}
+
+/// How frames move over one browser connection: the pipe ([`PipeLink`]) or
+/// the browser websocket (`crate::ws_browser`). The [`Wire`] above it owns
+/// ids, routing, sessions, events and dialogs; a link only moves bytes.
+pub(crate) trait Link {
+    /// Begin writing one request (its JSON text, unframed). [`Link::pump`]
+    /// writes it while it also reads.
+    fn begin(&mut self, message: Vec<u8>);
+    /// Whether everything begun is written.
+    fn flushed(&self) -> bool;
+    /// Wait until `deadline` for progress: bytes read (whole frames go to
+    /// [`Link::next_frame`]) or, while not [`Link::flushed`], bytes written.
+    fn pump(&mut self, deadline: Instant) -> Result<(), Stop>;
+    /// The begun request missed its deadline. `true`: part of it is on the
+    /// wire, so the stream is unframed and the link is dead.
+    fn abandon(&mut self) -> bool;
+    /// The next whole frame read, if any.
+    fn next_frame(&mut self) -> Option<Frame>;
+    /// Nothing of an earlier request is waiting to be written.
+    fn idle(&self) -> bool;
+    /// One non-blocking try at a request nobody waits for (never waits;
+    /// a rest the link could not take now may be finished by the next
+    /// [`Link::begin`], or the request is skipped).
+    fn try_send(&mut self, message: Vec<u8>);
+}
+
+/// One `poll(2)` on `fds`, bounded by `deadline` (past it: [`Stop::Deadline`]).
+/// Long waits poll in hour slices (macOS caps poll at `c_int::MAX` ms).
+/// `false`: woken with nothing ready (a slice ran out, or `EINTR`).
+pub(crate) fn poll_until(fds: &mut [PollFd<'_>], deadline: Instant) -> Result<bool, Stop> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        return Err(Stop::Deadline);
+    }
+    let slice = left.min(Duration::from_secs(3600));
+    let timeout = Timespec {
+        tv_sec: slice.as_secs().try_into().unwrap_or(3600),
+        tv_nsec: slice.subsec_nanos().into(),
+    };
+    match poll(fds, Some(&timeout)) {
+        Ok(0) | Err(rustix::io::Errno::INTR) => Ok(false),
+        Ok(_) => Ok(true),
+        Err(err) => Err(Stop::Closed(format!("poll: {err}"))),
+    }
+}
+
+/// The pipe link: NUL-delimited frames over two fds, `poll(2)` on both.
+struct PipeLink {
     reader: File,
     writer: File,
     splitter: FrameSplitter,
     chunk: Vec<u8>,
+    /// The rest of a frame [`Link::try_send`] got only partly written: the
+    /// next [`Link::begin`] writes it first, so frames stay whole.
+    outbox: Vec<u8>,
+    /// The bytes being written: the carried outbox, then this request.
+    out: Vec<u8>,
+    written: usize,
+    carried: usize,
+}
+
+impl Link for PipeLink {
+    fn begin(&mut self, message: Vec<u8>) {
+        // A frame `try_send` left half written goes first.
+        let mut bytes = std::mem::take(&mut self.outbox);
+        self.carried = bytes.len();
+        bytes.extend_from_slice(&message);
+        bytes.push(0);
+        self.out = bytes;
+        self.written = 0;
+    }
+
+    fn flushed(&self) -> bool {
+        self.written >= self.out.len()
+    }
+
+    /// Wait until the read end has bytes, then push one chunk; while a
+    /// request is unwritten, also until the write end takes some of it.
+    fn pump(&mut self, deadline: Instant) -> Result<(), Stop> {
+        loop {
+            let pending = !self.flushed();
+            let (readable, writable) = {
+                let mut fds = [
+                    PollFd::new(&self.reader, PollFlags::IN),
+                    PollFd::new(&self.writer, PollFlags::OUT),
+                ];
+                let watched = if pending { 2 } else { 1 };
+                if !poll_until(&mut fds[..watched], deadline)? {
+                    continue;
+                }
+                (
+                    !fds[0].revents().is_empty(),
+                    watched == 2 && !fds[1].revents().is_empty(),
+                )
+            };
+            if readable {
+                match self.reader.read(&mut self.chunk) {
+                    Ok(0) => return Err(Stop::Closed("end of stream".into())),
+                    Ok(n) => {
+                        self.splitter.push(&self.chunk[..n]);
+                        return Ok(());
+                    }
+                    Err(err)
+                        if matches!(err.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) => {
+                    }
+                    Err(err) => return Err(Stop::Closed(format!("read: {err}"))),
+                }
+            }
+            if writable {
+                match self.writer.write(&self.out[self.written..]) {
+                    Ok(n) => {
+                        self.written += n;
+                        return Ok(());
+                    }
+                    Err(err)
+                        if matches!(err.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) => {
+                    }
+                    Err(err) => return Err(Stop::Closed(format!("write: {err}"))),
+                }
+            }
+        }
+    }
+
+    fn abandon(&mut self) -> bool {
+        let out = std::mem::take(&mut self.out);
+        let (written, carried) = (self.written, self.carried);
+        self.written = 0;
+        if written > carried {
+            // Half a request on the wire: nothing after it parses.
+            return true;
+        }
+        // None of this request left; the carried rest still waits.
+        self.outbox = out[written..carried].to_vec();
+        false
+    }
+
+    fn next_frame(&mut self) -> Option<Frame> {
+        self.splitter.next_frame()
+    }
+
+    fn idle(&self) -> bool {
+        self.outbox.is_empty()
+    }
+
+    fn try_send(&mut self, mut message: Vec<u8>) {
+        message.push(0);
+        if let Ok(n) = self.writer.write(&message) {
+            if n > 0 && n < message.len() {
+                self.outbox = message[n..].to_vec();
+            }
+        }
+    }
+}
+
+/// The connection every handle shares: one link, one id space.
+struct Wire {
+    link: Box<dyn Link>,
     limits: PipeLimits,
     next_id: i64,
     dead: Option<CdpError>,
@@ -225,9 +389,6 @@ struct Wire {
     dropped_frames: u64,
     browser_events: VecDeque<CdpEvent>,
     sessions: HashMap<String, Session>,
-    /// The rest of a frame [`Wire::send_now`] got only partly written: the
-    /// next [`Wire::send`] writes it first, so frames stay whole.
-    outbox: Vec<u8>,
 }
 
 /// What one frame meant to the call waiting on it.
@@ -237,11 +398,14 @@ enum Routed {
 }
 
 impl Wire {
+    /// One call, answered within `wait` (the call deadline unless a caller
+    /// asks for another).
     fn call(
         &mut self,
         session: Option<&str>,
         method: &str,
         params_json: &str,
+        wait: Duration,
     ) -> Result<String, CdpError> {
         if let Some(err) = &self.dead {
             return Err(err.clone());
@@ -252,8 +416,8 @@ impl Wire {
         let params: Value = serde_json::from_str(params_json).map_err(|err| CdpError::BadJson {
             message: err.to_string(),
         })?;
-        let deadline = Instant::now() + self.limits.call_deadline;
-        let (id, early) = self.send(session, method, params, deadline)?;
+        let deadline = Instant::now() + wait;
+        let (id, early) = self.send(session, method, params, deadline, wait)?;
         if let Some(answer) = early {
             return answer;
         }
@@ -261,7 +425,7 @@ impl Wire {
             if let Some(answer) = self.route_buffered(id, session, method) {
                 return answer;
             }
-            self.wait(deadline, method, None)?;
+            self.pump(deadline, method, wait)?;
         }
     }
 
@@ -274,44 +438,36 @@ impl Wire {
         method: &str,
         params: Value,
         deadline: Instant,
+        wait: Duration,
     ) -> Result<(i64, Option<Result<String, CdpError>>), CdpError> {
         if let Some(err) = &self.dead {
             return Err(err.clone());
         }
-        let (id, frame) = self.frame(session, method, params);
-        // A frame `send_now` left half written goes first.
-        let mut bytes = std::mem::take(&mut self.outbox);
-        let carried = bytes.len();
-        bytes.extend_from_slice(&frame);
-        let mut written = 0;
+        let (id, message) = self.frame(session, method, params);
+        self.link.begin(message);
         let mut early = None;
-        while written < bytes.len() {
+        while !self.link.flushed() {
             // Route what came in (events queue; a second answer is moot).
             while let Some(answer) = self.route_buffered(id, session, method) {
                 early.get_or_insert(answer);
             }
-            let ready = match self.wait(deadline, method, Some(&bytes[written..])) {
-                Ok(ready) => ready,
-                Err(err @ CdpError::Timeout { .. }) if written > carried => {
-                    // Half a request on the wire: nothing after it parses.
-                    self.die(CdpError::PipeClosed {
-                        message: format!("`{method}` was cut off mid-write by its deadline"),
-                    });
-                    return Err(err);
-                }
+            match self.pump(deadline, method, wait) {
+                Ok(()) => {}
                 Err(err @ CdpError::Timeout { .. }) => {
-                    // None of this request left; the carried rest still waits.
-                    self.outbox = bytes[written..carried].to_vec();
+                    if self.link.abandon() {
+                        self.die(CdpError::PipeClosed {
+                            message: format!("`{method}` was cut off mid-write by its deadline"),
+                        });
+                    }
                     return Err(err);
                 }
                 Err(err) => return Err(err),
-            };
-            written += ready;
+            }
         }
         Ok((id, early))
     }
 
-    /// A request frame with the next id, NUL included.
+    /// A request's JSON text with the next id.
     fn frame(&mut self, session: Option<&str>, method: &str, params: Value) -> (i64, Vec<u8>) {
         let id = self.next_id;
         self.next_id += 1;
@@ -319,26 +475,19 @@ impl Wire {
         if let Some(session) = session {
             envelope["sessionId"] = Value::from(session);
         }
-        let mut bytes = envelope.to_string().into_bytes();
-        bytes.push(0);
-        (id, bytes)
+        (id, envelope.to_string().into_bytes())
     }
 
     /// One non-blocking try at a request whose answer nobody waits for. It
-    /// never waits and never marks the pipe dead: a frame the pipe takes
+    /// never waits and never marks the link dead: a request the link takes
     /// none of now is skipped (also while an earlier one's rest is pending,
-    /// or on a write error the next call meets); one it takes part of keeps
-    /// its rest in `outbox` for the next [`Self::send`].
+    /// or on a write error the next call meets).
     fn send_now(&mut self, method: &str, params: Value) {
-        if self.dead.is_some() || !self.outbox.is_empty() {
+        if self.dead.is_some() || !self.link.idle() {
             return;
         }
-        let (_, frame) = self.frame(None, method, params);
-        if let Ok(n) = self.writer.write(&frame) {
-            if n > 0 && n < frame.len() {
-                self.outbox = frame[n..].to_vec();
-            }
-        }
+        let (_, message) = self.frame(None, method, params);
+        self.link.try_send(message);
     }
 
     /// Route every complete frame buffered; the waiting call's answer, if
@@ -349,7 +498,7 @@ impl Wire {
         session: Option<&str>,
         method: &str,
     ) -> Option<Result<String, CdpError>> {
-        while let Some(frame) = self.splitter.next_frame() {
+        while let Some(frame) = self.link.next_frame() {
             let routed = match frame {
                 Frame::Message(frame) => self.route(&frame, id, session, method),
                 Frame::Oversize { id: Some(frame_id) } if frame_id == id => {
@@ -369,81 +518,12 @@ impl Wire {
         None
     }
 
-    /// Wait (bounded by `deadline`) until the read end has bytes, then push
-    /// one chunk; with `pending`, also until the write end takes some of
-    /// them. Returns how many bytes of `pending` were written (0 when it
-    /// read instead).
-    fn wait(
-        &mut self,
-        deadline: Instant,
-        method: &str,
-        pending: Option<&[u8]>,
-    ) -> Result<usize, CdpError> {
-        loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Err(deadline_error(method, self.limits.call_deadline));
-            }
-            // Long waits poll in hour slices (macOS caps poll at `c_int::MAX` ms).
-            let slice = left.min(Duration::from_secs(3600));
-            let timeout = Timespec {
-                tv_sec: slice.as_secs().try_into().unwrap_or(3600),
-                tv_nsec: slice.subsec_nanos().into(),
-            };
-            let (readable, writable) = {
-                let mut fds = [
-                    PollFd::new(&self.reader, PollFlags::IN),
-                    PollFd::new(&self.writer, PollFlags::OUT),
-                ];
-                let watched = if pending.is_some() { 2 } else { 1 };
-                match poll(&mut fds[..watched], Some(&timeout)) {
-                    Ok(0) | Err(rustix::io::Errno::INTR) => continue,
-                    Ok(_) => {}
-                    Err(err) => {
-                        return Err(self.die(CdpError::PipeClosed {
-                            message: format!("poll: {err}"),
-                        }));
-                    }
-                }
-                (
-                    !fds[0].revents().is_empty(),
-                    watched == 2 && !fds[1].revents().is_empty(),
-                )
-            };
-            if readable {
-                match self.reader.read(&mut self.chunk) {
-                    Ok(0) => {
-                        return Err(self.die(CdpError::PipeClosed {
-                            message: "end of stream".into(),
-                        }));
-                    }
-                    Ok(n) => {
-                        self.splitter.push(&self.chunk[..n]);
-                        return Ok(0);
-                    }
-                    Err(err)
-                        if matches!(err.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) => {
-                    }
-                    Err(err) => {
-                        return Err(self.die(CdpError::PipeClosed {
-                            message: format!("read: {err}"),
-                        }));
-                    }
-                }
-            }
-            if let (true, Some(bytes)) = (writable, pending) {
-                match self.writer.write(bytes) {
-                    Ok(n) => return Ok(n),
-                    Err(err)
-                        if matches!(err.kind(), ErrorKind::Interrupted | ErrorKind::WouldBlock) => {
-                    }
-                    Err(err) => {
-                        return Err(self.die(CdpError::PipeClosed {
-                            message: format!("write: {err}"),
-                        }));
-                    }
-                }
-            }
+    /// One wait on the link; a broken link marks the wire dead.
+    fn pump(&mut self, deadline: Instant, method: &str, wait: Duration) -> Result<(), CdpError> {
+        match self.link.pump(deadline) {
+            Ok(()) => Ok(()),
+            Err(Stop::Deadline) => Err(deadline_error(method, wait)),
+            Err(Stop::Closed(message)) => Err(self.die(CdpError::PipeClosed { message })),
         }
     }
 
@@ -539,17 +619,25 @@ impl Wire {
     }
 }
 
-/// A browser-level CDP connection over a pipe pair the caller owns.
+/// A browser-level CDP connection: over a pipe pair the caller owns
+/// ([`CdpBrowser::new`]), or over Chrome's one browser websocket
+/// (`CdpBrowser::connect_websocket`, for a Chrome whose remote debugging the
+/// user turned on). Both carry flattened page sessions the same way.
 ///
 /// `!Send` / `!Sync`: one thread owns it and every page it makes. A clone is
-/// another handle on the same connection (like a [`PipePage`]), not a second
-/// pipe.
+/// another handle on the same connection (like a [`CdpPage`]), not a second
+/// link.
 #[derive(Clone)]
-pub struct PipeBrowser {
+pub struct CdpBrowser {
     wire: Rc<RefCell<Wire>>,
 }
 
-impl PipeBrowser {
+/// The pipe browser's name before the websocket link: the same type.
+pub type PipeBrowser = CdpBrowser;
+/// The pipe page's name before the websocket link: the same type.
+pub type PipePage = CdpPage;
+
+impl CdpBrowser {
     /// Take over the ends of a `--remote-debugging-pipe` pair with default
     /// [`PipeLimits`]. `reader` is the end Chrome writes (its fd 4), `writer`
     /// the end Chrome reads (its fd 3). Anything that converts into an
@@ -575,22 +663,45 @@ impl PipeBrowser {
             .map(|err| CdpError::PipeClosed {
                 message: format!("cannot make the write end non-blocking: {err}"),
             });
-        let wire = Wire {
+        let link = PipeLink {
             reader: File::from(reader.into()),
             writer,
             splitter: FrameSplitter::new(limits.max_frame_bytes),
             chunk: vec![0; READ_CHUNK],
+            outbox: Vec::new(),
+            out: Vec::new(),
+            written: 0,
+            carried: 0,
+        };
+        Self::over(Box::new(link), limits, dead)
+    }
+
+    /// A browser over `link`; `dead` fails every call from the start.
+    pub(crate) fn over(link: Box<dyn Link>, limits: PipeLimits, dead: Option<CdpError>) -> Self {
+        let wire = Wire {
+            link,
             limits,
             next_id: 1,
             dead,
             dropped_frames: 0,
             browser_events: VecDeque::new(),
             sessions: HashMap::new(),
-            outbox: Vec::new(),
         };
         Self {
             wire: Rc::new(RefCell::new(wire)),
         }
+    }
+
+    /// One browser-level call answered within `wait` instead of the call
+    /// deadline (the first call on a link that may wait on a prompt, a
+    /// cleanup that must not hang).
+    pub(crate) fn call_within(
+        &self,
+        method: &str,
+        params_json: &str,
+        wait: Duration,
+    ) -> Result<String, CdpError> {
+        self.wire.borrow_mut().call(None, method, params_json, wait)
     }
 
     pub fn limits(&self) -> PipeLimits {
@@ -606,7 +717,8 @@ impl PipeBrowser {
 
     /// One browser-level call (no `sessionId`). Returns the `result` text.
     pub fn call(&self, method: &str, params_json: &str) -> Result<String, CdpError> {
-        self.wire.borrow_mut().call(None, method, params_json)
+        let wait = self.limits().call_deadline;
+        self.wire.borrow_mut().call(None, method, params_json, wait)
     }
 
     /// Browser-level events (no `sessionId`) queued since the last drain.
@@ -624,7 +736,7 @@ impl PipeBrowser {
     }
 
     /// Attach to `target_id` (`Target.attachToTarget`, `flatten: true`).
-    pub fn page(&self, target_id: &str) -> Result<PipePage, CdpError> {
+    pub fn page(&self, target_id: &str) -> Result<CdpPage, CdpError> {
         let body = self.call(
             "Target.attachToTarget",
             &json!({"targetId": target_id, "flatten": true}).to_string(),
@@ -638,7 +750,7 @@ impl PipeBrowser {
                 gone: false,
             },
         );
-        Ok(PipePage {
+        Ok(CdpPage {
             wire: Rc::clone(&self.wire),
             session_id,
             target_id: target_id.to_owned(),
@@ -680,6 +792,13 @@ impl PipeBrowser {
         created_target_id(&body)
     }
 
+    /// Open a page target on `url` in a new window (`Target.createTarget`,
+    /// `newWindow: true`); returns its id.
+    pub fn create_window(&self, url: &str) -> Result<String, CdpError> {
+        let params = json!({"url": url, "newWindow": true}).to_string();
+        created_target_id(&self.call("Target.createTarget", &params)?)
+    }
+
     /// Close a target (`Target.closeTarget`); the reported `success` flag.
     pub fn close_target(&self, target_id: &str) -> Result<bool, CdpError> {
         let body = self.call(
@@ -707,30 +826,30 @@ impl PipeBrowser {
     }
 }
 
-impl CdpTransport for PipeBrowser {
+impl CdpTransport for CdpBrowser {
     fn call(&mut self, method: &str, params_json: &str) -> Result<String, CdpError> {
-        PipeBrowser::call(self, method, params_json)
+        CdpBrowser::call(self, method, params_json)
     }
 
     fn drain_events(&mut self) -> Vec<CdpEvent> {
-        PipeBrowser::drain_events(self)
+        CdpBrowser::drain_events(self)
     }
 }
 
-/// One attached page session on a [`PipeBrowser`]'s pipe.
+/// One attached page session on a [`CdpBrowser`]'s link.
 ///
 /// `!Send` / `!Sync`, like its browser. Dropping it makes one non-blocking
 /// try at `Target.detachFromTarget` and never waits for the reply or for
 /// room in the pipe (skipped when the pipe is dead or full, or the target
 /// is already gone; a frame written in part is finished by the next call),
 /// and drops the session's queued events.
-pub struct PipePage {
+pub struct CdpPage {
     wire: Rc<RefCell<Wire>>,
     session_id: String,
     target_id: String,
 }
 
-impl PipePage {
+impl CdpPage {
     pub fn session_id(&self) -> &str {
         &self.session_id
     }
@@ -740,11 +859,11 @@ impl PipePage {
     }
 }
 
-impl CdpTransport for PipePage {
+impl CdpTransport for CdpPage {
     fn call(&mut self, method: &str, params_json: &str) -> Result<String, CdpError> {
-        self.wire
-            .borrow_mut()
-            .call(Some(&self.session_id), method, params_json)
+        let mut wire = self.wire.borrow_mut();
+        let wait = wire.limits.call_deadline;
+        wire.call(Some(&self.session_id), method, params_json, wait)
     }
 
     /// This session's events only.
@@ -758,7 +877,7 @@ impl CdpTransport for PipePage {
     }
 }
 
-impl Drop for PipePage {
+impl Drop for CdpPage {
     fn drop(&mut self) {
         let Ok(mut wire) = self.wire.try_borrow_mut() else {
             return;

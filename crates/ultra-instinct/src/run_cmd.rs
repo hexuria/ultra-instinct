@@ -264,6 +264,10 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
                     cdp = Some(ultra_instinct_browser::DEFAULT_CDP_HTTP.to_owned());
                 }
             }
+            "--attach" => {
+                let hint = "aui run --attach: use aui open --attach and the shell verbs";
+                return Err(CliError::Config(hint.into()));
+            }
             _ => return Err(CliError::UnknownFlag(arg.to_owned())),
         }
         i += 1;

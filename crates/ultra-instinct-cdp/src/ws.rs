@@ -30,7 +30,7 @@ pub(crate) const CALL_DEADLINE: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
 
-type Socket = WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
+type Socket = WebSocket<TcpStream>;
 
 #[derive(Clone)]
 struct OwnedTarget {
@@ -371,6 +371,23 @@ pub(crate) fn deadline_error(method: &str, deadline: Duration) -> CdpError {
 }
 
 fn connect_socket(ws_url: &str) -> Result<Socket, CdpError> {
+    connect_plain(ws_url, IO_TIMEOUT, None)
+}
+
+/// A plain `ws://` socket to `ws_url`: TCP within the connect deadline, then
+/// [`handshake`]. `wss://` refuses.
+pub(crate) fn connect_plain(
+    ws_url: &str,
+    handshake_wait: Duration,
+    config: Option<tungstenite::protocol::WebSocketConfig>,
+) -> Result<Socket, CdpError> {
+    let stream = connect_tcp(&plain_host_port(ws_url)?)?;
+    handshake(ws_url, stream, handshake_wait, config)
+}
+
+/// The `host:port` of a `ws://` URL (port 80 when none); `wss://` and other
+/// schemes refuse.
+pub(crate) fn plain_host_port(ws_url: &str) -> Result<String, CdpError> {
     if ws_url.starts_with("wss://") {
         return Err(CdpError::Transport {
             message: "wss is not supported; use a local ws:// debugging port".into(),
@@ -381,35 +398,40 @@ fn connect_socket(ws_url: &str) -> Result<Socket, CdpError> {
             message: format!("websocket URL `{ws_url}` must use ws://"),
         });
     }
-    // `tungstenite::connect` applies no deadline until it returns — a host
-    // that accepts TCP but never completes the upgrade would stall forever.
-    // Connect with a timeout, then run the blocking handshake over a socket
-    // that already carries read/write timeouts.
     let authority = ws_url["ws://".len()..]
         .split('/')
         .next()
         .unwrap_or_default();
-    let host_port = match authority.contains(':') {
+    Ok(match authority.contains(':') {
         true => authority.to_owned(),
         false => format!("{authority}:80"),
-    };
-    let stream = connect_tcp(&host_port)?;
+    })
+}
+
+/// The blocking websocket handshake over `stream`, whose reads and writes
+/// time out after `handshake_wait` (the socket keeps those timeouts).
+/// `tungstenite::connect` applies no deadline until it returns: a host that
+/// accepts TCP but never completes the upgrade would stall forever.
+pub(crate) fn handshake(
+    ws_url: &str,
+    stream: TcpStream,
+    handshake_wait: Duration,
+    config: Option<tungstenite::protocol::WebSocketConfig>,
+) -> Result<Socket, CdpError> {
     stream
-        .set_read_timeout(Some(IO_TIMEOUT))
-        .and_then(|()| stream.set_write_timeout(Some(IO_TIMEOUT)))
+        .set_read_timeout(Some(handshake_wait))
+        .and_then(|()| stream.set_write_timeout(Some(handshake_wait)))
         .map_err(|err| CdpError::Transport {
             message: err.to_string(),
         })?;
-    let (socket, _response) =
-        tungstenite::client(ws_url, tungstenite::stream::MaybeTlsStream::Plain(stream)).map_err(
-            |err| CdpError::Transport {
-                message: err.to_string(),
-            },
-        )?;
+    let (socket, _response) = tungstenite::client::client_with_config(ws_url, stream, config)
+        .map_err(|err| CdpError::Transport {
+            message: err.to_string(),
+        })?;
     Ok(socket)
 }
 
-fn connect_tcp(host_port: &str) -> Result<TcpStream, CdpError> {
+pub(crate) fn connect_tcp(host_port: &str) -> Result<TcpStream, CdpError> {
     let mut last_err = String::from("no addresses resolved");
     for addr in host_port
         .to_socket_addrs()

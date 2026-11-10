@@ -291,6 +291,79 @@ pub fn parse_devtools_active_port(body: &str) -> Option<u16> {
         .filter(|port| *port != 0)
 }
 
+/// Why no browser websocket to attach to was found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AttachError {
+    /// No `DevToolsActivePort` in any of these user-data dirs.
+    NoPortFile(Vec<PathBuf>),
+    /// This `DevToolsActivePort` holds no port and browser path.
+    BadPortFile(PathBuf),
+}
+
+impl std::fmt::Display for AttachError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoPortFile(dirs) => {
+                let dirs: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
+                write!(
+                    f,
+                    "no DevToolsActivePort in {}: open chrome://inspect/#remote-debugging in Chrome and turn on remote debugging",
+                    dirs.join(", ")
+                )
+            }
+            Self::BadPortFile(path) => write!(
+                f,
+                "{} does not hold a port and a /devtools/browser/ path: turn remote debugging off and on again at chrome://inspect/#remote-debugging",
+                path.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AttachError {}
+
+/// The browser websocket of a Chrome whose remote debugging is on, from
+/// `<user_data_dir>/DevToolsActivePort`: `ws://127.0.0.1:<port><path>`, the
+/// port on line 1 and a `/devtools/browser/...` path of `[A-Za-z0-9/_-]` on
+/// line 2.
+pub fn attach_endpoint(user_data_dir: &Path) -> Result<String, AttachError> {
+    let file = user_data_dir.join("DevToolsActivePort");
+    let body = std::fs::read_to_string(&file)
+        .map_err(|_| AttachError::NoPortFile(vec![user_data_dir.to_path_buf()]))?;
+    let path = body.lines().nth(1).map(str::trim).unwrap_or_default();
+    let path_ok = path.len() > "/devtools/browser/".len()
+        && path.starts_with("/devtools/browser/")
+        && path
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-'));
+    match parse_devtools_active_port(&body) {
+        Some(port) if path_ok => Ok(format!("ws://127.0.0.1:{port}{path}")),
+        _ => Err(AttachError::BadPortFile(file)),
+    }
+}
+
+/// [`attach_endpoint`] of the first of [`default_user_data_dirs`] (Chrome
+/// stable first) that holds a valid `DevToolsActivePort`. None valid: the
+/// first bad file, else [`AttachError::NoPortFile`] naming every dir tried.
+pub fn find_attach_endpoint() -> Result<String, AttachError> {
+    find_attach_endpoint_in(&default_user_data_dirs())
+}
+
+fn find_attach_endpoint_in(dirs: &[PathBuf]) -> Result<String, AttachError> {
+    let mut bad = None;
+    for dir in dirs {
+        match attach_endpoint(dir) {
+            Ok(url) => return Ok(url),
+            Err(err @ AttachError::BadPortFile(_)) => {
+                bad.get_or_insert(err);
+            }
+            Err(_) => {}
+        }
+    }
+    Err(bad.unwrap_or_else(|| AttachError::NoPortFile(dirs.to_vec())))
+}
+
 #[derive(Debug, Clone)]
 pub struct LaunchOptions {
     /// Binary to start; `None` runs [`find_chrome`].
@@ -516,6 +589,73 @@ mod tests {
     }
 
     #[test]
+    fn attach_endpoint_reads_the_port_and_browser_path() {
+        let dir = scratch("attach");
+        let file = dir.join("DevToolsActivePort");
+        let missing = attach_endpoint(&dir).unwrap_err();
+        assert!(
+            missing.to_string().contains("turn on remote debugging"),
+            "{missing}"
+        );
+        std::fs::write(&file, "9222\n/devtools/browser/0b1e-2c_3d\n").unwrap();
+        assert_eq!(
+            attach_endpoint(&dir).unwrap(),
+            "ws://127.0.0.1:9222/devtools/browser/0b1e-2c_3d"
+        );
+        for bad in [
+            "9222\n",
+            "9222\n/devtools/page/abc\n",
+            "9222\n/devtools/browser/\n",
+            "9222\n/devtools/browser/a?b=1\n",
+            "9222\n/devtools/browser/a b\n",
+            "0\n/devtools/browser/abc\n",
+            "x\n/devtools/browser/abc\n",
+        ] {
+            std::fs::write(&file, bad).unwrap();
+            assert_eq!(
+                attach_endpoint(&dir),
+                Err(AttachError::BadPortFile(file.clone())),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn find_attach_endpoint_takes_the_first_valid_dir_in_order() {
+        let root = scratch("attach-find");
+        let dirs: Vec<PathBuf> = ["stable", "beta", "brave"].map(|n| root.join(n)).into();
+        for dir in &dirs {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let err = find_attach_endpoint_in(&dirs).unwrap_err();
+        assert_eq!(err, AttachError::NoPortFile(dirs.clone()));
+        assert!(err.to_string().contains("beta"), "{err}");
+        std::fs::write(dirs[1].join("DevToolsActivePort"), "1\n/devtools/page/x\n").unwrap();
+        assert!(matches!(
+            find_attach_endpoint_in(&dirs),
+            Err(AttachError::BadPortFile(_))
+        ));
+        std::fs::write(
+            dirs[2].join("DevToolsActivePort"),
+            "3\n/devtools/browser/c\n",
+        )
+        .unwrap();
+        assert_eq!(
+            find_attach_endpoint_in(&dirs).unwrap(),
+            "ws://127.0.0.1:3/devtools/browser/c"
+        );
+        std::fs::write(
+            dirs[0].join("DevToolsActivePort"),
+            "2\n/devtools/browser/a\n",
+        )
+        .unwrap();
+        assert_eq!(
+            find_attach_endpoint_in(&dirs).unwrap(),
+            "ws://127.0.0.1:2/devtools/browser/a"
+        );
+    }
+
+    #[test]
     fn search_order_is_override_cache_system_path() {
         let dir = scratch("order");
         let bin = dir.join("bin");
@@ -686,5 +826,51 @@ mod tests {
         assert!(!pages.is_empty());
         drop(chrome);
         assert!(!profile.exists());
+    }
+
+    /// The attach path end to end on a Chrome of its own: a temp profile on
+    /// `--remote-debugging-port=0` writes `DevToolsActivePort` with the
+    /// browser socket path, the way the remote-debugging toggle does. Never
+    /// the real default profile.
+    #[test]
+    #[cfg(unix)]
+    #[ignore = "starts a real Chrome"]
+    fn live_attach_drives_a_tab_and_closes_only_its_own() {
+        use ultra_instinct_cdp::{CdpBrowser, SessionBackend, TargetBackend, ATTACH_ENDPOINT};
+        let chrome = launch(&LaunchOptions::default()).expect("launch chrome");
+        assert!(!is_default_user_data_dir(chrome.profile_dir()));
+        let url = attach_endpoint(chrome.profile_dir()).expect("port file");
+        assert!(url.starts_with("ws://127.0.0.1:") && url.contains("/devtools/browser/"));
+        let browser = CdpBrowser::connect_websocket(&url).expect("attach");
+        let mut backend = SessionBackend::attached(browser);
+        let before = backend.list_pages(ATTACH_ENDPOINT).expect("tabs");
+        assert!(!before.is_empty());
+        let tab = backend
+            .create_page(ATTACH_ENDPOINT, "about:blank")
+            .expect("new tab");
+        let mut page = backend.connect(&tab.key).expect("session");
+        let out = page
+            .call(
+                "Runtime.evaluate",
+                r#"{"expression":"1+1","returnByValue":true}"#,
+            )
+            .expect("evaluate");
+        assert!(out.contains('2'), "{out}");
+        drop(page);
+        drop(backend);
+        // Closing a target settles shortly after its reply.
+        let started = Instant::now();
+        let after = loop {
+            let after = ultra_instinct_cdp::page_targets(&chrome.endpoint()).expect("json/list");
+            if after.len() == before.len() || started.elapsed() > Duration::from_secs(3) {
+                break after;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        assert!(
+            after.iter().all(|t| t.target_id != tab.target_id),
+            "{after:?}"
+        );
+        assert_eq!(after.len(), before.len(), "the other tabs stay open");
     }
 }

@@ -145,7 +145,23 @@ fn run_checks(cdp: &str, quick: bool) -> Vec<Check> {
         false,
         Ok("not needed: aui is a prebuilt binary; Rust only builds it from source".to_owned()),
     );
-    vec![chrome, endpoint, test_launch, socket, toolchain]
+    let attach = Check::new(
+        "attach",
+        false,
+        launch::find_attach_endpoint()
+            .map(|url| {
+                let port = url.trim_start_matches("ws://127.0.0.1:");
+                let port = port.split('/').next().unwrap_or_default();
+                format!("port file found (port {port}): aui open --attach tries {url}")
+            })
+            .map_err(|err| {
+                (
+                    err.to_string(),
+                    "optional: only aui open --attach needs it".into(),
+                )
+            }),
+    );
+    vec![chrome, endpoint, test_launch, socket, attach, toolchain]
 }
 
 fn try_launch(binary: Option<PathBuf>) -> Result<String, (String, String)> {

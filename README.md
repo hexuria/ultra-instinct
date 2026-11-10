@@ -154,6 +154,13 @@ Every tool and verb: [`docs/tools.md`](docs/tools.md). Run flags:
   error and HAR file; screenshots hide those fields or refuse.
 - **Files and tools.** File paths must be absolute; a host can keep
   downloads and uploads to one folder and serve only an allow-list of tools.
+- **Your own Chrome, by name only.** `aui open <url> --attach --allow-domain
+  <host>` drives your running Chrome once you turn on
+  chrome://inspect/#remote-debugging; it refuses without `--allow-domain`,
+  works in a tab of its own (a new window; your tabs are never read or
+  closed), never runs the cookie, state, storage or
+  download tools (they reach your whole profile), and `aui close` leaves
+  your Chrome open.
 - **Closed model replies.** An optional remote policy may only pick an
   offered choice or abstain.
 

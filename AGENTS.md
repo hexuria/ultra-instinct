@@ -209,7 +209,15 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    (nightly). `aui daemon --session <name>` (unix, std sockets, single
 >    thread) owns one MCP `Server`: one session is one CDP socket; one
 >    connection and one line at a time, no thread pool. `aui open --launch`
->    makes the daemon own its Chrome for the session's life.
+>    makes the daemon own its Chrome for the session's life. `aui open
+>    --attach` (needs `--allow-domain`) makes that one socket the browser
+>    websocket of the user's own Chrome (pages as flat sessions on it, no
+>    reader thread); the daemon works in a tab it opens (a new window) and
+>    sees only the tabs it opened (`SessionBackend` refuses any other
+>    target); on close or idle exit it closes only those, never the user's
+>    Chrome.
+>    `Server::with_attach` never serves `ATTACH_DENIED` (cookies, state,
+>    storage, download: profile-wide).
 >
 > Any change to observable semantics on this path names the boundary it
 > affects (gate, ticket, executor, world, policy, text) and the test that owns
@@ -220,8 +228,8 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 | Crate | Owns |
 |---|---|
 | `ultra-instinct-core` | `InteractionManifold`, regions, `ActionSpace`, fixture grammar |
-| `ultra-instinct-cdp` | CDP transport trait, websocket, replay transport, replay script builder; unix `--remote-debugging-pipe` transport (`PipeBrowser` / `PipePage`, caller-owned fds, one thread); tab backends: `TargetBackend` (list / create / activate / close pages, connect a session key), `HttpBackend` (the `/json` endpoints + a connector, the default) and unix `PipeBackend` (`Target.*` on a `PipeBrowser`, keys `pipe:<targetId>`) |
-| `ultra-instinct-chrome` | Find / start a local Chrome (`find_chrome`, `launch`, `ChromeProcess` killed on drop; headless at `DEFAULT_WINDOW` 1440×900, headed maximized, `LaunchOptions::window_size` overrides); std only, re-exported as `ultra_instinct_browser::launch` |
+| `ultra-instinct-cdp` | CDP transport trait, websocket, replay transport, replay script builder; unix session-multiplexing browser `CdpBrowser` / `CdpPage` (old names `PipeBrowser` / `PipePage`; one thread) over a crate-private `Link`: the `--remote-debugging-pipe` (caller-owned fds) or one browser websocket (`CdpBrowser::connect_websocket`, `ws://` only, `ACCEPT_WAIT` 90 s for Chrome's allow prompt); tab backends: `TargetBackend` (list / create / activate / close pages, connect a session key), `HttpBackend` (the `/json` endpoints + a connector, the default) and unix `SessionBackend` (`Target.*` on a `CdpBrowser`; `new` = `PipeBackend`, keys `pipe:<targetId>`; `attached`, keys `attach:<targetId>`, own-tabs-only: lists, activates, closes and connects only the tabs it opened (each `newWindow: true`, not activated; any other target is `CdpError::NotOwned`), closes those on drop, never `Browser.close`) |
+| `ultra-instinct-chrome` | Find / start a local Chrome (`find_chrome`, `launch`, `ChromeProcess` killed on drop; headless at `DEFAULT_WINDOW` 1440×900, headed maximized, `LaunchOptions::window_size` overrides); `attach_endpoint` / `find_attach_endpoint` (the browser websocket a user's remote-debugging toggle wrote to `DevToolsActivePort`, Chrome stable's dir first); std only, re-exported as `ultra_instinct_browser::launch` |
 | `ultra-instinct-browser` | CDP observe (DOM/AX fusion, identity, stacking), raw CDP inputs; `launch` (re-export of `ultra-instinct-chrome`); `storage_state` (save / load cookies + storage, the 0600 state file and its parser) |
 | `ultra-instinct-observe` | Observation history and id diff |
 | `ultra-instinct-geometry` | Geometry helpers; `RegionState` (availability / visibility of a region) |
@@ -288,6 +296,15 @@ deliberate eval.
   limits): `crates/ultra-instinct-cdp/tests/pipe.rs` against a fake Chrome on
   `std::io::pipe()`, with the frame-splitter chunking proptests; the
   `pipe_frame` fuzz target; live Chrome in `tests/pipe_live.rs` (`#[ignore]`).
+- Browser websocket link and `aui open --attach` (session routing, events,
+  target gone, socket closed, write-while-reading, the allow-prompt hint, a
+  refused port, the attached backend seeing and closing only its own tabs;
+  over MCP `an_attached_server_sees_only_the_tabs_it_opened` in
+  `pipe_mode.rs`):
+  `crates/ultra-instinct-cdp/tests/ws_browser.rs` against a fake Chrome on a
+  127.0.0.1 tungstenite listener; the port file: `ultra-instinct-chrome` unit
+  tests; live Chrome: `live_attach_drives_a_tab_and_closes_only_its_own`
+  (`#[ignore]`).
 - Embedding over a pipe ([`docs/embedding.md`](docs/embedding.md)):
   `crates/ultra-instinct-mcp/tests/pipe_mode.rs` (`Server::with_pipe` against
   a fake Chrome: tabs as `Target.*`, `target_gone`, `pipe_closed`),

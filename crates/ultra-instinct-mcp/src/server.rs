@@ -378,6 +378,23 @@ impl Server {
         Self::with_backend(ultra_instinct_cdp::PipeBackend::new(browser))
     }
 
+    /// A server on the user's own Chrome over its browser websocket
+    /// ([`ultra_instinct_cdp::CdpBrowser::connect_websocket`]), under an
+    /// empty policy: like [`Server::with_pipe`], with keys
+    /// `attach:<targetId>`, but it sees only the tabs it opened (each in a
+    /// new Chrome window): the user's tabs are never listed, switched to,
+    /// read or closed. Until `browser_new_tab` opens one (the `aui` daemon
+    /// does at once), a page call refuses: no tab is bound. Dropping the
+    /// server closes the tabs it opened, never the user's tabs or their
+    /// Chrome. It never serves
+    /// [`crate::ATTACH_DENIED`] (cookies, state, storage, download: they
+    /// reach the whole profile); those answer `tool_not_allowed`.
+    #[cfg(unix)]
+    pub fn with_attach(browser: ultra_instinct_cdp::CdpBrowser) -> Self {
+        Self::with_backend(ultra_instinct_cdp::SessionBackend::attached(browser))
+            .with_tool_allowlist(crate::attach_tools())
+    }
+
     /// One inbound JSON-RPC line. `None` means the client must not be answered.
     pub fn handle_line(&mut self, line: &str) -> Option<String> {
         crate::rpc::handle_line_with(self, line)

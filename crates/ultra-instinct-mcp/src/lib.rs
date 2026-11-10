@@ -35,7 +35,9 @@ pub use ultra_instinct_browser_tools::{
     sensitive, Downloads, HttpBackend, PageTab, TargetBackend, ToolError, ToolLimits, Uploads, MASK,
 };
 #[cfg(unix)]
-pub use ultra_instinct_cdp::{PipeBackend, PIPE_ENDPOINT};
+pub use ultra_instinct_cdp::{
+    CdpBrowser, PipeBackend, SessionBackend, ACCEPT_WAIT, ATTACH_ENDPOINT, PIPE_ENDPOINT,
+};
 pub use ultra_instinct_guard::Policy;
 
 pub const TOOL_OBSERVE: &str = "observe";
@@ -103,6 +105,26 @@ pub const TOOLS: [&str; 56] = [
 
 pub const PRODUCT_TOOLS: [&str; 3] = [TOOL_OBSERVE, TOOL_GUARD, TOOL_VERIFY];
 
+/// Tools [`Server::with_attach`] never serves: on the user's own Chrome
+/// they reach the whole profile, not the allowed sites. State save / load
+/// and cookies read or replace every site's cookies, storage reads or
+/// clears a real site's tokens, and a download sets the browser-wide
+/// download behaviour.
+pub const ATTACH_DENIED: [&str; 5] = [
+    "browser_state_save",
+    "browser_state_load",
+    "browser_cookies",
+    "browser_storage",
+    "browser_download",
+];
+
+/// [`TOOLS`] without [`ATTACH_DENIED`]: the allow-list of an attached server.
+pub fn attach_tools() -> impl Iterator<Item = &'static str> {
+    TOOLS
+        .into_iter()
+        .filter(|name| !ATTACH_DENIED.contains(name))
+}
+
 pub use ultra_instinct_browser_tools::{
     BROWSER_TOOLS, ENV_TOOLS, EXTRA_TOOLS, STATE_AFTER, STATE_TOOLS,
 };
@@ -124,6 +146,17 @@ pub fn tool_for_phase(phase: ultra_instinct_protocol::LoopPhase) -> &'static str
 mod tests {
     use super::*;
     use ultra_instinct_protocol::{FirewallPhase, LoopPhase, FIREWALL_ORDER, LOOP_ORDER};
+
+    #[test]
+    fn attach_serves_every_tool_but_the_profile_wide_ones() {
+        let served: Vec<_> = attach_tools().collect();
+        for denied in ATTACH_DENIED {
+            assert!(TOOLS.contains(&denied), "{denied} is a tool");
+            assert!(!served.contains(&denied), "{denied}");
+        }
+        assert_eq!(served.len(), TOOLS.len() - ATTACH_DENIED.len());
+        assert!(served.contains(&"browser_click") && served.contains(&"browser_navigate"));
+    }
 
     #[test]
     fn product_tools_are_observe_guard_verify() {
