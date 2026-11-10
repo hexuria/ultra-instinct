@@ -172,7 +172,7 @@ A host that launches Chromium with `--remote-debugging-pipe` hands the pipe
 ends to a `PipeBrowser`, builds `ultra_instinct_mcp::Server::with_pipe`, and
 calls `Server::call_tool` with the same tools; `Server::run_goal` runs the
 agent loop on its tab. The example, host options, limits, threading and the
-62 error codes are in [`docs/embedding.md`](docs/embedding.md).
+63 error codes are in [`docs/embedding.md`](docs/embedding.md).
 
 ## Crates
 

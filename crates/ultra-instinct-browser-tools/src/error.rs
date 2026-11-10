@@ -177,6 +177,11 @@ pub enum ToolError {
     },
     /// The host turned uploads off.
     UploadsOff,
+    /// On the user's own Chrome (attach), a tab this session did not open:
+    /// it is never read, focused or closed (CDP `NotOwned`).
+    NotOwned {
+        target_id: String,
+    },
 }
 
 impl ToolError {
@@ -233,6 +238,7 @@ impl ToolError {
             Self::Fixture(_) => "Fixture",
             Self::Browser(_)
             | Self::TargetGone { .. }
+            | Self::NotOwned { .. }
             | Self::DialogOpen { .. }
             | Self::Timeout { .. }
             | Self::PipeClosed { .. }
@@ -314,11 +320,13 @@ impl ToolError {
             Self::SecretsFull { .. } => "secrets_full",
             Self::SecretOnScreen { .. } => "secret_on_screen",
             Self::UploadsOff => "uploads_off",
+            Self::NotOwned { .. } => "not_owned",
         }
     }
 
     /// The typed error for a CDP failure that has one (pipe closed, frame
-    /// too large, target gone, timeout, dialog opened); `None` for the rest.
+    /// too large, target gone, timeout, dialog opened, not owned); `None`
+    /// for the rest.
     pub fn from_cdp(err: &CdpError) -> Option<Self> {
         Some(match err {
             CdpError::PipeClosed { .. } => Self::PipeClosed {
@@ -326,6 +334,9 @@ impl ToolError {
             },
             CdpError::FrameTooLarge { limit } => Self::FrameTooLarge { limit: *limit },
             CdpError::TargetGone { target_id } => Self::TargetGone {
+                target_id: target_id.clone(),
+            },
+            CdpError::NotOwned { target_id } => Self::NotOwned {
                 target_id: target_id.clone(),
             },
             CdpError::Timeout { method, after } => Self::Timeout {
@@ -378,6 +389,11 @@ impl ToolError {
             Self::TargetGone { target_id } => {
                 format!("CDP target {target_id} detached or was destroyed")
             }
+            // One wording, the CDP error's.
+            Self::NotOwned { target_id } => CdpError::NotOwned {
+                target_id: target_id.clone(),
+            }
+            .to_string(),
             Self::DialogOpen { detail, .. } => detail.clone(),
             Self::Timeout { method, after_ms } => {
                 let within = if after_ms % 1000 == 0 {
@@ -453,7 +469,9 @@ impl ToolError {
             Self::DomainNotAllowed { host } => json!({"host": host}),
             Self::StaleRef { reason } => json!({"reason": reason}),
             Self::UnknownRef { index, indexed } => json!({"index": index, "indexed": indexed}),
-            Self::TargetGone { target_id } => json!({"target_id": target_id}),
+            Self::TargetGone { target_id } | Self::NotOwned { target_id } => {
+                json!({"target_id": target_id})
+            }
             // `message` is the dialog's own text here; the failure is `detail`.
             Self::DialogOpen {
                 kind,
@@ -591,6 +609,7 @@ impl fmt::Display for ToolError {
                 self.message().unwrap_or_default()
             ),
             Self::TargetGone { .. }
+            | Self::NotOwned { .. }
             | Self::DialogOpen { .. }
             | Self::Timeout { .. }
             | Self::PipeClosed { .. }

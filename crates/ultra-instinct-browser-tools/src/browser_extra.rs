@@ -260,7 +260,8 @@ fn with_dialog_hint(server: &dyn BrowserHost, key: &str, err: ToolError) -> Tool
         | ToolError::SnapshotRequired
         | ToolError::PipeClosed { .. }
         | ToolError::FrameTooLarge { .. }
-        | ToolError::TargetGone { .. }) => typed,
+        | ToolError::TargetGone { .. }
+        | ToolError::NotOwned { .. }) => typed,
         other => open(format!("{other}; {hint}")),
     }
 }

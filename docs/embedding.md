@@ -316,6 +316,7 @@ codes are only ever appended.
 | `path_not_allowed` | `path`, `dir` | `Downloads::Dir` / `Uploads::Dir` keeps files in another folder |
 | `downloads_off` | | `Downloads::Off` |
 | `uploads_off` | | `Uploads::Off` |
+| `not_owned` | `target_id` | on an attached server (the user's own Chrome), a tab this session did not open (one it opened and closed is `target_gone`): it is never read, focused or closed |
 | `output_too_large` | `limit`, `bytes` | a screenshot over `max_screenshot_bytes` even as JPEG |
 | `secrets_full` | `limit` | the server already masks 64 typed secrets; the new one was not typed |
 | `secret_on_screen` | `message` | a screenshot / PDF could not hide the page's sensitive fields; nothing was captured |
@@ -337,7 +338,7 @@ The rest (`missing_fixture`, `missing_before`, `missing_after`,
 `browser_use_is_replay`, `browser_use_rejected`, `browser_use_script`,
 `cua_is_replay`, `cua_rejected`, `cua_script`, `verify_no_effect`) belong to
 observe / guard / verify, or to executors that are gone and kept their codes.
-The table and this list together are the 62 codes.
+The table and this list together are the 63 codes.
 
 ## Policy at runtime
 

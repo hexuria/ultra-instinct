@@ -318,6 +318,12 @@ fn the_attached_backend_sees_and_closes_only_the_tabs_it_opened() {
     assert!(unbound.contains("browser_new_tab"), "{unbound}");
     assert!(backend.close_page(ATTACH_ENDPOINT, "A2").is_err());
     assert!(backend.close_page(ATTACH_ENDPOINT, "A1").expect("close"));
+    // A tab it opened and closed is gone, not someone else's.
+    let gone = CdpError::TargetGone {
+        target_id: "A1".into(),
+    };
+    assert_eq!(refused(backend.connect("attach:A1")), gone);
+    assert_eq!(backend.activate_page(ATTACH_ENDPOINT, "A1"), Err(gone));
     drop(backend);
     fake.join().expect("fake");
 }
