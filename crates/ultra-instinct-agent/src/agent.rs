@@ -712,11 +712,14 @@ where
             .map(|(reason, label, _)| (*reason, label.as_str()))
     }
 
-    /// The host a `domain-not-allowed` refusal named: the page's, or the
-    /// off-list host a form submit would have sent to (`None`: not read).
+    /// What a `domain-not-allowed` refusal named: the page's host, or the
+    /// off-list host a form submit would have sent to; for a URL with no
+    /// host its scheme (`a blob: page`), as the tools' `domain_not_allowed
+    /// {host}` and the BLOCKED reason say ([`ultra_instinct_guard::refused_place`]).
+    /// `None`: the URL was not read.
     pub fn policy_refusal_host(&self) -> Option<String> {
         let (_, _, url) = self.policy_refusal.as_ref()?;
-        url.as_deref().and_then(ultra_instinct_guard::host_of)
+        url.as_deref().map(ultra_instinct_guard::refused_place)
     }
 
     /// Stale predictions discarded so far (ticket revalidation caught a change).

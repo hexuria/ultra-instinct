@@ -1842,16 +1842,20 @@ fn a_blob_page_mid_run_ends_blocked_with_refuse_blob() {
         .build("click Back to cart");
         let outcome = agent.run();
         let pressed = !agent.browser_mut().input_log().is_empty();
-        (outcome, pressed)
+        (outcome, pressed, agent.policy_refusal_host())
     };
     match run(true) {
-        (AgentOutcome::Blocked { reason, .. }, false) => assert_eq!(
-            reason,
-            "domain-not-allowed: a blob: page is not an allowed domain"
-        ),
+        (AgentOutcome::Blocked { reason, .. }, false, host) => {
+            assert_eq!(
+                reason,
+                "domain-not-allowed: a blob: page is not an allowed domain"
+            );
+            // The same name the tools give the page (`refused_place`).
+            assert_eq!(host.as_deref(), Some("a blob: page"));
+        }
         other => panic!("expected Blocked with nothing pressed, got {other:?}"),
     }
-    let (outcome, pressed) = run(false);
+    let (outcome, pressed, _) = run(false);
     assert!(
         pressed,
         "a listed blob: origin passes without the switch: {outcome:?}"
