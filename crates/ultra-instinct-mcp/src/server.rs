@@ -49,6 +49,36 @@ pub const ENV_ALLOW_DOMAINS: &str = "ULTRA_INSTINCT_ALLOW_DOMAINS";
 /// `confirm` argument naming the label. Read by [`Server::new`].
 pub const ENV_CONFIRM_PRESS: &str = "ULTRA_INSTINCT_CONFIRM_PRESS";
 
+/// `1` or `true`: with an allow-list set, refuse every `blob:` page
+/// ([`Policy::refuse_blob`]). Read by [`Server::new`] and `aui run`.
+pub const ENV_REFUSE_BLOB: &str = "ULTRA_INSTINCT_REFUSE_BLOB";
+
+/// The [`ENV_REFUSE_BLOB`] value: `1` / `true` on, empty / `0` / `false`
+/// off (any case, spaces trimmed); anything else is an error.
+pub fn parse_refuse_blob(raw: &str) -> Result<bool, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "0" | "false" => Ok(false),
+        "1" | "true" => Ok(true),
+        other => Err(format!(
+            "{ENV_REFUSE_BLOB}: expected 1, true, 0 or false, got {other:?}"
+        )),
+    }
+}
+
+/// The policy the three environment values describe. Refusing `blob:`
+/// with no allow-list is an error rather than a switch that does nothing.
+pub fn policy_from_vars(allow: &str, confirm: &str, refuse_blob: &str) -> Result<Policy, String> {
+    let refuse_blob = parse_refuse_blob(refuse_blob)?;
+    let policy = Policy::from_lists(allow, confirm)
+        .map_err(|err| format!("{ENV_ALLOW_DOMAINS} / {ENV_CONFIRM_PRESS}: {err}"))?;
+    if refuse_blob && policy.allow_domains.is_empty() {
+        return Err(format!(
+            "{ENV_REFUSE_BLOB} needs {ENV_ALLOW_DOMAINS}: with no list every page passes"
+        ));
+    }
+    Ok(policy.with_refuse_blob(refuse_blob))
+}
+
 pub(crate) struct Snapshot {
     pub(crate) origin: String,
     /// Shared with the index presses that resolve in it (no copy per press).
@@ -122,12 +152,16 @@ impl Server {
     }
 
     /// This server under the policy in [`ENV_ALLOW_DOMAINS`] /
-    /// [`ENV_CONFIRM_PRESS`] (unset: allow all; unparsable: every call that
-    /// needs the policy fails with the parse error).
+    /// [`ENV_CONFIRM_PRESS`] / [`ENV_REFUSE_BLOB`] (unset: allow all;
+    /// unparsable: every call that needs the policy fails with the parse
+    /// error).
     pub fn with_env_policy(mut self) -> Self {
         let var = |name: &str| std::env::var(name).unwrap_or_default();
-        self.policy = Policy::from_lists(&var(ENV_ALLOW_DOMAINS), &var(ENV_CONFIRM_PRESS))
-            .map_err(|err| format!("{ENV_ALLOW_DOMAINS} / {ENV_CONFIRM_PRESS}: {err}"));
+        self.policy = policy_from_vars(
+            &var(ENV_ALLOW_DOMAINS),
+            &var(ENV_CONFIRM_PRESS),
+            &var(ENV_REFUSE_BLOB),
+        );
         self
     }
 

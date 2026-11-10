@@ -1150,6 +1150,29 @@ fn navigate_off_the_allowlist_is_refused_before_cdp() {
     assert_eq!(out["navigated"], "http://127.0.0.1/next", "{out}");
 }
 
+/// With `refuse_blob`, a `blob:` of a listed origin is refused like an
+/// off-list host, before any CDP call.
+#[test]
+fn navigate_to_a_blob_is_refused_with_refuse_blob() {
+    let (server_, log) = server(ScriptBuilder::new());
+    let mut server = server_.with_policy(policy("127.0.0.1", "").with_refuse_blob(true));
+    let err = server
+        .call_tool(
+            "browser_navigate",
+            &json!({"cdp": CDP, "url": "blob:http://127.0.0.1/5f1c"}),
+        )
+        .expect_err("a blob: under refuse_blob");
+    assert!(
+        matches!(&err, ToolError::DomainNotAllowed { .. }),
+        "{err:?}"
+    );
+    assert!(
+        page_driving(&log.borrow()).is_empty(),
+        "no CDP call but Page.enable: {:?}",
+        log.borrow()
+    );
+}
+
 /// A click on a label that matches a confirm pattern refuses with the
 /// label (no press); `confirm` naming that label presses it.
 #[test]

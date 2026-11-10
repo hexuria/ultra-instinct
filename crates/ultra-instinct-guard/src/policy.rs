@@ -10,9 +10,11 @@
 //!   form (a submit button, or Enter in its field / box) is refused when
 //!   the form is sent off the list (or to `javascript:`, or the target could
 //!   not be read). Other navigation the input causes (a link) is checked at
-//!   the next input there. A URL with no host (`about:blank`,
-//!   `file:///…`, fixtures) is allowed. An *unknown* URL (the observation
-//!   could not read one) is refused while the list is non-empty.
+//!   the next input there. Only `http` / `https` on a listed host passes,
+//!   plus `about:blank` and a `blob:` by its origin ([`Policy::check_url`];
+//!   [`Policy::refuse_blob`] refuses every `blob:` instead). An *unknown*
+//!   URL (the observation could not read one) is refused while the list is
+//!   non-empty.
 //! - **Confirm** ([`Policy::confirm_press`]): a press whose label matches a
 //!   [`LabelGlob`] is refused ([`GuardReason::NeedsConfirm`]) unless that
 //!   label is in [`Policy::confirmed`]. A press is a CLICK-family input
@@ -144,6 +146,10 @@ pub struct Policy {
     pub confirm_press: Vec<LabelGlob>,
     /// Labels the user confirmed (case-insensitive, whitespace-folded).
     pub confirmed: Vec<String>,
+    /// With an allow-list set, refuse every `blob:` page, whatever its
+    /// origin: its content is whatever a script made it. Off by default
+    /// (a `blob:` passes by its origin); no effect without a list.
+    pub refuse_blob: bool,
 }
 
 impl Policy {
@@ -172,6 +178,7 @@ impl Policy {
                 .map(|g| LabelGlob::parse(g))
                 .collect::<Result<_, _>>()?,
             confirmed: Vec::new(),
+            refuse_blob: false,
         })
     }
 
@@ -181,10 +188,17 @@ impl Policy {
         self
     }
 
+    /// This policy with [`Policy::refuse_blob`] set to `on`.
+    pub fn with_refuse_blob(mut self, on: bool) -> Self {
+        self.refuse_blob = on;
+        self
+    }
+
     /// May the browser go to (or give input on) `url`? With an allow-list
     /// set, only an `http` / `https` URL on a listed host passes, plus
-    /// `about:blank` (an empty page) and a `blob:` URL whose origin passes;
-    /// `data:`, `javascript:`, `file:` and every other scheme refuse.
+    /// `about:blank` (an empty page) and a `blob:` URL whose origin passes
+    /// (none with [`Policy::refuse_blob`]); `data:`, `javascript:`, `file:`
+    /// and every other scheme refuse.
     pub fn check_url(&self, url: &str) -> Result<(), GuardReason> {
         if self.allow_domains.is_empty() {
             return Ok(());
@@ -196,6 +210,7 @@ impl Policy {
                 Some(host) if self.allow_domains.iter().any(|p| p.matches(&host)) => Ok(()),
                 _ => Err(GuardReason::DomainNotAllowed),
             },
+            Some("blob") if self.refuse_blob => Err(GuardReason::DomainNotAllowed),
             Some("blob") => self.check_url(&url["blob:".len()..]),
             Some("about") if url.eq_ignore_ascii_case("about:blank") => Ok(()),
             _ => Err(GuardReason::DomainNotAllowed),
@@ -428,6 +443,21 @@ fn scheme_of(url: &str) -> Option<&str> {
         .then_some(scheme)
 }
 
+/// What a domain refusal names for `url`: its host; else, for a URL with
+/// no host, its scheme (`a blob: page`, `an https: URL with no host`); else
+/// `(unknown url)`. Short whatever the URL holds (a `data:` URL is never
+/// echoed).
+pub fn refused_place(url: &str) -> String {
+    if let Some(host) = host_of(url) {
+        return host;
+    }
+    match scheme_of(url.trim()).map(str::to_ascii_lowercase) {
+        Some(web) if web == "http" || web == "https" => format!("an {web}: URL with no host"),
+        Some(scheme) => format!("a {scheme}: page"),
+        None => "(unknown url)".to_owned(),
+    }
+}
+
 /// The lowercase host of `url`, `None` when it has none (`about:blank`,
 /// `file:///…`, `data:…`, a bare path). Only a real scheme followed by
 /// `://` starts an authority, so a URL inside another (`data:…,https://h/`)
@@ -561,6 +591,30 @@ mod tests {
         assert_eq!(p.check_url("about:blank"), Ok(()));
         assert_eq!(p.check_url("blob:https://shop.example/5f1c"), Ok(()));
         assert_eq!(p.check_url("blob:https://evil.test/5f1c"), refused);
+        // With refuse_blob, no blob: passes, even on a listed origin.
+        let strict = p.clone().with_refuse_blob(true);
+        assert_eq!(strict.check_url("https://shop.example/join"), Ok(()));
+        assert_eq!(strict.check_url("about:blank"), Ok(()));
+        for blob in [
+            "blob:https://shop.example/5f1c",
+            " BLOB:https://shop.example/x",
+            "blob:about:blank",
+        ] {
+            assert_eq!(strict.check_url(blob), refused, "{blob}");
+        }
+        assert_eq!(
+            refused_place("blob:https://shop.example/5f1c"),
+            "a blob: page"
+        );
+        assert_eq!(refused_place(" DATA:text/html,<b>long</b>"), "a data: page");
+        assert_eq!(refused_place("https:///x"), "an https: URL with no host");
+        assert_eq!(refused_place("https://Evil.test/x"), "evil.test");
+        for none in ["", "  ", "no-scheme", ":x"] {
+            assert_eq!(refused_place(none), "(unknown url)", "{none:?}");
+        }
+        // Without a list the switch changes nothing.
+        let open = Policy::default().with_refuse_blob(true);
+        assert_eq!(open.check_url("blob:https://evil.test/5f1c"), Ok(()));
         // Any other scheme, or a listed host inside another URL, refuses.
         for url in [
             "file:///tmp/page.html",
