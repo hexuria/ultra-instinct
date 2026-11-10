@@ -1,34 +1,67 @@
-//! The tab backend for a caller-owned CDP pipe.
+//! The tab backend for a session-multiplexing [`CdpBrowser`]: a caller-owned
+//! CDP pipe, or Chrome's browser websocket.
 //!
-//! [`PipeBackend`] drives one [`PipeBrowser`]: tabs are `Target.*` calls on
-//! the browser connection, and a tab's session is a [`PipePage`] attached
-//! with `flatten: true`. Session keys are `pipe:<targetId>`; every call's
-//! `cdp` argument is replaced by [`PIPE_ENDPOINT`]. One thread owns the
-//! browser, its pages and the server (`Rc`, no locks, no reader thread).
+//! [`SessionBackend`] drives one browser: tabs are `Target.*` calls on the
+//! browser connection, and a tab's session is a [`CdpPage`] attached with
+//! `flatten: true`. Over the pipe ([`SessionBackend::new`]) session keys are
+//! `pipe:<targetId>` and every call's `cdp` argument is replaced by
+//! [`PIPE_ENDPOINT`]; attached to the user's own Chrome
+//! ([`SessionBackend::attached`]) they are `attach:<targetId>` and
+//! [`ATTACH_ENDPOINT`]. One thread owns the browser, its pages and the
+//! server (`Rc`, no locks, no reader thread).
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::{CdpError, CdpEvent, CdpTransport, PageTab, PipeBrowser, PipePage, TargetBackend};
+use crate::{CdpBrowser, CdpError, CdpEvent, CdpPage, CdpTransport, PageTab, TargetBackend};
 
 /// The endpoint every call drives in pipe mode (`cdp` is ignored).
 pub const PIPE_ENDPOINT: &str = "pipe";
 
-/// Session-key prefix of a pipe tab: `pipe:<targetId>`.
-const KEY_PREFIX: &str = "pipe:";
+/// The endpoint every call drives when attached to the user's own Chrome.
+pub const ATTACH_ENDPOINT: &str = "attach";
 
-/// Tabs and sessions over one [`PipeBrowser`].
-pub struct PipeBackend {
-    browser: PipeBrowser,
+/// How long dropping an attached backend waits for each tab it closes.
+const CLOSE_WAIT: Duration = Duration::from_secs(2);
+
+/// Tabs and sessions over one [`CdpBrowser`].
+pub struct SessionBackend {
+    browser: CdpBrowser,
     discovering: bool,
+    /// The fixed endpoint, and the session-key prefix: `<endpoint>:`.
+    endpoint: &'static str,
+    /// Attached: the tabs this backend opened and has not closed. Only
+    /// these are closed when it drops; the user's own tabs and their Chrome
+    /// are never closed (no `Browser.close`).
+    created: Option<BTreeSet<String>>,
 }
 
-impl PipeBackend {
-    pub fn new(browser: PipeBrowser) -> Self {
+/// The pipe backend's name before the websocket link: the same type.
+pub type PipeBackend = SessionBackend;
+
+impl SessionBackend {
+    /// The pipe backend: keys `pipe:<targetId>`; dropping it closes nothing
+    /// (whoever owns the pipe owns that Chrome).
+    pub fn new(browser: CdpBrowser) -> Self {
         Self {
             browser,
             discovering: false,
+            endpoint: PIPE_ENDPOINT,
+            created: None,
+        }
+    }
+
+    /// The backend for the user's own Chrome over its browser websocket:
+    /// keys `attach:<targetId>`. Dropping it closes the tabs it opened
+    /// (each waited on for up to 2 s) and nothing else.
+    pub fn attached(browser: CdpBrowser) -> Self {
+        Self {
+            browser,
+            discovering: false,
+            endpoint: ATTACH_ENDPOINT,
+            created: Some(BTreeSet::new()),
         }
     }
 
@@ -43,9 +76,9 @@ impl PipeBackend {
         Ok(())
     }
 
-    fn tab(target_id: String, url: String, title: String) -> PageTab {
+    fn tab(&self, target_id: String, url: String, title: String) -> PageTab {
         PageTab {
-            key: format!("{KEY_PREFIX}{target_id}"),
+            key: format!("{}:{target_id}", self.endpoint),
             target_id,
             url,
             title,
@@ -53,22 +86,36 @@ impl PipeBackend {
     }
 }
 
-impl TargetBackend for PipeBackend {
+impl Drop for SessionBackend {
+    fn drop(&mut self) {
+        for target_id in self.created.take().into_iter().flatten() {
+            let params = json!({"targetId": target_id}).to_string();
+            let _ = self
+                .browser
+                .call_within("Target.closeTarget", &params, CLOSE_WAIT);
+        }
+    }
+}
+
+impl TargetBackend for SessionBackend {
     fn list_pages(&mut self, _endpoint: &str) -> Result<Vec<PageTab>, CdpError> {
         self.discover()?;
         Ok(self
             .browser
             .targets()?
             .into_iter()
-            .map(|t| Self::tab(t.target_id, t.url, t.title))
+            .map(|t| self.tab(t.target_id, t.url, t.title))
             .collect())
     }
 
     fn create_page(&mut self, _endpoint: &str, url: &str) -> Result<PageTab, CdpError> {
         self.discover()?;
         let target_id = self.browser.create_target(url)?;
+        if let Some(created) = &mut self.created {
+            created.insert(target_id.clone());
+        }
         self.browser.activate_target(&target_id)?;
-        Ok(Self::tab(target_id, url.to_owned(), String::new()))
+        Ok(self.tab(target_id, url.to_owned(), String::new()))
     }
 
     fn activate_page(&mut self, _endpoint: &str, target_id: &str) -> Result<(), CdpError> {
@@ -76,15 +123,25 @@ impl TargetBackend for PipeBackend {
     }
 
     fn close_page(&mut self, _endpoint: &str, target_id: &str) -> Result<bool, CdpError> {
+        if let Some(created) = &mut self.created {
+            created.remove(target_id);
+        }
         self.browser.close_target(target_id)
     }
 
     fn connect(&mut self, key: &str) -> Result<Box<dyn CdpTransport>, CdpError> {
         self.discover()?;
         let target_id = key
-            .strip_prefix(KEY_PREFIX)
+            .strip_prefix(self.endpoint)
+            .and_then(|rest| rest.strip_prefix(':'))
             .ok_or_else(|| CdpError::Transport {
-                message: "no page tab is bound on the pipe; open one with browser_new_tab".into(),
+                message: format!(
+                    "no page tab is bound on the {}; open one with browser_new_tab",
+                    match self.endpoint {
+                        PIPE_ENDPOINT => "pipe",
+                        _ => "attached browser",
+                    }
+                ),
             })?;
         let mut page = self.browser.page(target_id)?;
         // Like the websocket connect: trusted key / mouse input needs
@@ -102,7 +159,7 @@ impl TargetBackend for PipeBackend {
     }
 
     fn endpoint(&self) -> Option<&str> {
-        Some(PIPE_ENDPOINT)
+        Some(self.endpoint)
     }
 }
 
@@ -119,8 +176,8 @@ const MAX_TRACKED: usize = 256;
 /// `guid` began here. Any other browser-level event stays on the browser's
 /// queue for its own consumer.
 struct PipeTab {
-    page: PipePage,
-    browser: PipeBrowser,
+    page: CdpPage,
+    browser: CdpBrowser,
     /// Child frames this tab's page reported.
     frames: BTreeSet<String>,
     /// Guids of downloads begun in this tab, until they finish.

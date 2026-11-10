@@ -378,6 +378,18 @@ impl Server {
         Self::with_backend(ultra_instinct_cdp::PipeBackend::new(browser))
     }
 
+    /// A server on the user's own Chrome over its browser websocket
+    /// ([`ultra_instinct_cdp::CdpBrowser::connect_websocket`]), under an
+    /// empty policy: like [`Server::with_pipe`], with keys
+    /// `attach:<targetId>`. An unbound first call binds the first page tab,
+    /// which is the user's: open one with `browser_new_tab` first (the `aui`
+    /// daemon does). Dropping the server closes the tabs it opened, never
+    /// the user's tabs or their Chrome.
+    #[cfg(unix)]
+    pub fn with_attach(browser: ultra_instinct_cdp::CdpBrowser) -> Self {
+        Self::with_backend(ultra_instinct_cdp::SessionBackend::attached(browser))
+    }
+
     /// One inbound JSON-RPC line. `None` means the client must not be answered.
     pub fn handle_line(&mut self, line: &str) -> Option<String> {
         crate::rpc::handle_line_with(self, line)

@@ -35,7 +35,9 @@ pub use ultra_instinct_browser_tools::{
     sensitive, Downloads, HttpBackend, PageTab, TargetBackend, ToolError, ToolLimits, Uploads, MASK,
 };
 #[cfg(unix)]
-pub use ultra_instinct_cdp::{PipeBackend, PIPE_ENDPOINT};
+pub use ultra_instinct_cdp::{
+    CdpBrowser, PipeBackend, SessionBackend, ACCEPT_WAIT, ATTACH_ENDPOINT, PIPE_ENDPOINT,
+};
 pub use ultra_instinct_guard::Policy;
 
 pub const TOOL_OBSERVE: &str = "observe";

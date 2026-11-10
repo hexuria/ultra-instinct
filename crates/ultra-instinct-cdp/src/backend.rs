@@ -3,7 +3,8 @@
 //! A [`TargetBackend`] lists, opens, activates and closes page tabs and
 //! opens a session's transport. [`HttpBackend`] is Chrome's HTTP `/json`
 //! endpoints plus a connector (a page websocket by default);
-//! `PipeBackend` (unix) drives a caller-owned `--remote-debugging-pipe`.
+//! `SessionBackend` (unix) drives a caller-owned `--remote-debugging-pipe`
+//! or the user's own Chrome over its browser websocket.
 
 use crate::{activate_target, close_target, create_target, page_targets, CdpError, CdpTransport};
 
@@ -22,7 +23,7 @@ pub struct PageTab {
 
 /// Where tabs and their CDP sessions come from: Chrome's HTTP `/json`
 /// endpoints and page websockets ([`HttpBackend`]), or a caller-owned
-/// `--remote-debugging-pipe` (`PipeBackend`, unix).
+/// `--remote-debugging-pipe` or a browser websocket (`SessionBackend`, unix).
 ///
 /// `endpoint` is the `cdp` argument of the call (or the backend's fixed
 /// [`TargetBackend::endpoint`]); a session key is what [`PageTab::key`] says.

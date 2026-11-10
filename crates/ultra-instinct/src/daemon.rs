@@ -25,7 +25,10 @@
 //! with neither `--cdp` nor `--launch` it refuses ([`NO_BROWSER`]) instead
 //! of guessing a port, which could be the user's own Chrome; when nothing
 //! answers at `--cdp` the error says to run `aui open --launch` or `aui
-//! doctor`. `aui open --launch [--headed] [--profile <dir>]` makes the
+//! doctor`. `aui open --attach --allow-domain <host>` drives the user's own
+//! Chrome over the browser socket its remote-debugging toggle opens, in a
+//! tab the daemon opens; `close` and idle exit close only that tab (never
+//! the user's tabs or Chrome). `aui open --launch [--headed] [--profile <dir>]` makes the
 //! daemon start its own Chrome once, right after it binds its socket
 //! (`--launch` with `--cdp` refuses: pick one); that Chrome lives exactly as
 //! long as the daemon (`close`, idle exit and daemon exit all end it); with
@@ -120,6 +123,9 @@ pub struct Verb {
     pub profile: Option<String>,
     /// `--idle <secs>` (`open` only): the spawned daemon's idle exit.
     pub idle_secs: Option<u64>,
+    /// `--attach` (`open` only): the spawned daemon drives the user's own
+    /// Chrome through its remote-debugging toggle.
+    pub attach: bool,
 }
 
 impl Verb {
@@ -129,6 +135,9 @@ impl Verb {
             headed: self.headed,
             profile: self.profile.clone(),
         };
+        if self.attach {
+            return Ok(Browser::Attach);
+        }
         Browser::named(self.cdp.as_deref(), self.launch.then_some(own))
     }
 
@@ -137,6 +146,7 @@ impl Verb {
         !self.allow_domains.is_empty()
             || !self.confirm_press.is_empty()
             || self.launch
+            || self.attach
             || self.idle_secs.is_some()
     }
 }
@@ -161,6 +171,9 @@ pub(crate) enum Browser {
     Cdp(String),
     /// `--launch`: the daemon's own Chrome.
     Launch(Launch),
+    /// `--attach`: the user's own Chrome, over the browser websocket its
+    /// remote-debugging toggle opens. Only the tabs the daemon opens close.
+    Attach,
 }
 
 impl Browser {
@@ -176,6 +189,27 @@ impl Browser {
 }
 
 const LAUNCH_OR_CDP: &str = "--launch and --cdp: pick one";
+
+/// The `--attach` rules of `open` and the daemon: none of the `others`
+/// flags that start or name another browser, and at least one allowed domain.
+pub(crate) fn check_attach(
+    attach: bool,
+    others: [(bool, &str); 4],
+    allow_domains: bool,
+) -> Result<(), CliError> {
+    if !attach {
+        return Ok(());
+    }
+    if let Some((_, flag)) = others.iter().find(|(given, _)| *given) {
+        return Err(CliError::Config(format!("--attach and {flag}: pick one")));
+    }
+    if !allow_domains {
+        return Err(CliError::Config(
+            "--attach drives your own logged-in Chrome: name the sites with --allow-domain".into(),
+        ));
+    }
+    Ok(())
+}
 
 /// The `--launch` / `--cdp` / `--profile` rules of `open`, `run` and the
 /// daemon: not both `--launch` and `--cdp`; `--profile` needs `--launch`,
@@ -263,7 +297,18 @@ pub(crate) fn daemon_command(args: &[String]) -> Result<String, CliError> {
     let cdp = flags.one("--cdp")?;
     let launch = flags.switch("--launch");
     let headed = flags.switch("--headed");
-    let profile = launch_profile(launch, cdp.is_some(), flags.one("--profile")?.as_deref())?;
+    let attach = flags.switch("--attach");
+    let profile = flags.one("--profile")?;
+    let allow = std::env::var(ultra_instinct_mcp::ENV_ALLOW_DOMAINS).unwrap_or_default();
+    let others = [(launch, "--launch"), (cdp.is_some(), "--cdp")];
+    let others = [
+        others[0],
+        others[1],
+        (profile.is_some(), "--profile"),
+        (headed, "--headed"),
+    ];
+    check_attach(attach, others, !allow.trim().is_empty())?;
+    let profile = launch_profile(launch, cdp.is_some(), profile.as_deref())?;
     let idle = flags
         .one("--idle")?
         .map(|raw| parse_idle(&raw))
@@ -276,7 +321,10 @@ pub(crate) fn daemon_command(args: &[String]) -> Result<String, CliError> {
     if headed && !launch {
         return Err(CliError::Config("--headed needs --launch".into()));
     }
-    let browser = Browser::named(cdp.as_deref(), launch.then_some(Launch { headed, profile }))?;
+    let browser = match attach {
+        true => Browser::Attach,
+        false => Browser::named(cdp.as_deref(), launch.then_some(Launch { headed, profile }))?,
+    };
     imp::serve_session(&session, browser, std::time::Duration::from_secs(idle))?;
     Ok(String::new())
 }
@@ -537,15 +585,34 @@ mod imp {
     /// daemon did not launch Chrome, a connect failure carries the hint.
     fn daemon_server(cdp: &str, hint: bool) -> ultra_instinct_mcp::Server {
         let cdp = cdp.to_owned();
-        ultra_instinct_mcp::Server::with_connector(move |url| {
+        hardened(ultra_instinct_mcp::Server::with_connector(move |url| {
             WebSocketTransport::connect(url)
                 .map(|transport| Box::new(transport) as Box<dyn CdpTransport>)
                 .map_err(|err| if hint { connect_hint(err, &cdp) } else { err })
-        })
-        .with_env_policy()
-        // A ref press binds to the latest `aui snap` of its tab, and needs one.
-        .require_snapshot(true)
-        .bind_to_latest_look(true)
+        }))
+    }
+
+    /// The daemon's settings on any server: the env policy, and a ref press
+    /// binds to the latest `aui snap` of its tab, and needs one.
+    fn hardened(server: ultra_instinct_mcp::Server) -> ultra_instinct_mcp::Server {
+        server
+            .with_env_policy()
+            .require_snapshot(true)
+            .bind_to_latest_look(true)
+    }
+
+    /// The user's own Chrome: find its browser socket, connect (Chrome may
+    /// ask the user first), and open the daemon's own tab, so no verb ever
+    /// lands on one of the user's tabs unasked.
+    fn attached_server() -> Result<ultra_instinct_mcp::Server, String> {
+        let url = launch::find_attach_endpoint().map_err(|err| err.to_string())?;
+        let browser =
+            ultra_instinct_mcp::CdpBrowser::connect_websocket(&url).map_err(|e| e.to_string())?;
+        let mut server = hardened(ultra_instinct_mcp::Server::with_attach(browser));
+        server
+            .call_tool("browser_new_tab", &json!({"url": "about:blank"}))
+            .map_err(|err| err.to_string())?;
+        Ok(server)
     }
 
     /// The hidden `aui daemon` body.
@@ -558,6 +625,21 @@ mod imp {
         // and a launch can take longer than its 3 s spawn wait.
         let daemon = Daemon::bind(&socket_path(session))?;
         let (chrome, endpoint) = match browser {
+            // The server drops after the socket: it closes only its own tabs.
+            Browser::Attach => match attached_server() {
+                Ok(mut server) => {
+                    return serve_on(
+                        daemon,
+                        &mut server,
+                        ultra_instinct_mcp::ATTACH_ENDPOINT,
+                        idle,
+                    )
+                }
+                Err(message) => {
+                    serve_failure(daemon, &message, FAILURE_WAIT);
+                    return Err(CliError::Browser(message));
+                }
+            },
             Browser::Cdp(cdp) => (None, cdp),
             Browser::Launch(own) => match launch::launch(&LaunchOptions {
                 headed: own.headed,
@@ -671,8 +753,8 @@ mod imp {
         )))
     }
 
-    /// Spawn `current_exe() daemon --session <name> [--cdp <url>] [--launch
-    /// [--headed] [--profile <dir>]] [--idle <secs>]`, detached (own process
+    /// Spawn `current_exe() daemon --session <name> [--cdp <url> | --attach |
+    /// --launch [--headed] [--profile <dir>]] [--idle <secs>]`, detached (own process
     /// group, null stdio), with the policy env for `open`.
     fn spawn_daemon(verb: &Verb) -> Result<(), CliError> {
         let exe = std::env::current_exe().map_err(|err| CliError::Io {
@@ -684,6 +766,9 @@ mod imp {
         match verb.browser()? {
             Browser::Cdp(cdp) => {
                 command.args(["--cdp", &cdp]);
+            }
+            Browser::Attach => {
+                command.arg("--attach");
             }
             Browser::Launch(own) => {
                 command.arg("--launch");
@@ -743,17 +828,17 @@ mod imp {
             let spawned = connect_or_spawn(path, || verb.browser().and_then(|_| spawn()))?;
             if verb.spawn_settings() && !spawned {
                 return Err(CliError::Config(format!(
-                    "session {} is already running; --launch, --idle and its policy are set when it starts (aui close first)",
+                    "session {} is already running; --launch, --attach, --idle and its policy are set when it starts (aui close first)",
                     verb.session.as_str()
                 )));
             }
             let reply = send(path, &request_line(&verb.request))?;
             let out = render(verb, &reply)?;
             if spawned && verb.verb == "open" {
-                let started = if verb.launch {
-                    " · daemon started with its own Chrome · opened"
-                } else {
-                    " · daemon started · opened"
+                let started = match (verb.launch, verb.attach) {
+                    (true, _) => " · daemon started with its own Chrome · opened",
+                    (_, true) => " · daemon attached to your Chrome · opened",
+                    _ => " · daemon started · opened",
                 };
                 return Ok(out.replacen(" · opened", started, 1));
             }
@@ -903,6 +988,31 @@ mod tests {
         }
         let both = Browser::named(Some("http://x"), Some(Launch::default()));
         assert!(both.unwrap_err().to_string().contains("pick one"));
+        for other in ["--launch", "--cdp=http://x", "--profile=/p", "--headed"] {
+            let err = daemon_command(&a(&["--attach", other]))
+                .unwrap_err()
+                .to_string();
+            let flag = other.split('=').next().unwrap();
+            assert!(
+                err.ends_with(&format!("--attach and {flag}: pick one")),
+                "{err}"
+            );
+        }
+        let err = check_attach(true, [(false, "--launch"); 4], false).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("name the sites with --allow-domain"),
+            "{err}"
+        );
+        let open = |args: &[&str]| parse_verb("open", &a(args)).unwrap();
+        let attach = open(&[
+            "https://m.example/",
+            "--attach",
+            "--allow-domain",
+            "m.example",
+        ]);
+        assert_eq!(attach.browser().unwrap(), Browser::Attach);
+        assert!(attach.spawn_settings());
     }
 
     #[cfg(unix)]

@@ -45,12 +45,13 @@ const VALUE_FLAGS: [&str; 22] = [
 ];
 
 /// Flags that take no value.
-const SWITCHES: [&str; 13] = [
+const SWITCHES: [&str; 14] = [
     "--snap",
     "--script",
     "--json",
     "--mouse",
     "--launch",
+    "--attach",
     "--headed",
     "--ignore-cache",
     "--annotate",
@@ -202,15 +203,25 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         .transpose()?;
     let (mut allow_domains, mut confirm_press) = (Vec::new(), Vec::new());
     let (mut launch, mut headed, mut idle_secs, mut profile) = (false, false, None, None);
+    let mut attach = false;
     if verb == "open" {
         allow_domains = flags.all("--allow-domain");
         confirm_press = flags.all("--confirm-press");
         launch = flags.switch("--launch");
         headed = flags.switch("--headed");
+        attach = flags.switch("--attach");
+        let dir = flags.one("--profile")?;
+        let others = [(launch, "--launch"), (cdp.is_some(), "--cdp")];
+        let others = [
+            others[0],
+            others[1],
+            (dir.is_some(), "--profile"),
+            (headed, "--headed"),
+        ];
+        crate::daemon::check_attach(attach, others, !allow_domains.is_empty())?;
         if headed && !launch {
             return Err(CliError::Config("--headed needs --launch".into()));
         }
-        let dir = flags.one("--profile")?;
         profile = crate::daemon::launch_profile(launch, cdp.is_some(), dir.as_deref())?;
         idle_secs = flags
             .one("--idle")?
@@ -257,6 +268,7 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         headed,
         profile,
         idle_secs,
+        attach,
     })
 }
 
@@ -281,7 +293,7 @@ fn build(verb: &'static str, flags: &mut Flags) -> Result<Request, CliError> {
     match verb {
         "open" => match p[..] {
             [url] => tool("browser_navigate", json!({"url": url})),
-            _ => usage("<url> [--launch [--headed] [--profile <dir>]] [--idle <secs>] [--allow-domain <host>]... [--confirm-press <glob>]..."),
+            _ => usage("<url> [--launch [--headed] [--profile <dir>] | --attach] [--idle <secs>] [--allow-domain <host>]... [--confirm-press <glob>]..."),
         },
         "snap" => {
             let format = if flags.switch("--json") { "json" } else { "text" };
@@ -1505,6 +1517,22 @@ mod tests {
             (vec!["--launch", "--profile", ""], "needs a folder"),
             (vec!["--launch", "--profile", "  "], "needs a folder"),
         ];
+        for (args, says) in [
+            (&["--attach"][..], "name the sites with --allow-domain"),
+            (&["--attach", "--launch"], "--attach and --launch: pick one"),
+            (
+                &["--attach", "--cdp", "http://x"],
+                "--attach and --cdp: pick one",
+            ),
+            (
+                &["--attach", "--profile", "/p"],
+                "--attach and --profile: pick one",
+            ),
+            (&["--attach", "--headed"], "--attach and --headed: pick one"),
+        ] {
+            let err = parse_verb("open", &a(&[&["https://a/"], args].concat())).unwrap_err();
+            assert!(err.to_string().contains(says), "{args:?}: {err}");
+        }
         let dir = everyday.first().map(|dir| format!("{}/", dir.display()));
         if let Some(dir) = &dir {
             refused.push((vec!["--launch", "--profile", dir], "separate folder"));
