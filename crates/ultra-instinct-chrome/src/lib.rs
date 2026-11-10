@@ -222,7 +222,13 @@ pub struct LaunchOptions {
     pub keep_alive: bool,
     /// How long to wait for `DevToolsActivePort`.
     pub timeout: Duration,
+    /// `--window-size` as (width, height). `None`: [`DEFAULT_WINDOW`]
+    /// headless; a maximized window headed.
+    pub window_size: Option<(u32, u32)>,
 }
+
+/// The headless window when [`LaunchOptions::window_size`] is `None`.
+pub const DEFAULT_WINDOW: (u32, u32) = (1440, 900);
 
 impl Default for LaunchOptions {
     fn default() -> Self {
@@ -232,6 +238,19 @@ impl Default for LaunchOptions {
             profile_dir: None,
             keep_alive: false,
             timeout: Duration::from_secs(20),
+            window_size: None,
+        }
+    }
+}
+
+/// The window flags `launch` passes for `options`.
+fn window_args(options: &LaunchOptions) -> Vec<String> {
+    match (options.window_size, options.headed) {
+        (Some((width, height)), _) => vec![format!("--window-size={width},{height}")],
+        (None, true) => vec!["--start-maximized".to_owned()],
+        (None, false) => {
+            let (width, height) = DEFAULT_WINDOW;
+            vec![format!("--window-size={width},{height}")]
         }
     }
 }
@@ -312,6 +331,7 @@ pub fn launch(options: &LaunchOptions) -> Result<ChromeProcess, LaunchError> {
     command
         .arg("--remote-debugging-port=0")
         .arg(format!("--user-data-dir={}", profile.display()))
+        .args(window_args(options))
         .args([
             "--no-first-run",
             "--no-default-browser-check",
@@ -455,6 +475,26 @@ mod tests {
         ));
         assert_eq!(find_chrome_in(None, Some(&dir), &[], None), Ok(app));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Headless: desktop size; headed: maximized; a given size wins.
+    #[test]
+    fn the_window_is_desktop_sized_headless_and_maximized_headed() {
+        let headless = LaunchOptions::default();
+        assert_eq!(window_args(&headless), ["--window-size=1440,900"]);
+        let headed = LaunchOptions {
+            headed: true,
+            ..LaunchOptions::default()
+        };
+        assert_eq!(window_args(&headed), ["--start-maximized"]);
+        for headed in [false, true] {
+            let sized = LaunchOptions {
+                headed,
+                window_size: Some((390, 844)),
+                ..LaunchOptions::default()
+            };
+            assert_eq!(window_args(&sized), ["--window-size=390,844"]);
+        }
     }
 
     #[test]

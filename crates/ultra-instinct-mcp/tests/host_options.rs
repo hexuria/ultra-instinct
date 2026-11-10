@@ -51,10 +51,12 @@ fn call(server: &mut Server, tool: &str, arguments: Value) -> Value {
         .unwrap_or_else(|err| panic!("{tool} {arguments}: {err:?}"))
 }
 
+/// Input that reached the page: script clicks and pointer events (a
+/// pointer press is three: move, press, release).
 fn clicks(log: &Log) -> usize {
     log.borrow()
         .iter()
-        .filter(|m| *m == "Runtime.callFunctionOn")
+        .filter(|m| *m == "Runtime.callFunctionOn" || *m == "Input.dispatchMouseEvent")
         .count()
 }
 
@@ -81,7 +83,7 @@ fn set_policy_applies_to_the_next_call_with_the_session_still_open() {
             .observe_compact(&page())
             .observe_compact(&page())
             .observe_compact(&page())
-            .dom_click(11),
+            .pointer_click(),
     );
     server.set_policy(confirm_sign());
     let err = server
@@ -96,7 +98,7 @@ fn set_policy_applies_to_the_next_call_with_the_session_still_open() {
         json!({"cdp": CDP, "index": 2}),
     );
     assert_eq!(out["region"], "n101", "{out}");
-    assert_eq!(clicks(&log), 1);
+    assert_eq!(clicks(&log), 3, "one pointer press");
     assert_eq!(server.live_sessions().len(), 1, "same session throughout");
 }
 
@@ -106,7 +108,7 @@ fn a_confirm_lifts_its_own_call_only() {
         ScriptBuilder::new()
             .observe_compact(&page())
             .observe_compact(&page())
-            .dom_click(11)
+            .pointer_click()
             .observe_compact(&page()),
     );
     server.set_policy(confirm_sign());
@@ -116,7 +118,7 @@ fn a_confirm_lifts_its_own_call_only() {
         json!({"cdp": CDP, "index": 2, "confirm": "Sign in"}),
     );
     assert_eq!(out["acted"], "click", "{out}");
-    assert_eq!(clicks(&log), 1);
+    assert_eq!(clicks(&log), 3, "one pointer press");
     let err = server
         .call_tool("browser_click", &json!({"cdp": CDP, "index": 2}))
         .expect_err("the confirm was for the call before");
@@ -126,7 +128,7 @@ fn a_confirm_lifts_its_own_call_only() {
             label: "Sign in".into()
         }
     );
-    assert_eq!(clicks(&log), 1, "no second press");
+    assert_eq!(clicks(&log), 3, "no second press");
 }
 
 #[test]
@@ -153,7 +155,10 @@ fn get_state_caps_elements_and_text_with_a_marker() {
     let body = text["text"].as_str().unwrap();
     assert_eq!(text["truncated"], true, "{text}");
     assert!(body.contains("… [truncated "), "{body}");
-    assert!(body.chars().count() < 60, "{body}");
+    // The cut text, then the snapshot line the cut would have dropped.
+    let tag = format!("\n· snapshot {}", text["snapshot"]);
+    let cut = body.strip_suffix(&tag).unwrap_or_else(|| panic!("{body}"));
+    assert!(cut.chars().count() < 60, "{body}");
 }
 
 #[test]

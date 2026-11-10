@@ -16,6 +16,8 @@ run through a per-session daemon.
 | `snapshot` | The id `browser_get_state` returned. The index is read in that snapshot and the press is bound to the element it showed; if it moved, changed, or left, the call refuses `stale_ref` and nothing is pressed. Without it the index resolves on a fresh observation (unless the host set `require_snapshot`). |
 | `confirm` | The label the user confirmed, for this call only; lifts a `needs_confirm` refusal. |
 | `verify` | `true` adds a `verification` (the effect the press had) to a ticketed input. |
+| `state` | Input tools: `true` adds the page after the input (`state`, as `browser_get_state` text) and its `snapshot`, so the next press binds to it with no extra call. A failed read is `state_error`; the input still ran. |
+| `mouse` | Clicks (`browser_click`, `browser_check`, `browser_download`): default `true`, a real pointer press at the center; `false` sends a DOM script click. |
 | `max_chars` | Text tools: cut the output, ending `… [truncated N chars]`. |
 
 Every index press runs the hard gate, takes a one-shot `ActionTicket`, and
@@ -54,7 +56,7 @@ These never click. They are for hosts that keep their own executor.
 
 | Tool | Does | Key arguments |
 |---|---|---|
-| `browser_click` | Left click through the ticketed executor (re-observes, refuses on drift). A script click by default | `index`, `snapshot`, `mouse` (a real pointer press at the center), `confirm`, `verify` |
+| `browser_click` | Left click through the ticketed executor (re-observes, refuses on drift). A real pointer press at the center by default | `index`, `snapshot`, `mouse` (`false`: a DOM script click), `confirm`, `verify`, `state` |
 | `browser_right_click`, `browser_middle_click`, `browser_double_click`, `browser_triple_click` | That button / click count, through gate, ticket and consume-before-press | `index`, `snapshot`, `confirm` |
 | `browser_check` | Set a checkbox / radio / switch; already so: `changed: false`, no press; else a click and a read-back | `index`, `checked`, `snapshot`, `mouse`, `confirm` |
 | `browser_hover` | Move the pointer to an element (no press, no ticket) | `index`, `snapshot` |
@@ -139,20 +141,22 @@ no reader thread), so events between calls show up at the next read.
 Each verb talks to the session daemon on `$TMPDIR/aui/<session>.sock`, which
 owns one MCP `Server`. Every verb takes `--session <name>` (default
 `default`), `--cdp <url>` and `--max-output N`. `<ref>` is `@eN` from the
-latest `aui snap` (or `N`); refs resolve on a fresh observation, so run `snap`
-again after the page changes. Relative paths resolve against the shell's
+latest `aui snap` (or `N`): the daemon binds each ref press to that snap, so
+a page that changed since refuses (`· run aui snap`) instead of pressing
+another element, and a press before any snap refuses. `--snap` on an input
+verb prints the page after it and binds the next refs to that look. Relative paths resolve against the shell's
 directory. A refusal or error exits non-zero. `aui skills get core` prints
 the full guide.
 
 | Verb | Tool | Does |
 |---|---|---|
-| `open <url> [--launch [--headed]] [--idle <secs>] [--allow-domain <host>]... [--confirm-press <glob>]...` | `browser_navigate` | Start the daemon (and with `--launch` its own Chrome), then navigate. Session flags are fixed when the daemon starts; `--idle` is 1 to 86400 s, default 3600 |
+| `open <url> [--launch [--headed]] [--idle <secs>] [--allow-domain <host>]... [--confirm-press <glob>]...` | `browser_navigate` | Start the daemon (and with `--launch` its own Chrome: headless at 1440×900, or maximized with `--headed`), then navigate. Session flags are fixed when the daemon starts; `--idle` is 1 to 86400 s, default 3600 |
 | `snap [--json]` | `browser_get_state` | Read the page |
-| `click <ref> [--confirm <label>] [--mouse]` | `browser_click` | Ticketed click |
+| `click <ref> [--confirm <label>] [--script]` | `browser_click` | Ticketed click: a pointer press; `--script` for a DOM script click |
 | `type <ref> <text>` | `browser_type` | Set a field's text |
 | `select <ref> <option>` | `browser_select_dropdown` | Pick one option |
 | `key <ref> <key>` | `browser_send_key` | One key on that control |
-| `check <ref>`, `uncheck <ref>` `[--mouse]` | `browser_check` | Set a checkbox |
+| `check <ref>`, `uncheck <ref>` `[--script]` | `browser_check` | Set a checkbox |
 | `focus <ref>` | `browser_focus` | Focus a control |
 | `keyboard type\|insert <text> [--confirm <label>]` | `browser_keyboard` | Keys into whatever has focus |
 | `scroll [up\|down]` | `browser_scroll` | One viewport |

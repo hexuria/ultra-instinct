@@ -19,6 +19,8 @@ type Log = Rc<RefCell<Vec<(String, Value)>>>;
 /// A replay peer that also emits CDP events: each trigger fires once,
 /// after the first call of its method, the way Chrome sends
 /// `Page.javascriptDialogOpening` while the call that opened the dialog runs.
+/// A trigger `method:type` matches only a call whose `type` param is `type`
+/// (e.g. `Input.dispatchMouseEvent:mouseReleased`).
 struct Evented {
     inner: ReplayTransport,
     log: Log,
@@ -30,17 +32,28 @@ struct Evented {
     interrupt: Option<&'static str>,
 }
 
+fn hits(trigger: &str, method: &str, params: &Value) -> bool {
+    match trigger.split_once(':') {
+        Some((m, kind)) => m == method && params["type"] == kind,
+        None => trigger == method,
+    }
+}
+
 impl CdpTransport for Evented {
     fn call(&mut self, method: &str, params_json: &str) -> Result<String, CdpError> {
-        self.log.borrow_mut().push((
-            method.to_owned(),
-            serde_json::from_str(params_json).unwrap_or(Value::Null),
-        ));
+        let params: Value = serde_json::from_str(params_json).unwrap_or(Value::Null);
+        self.log
+            .borrow_mut()
+            .push((method.to_owned(), params.clone()));
         let result = self.inner.call(method, params_json);
-        if self.triggers.front().is_some_and(|(m, _)| *m == method) {
+        if self
+            .triggers
+            .front()
+            .is_some_and(|(m, _)| hits(m, method, &params))
+        {
             let (_, event) = self.triggers.pop_front().expect("front checked");
             self.pending.push(event);
-            if self.interrupt == Some(method) {
+            if self.interrupt.is_some_and(|m| hits(m, method, &params)) {
                 self.interrupt = None;
                 return Err(CdpError::DialogOpened {
                     method: method.to_owned(),
@@ -234,10 +247,10 @@ fn dialog_status_accept_dismiss_and_the_blocked_tool_hint() {
 }
 
 /// A click whose handler calls `alert()`: Chrome sends the opening event
-/// and no reply, so the transport stops waiting with `DialogOpened`. The
-/// tool fails at once with the dialog hint, the press is not retried (no
-/// pointer or second DOM tier), and the dialog is tracked for
-/// `browser_dialog`.
+/// on the pointer release and no reply, so the transport stops waiting with
+/// `DialogOpened`. The tool fails at once with the dialog hint, the press is
+/// not retried (no second pointer press, no DOM tier), and the dialog is
+/// tracked for `browser_dialog`.
 #[test]
 fn a_press_that_opens_an_alert_fails_fast_with_the_hint_and_is_not_retried() {
     let (mut server, log) = server_interrupted(
@@ -245,11 +258,11 @@ fn a_press_that_opens_an_alert_fails_fast_with_the_hint_and_is_not_retried() {
             .call("Page.enable", json!({}))
             .observe_compact(&login(false))
             .observe_compact(&login(false))
-            .dom_click(11)
+            .pointer_click()
             .call("Page.handleJavaScriptDialog", json!({})),
         vec![
             (
-                "Runtime.callFunctionOn",
+                "Input.dispatchMouseEvent:mouseReleased",
                 event(
                     "Page.javascriptDialogOpening",
                     json!({"url": "http://127.0.0.1/form", "message": "Saved", "type": "alert",
@@ -261,7 +274,7 @@ fn a_press_that_opens_an_alert_fails_fast_with_the_hint_and_is_not_retried() {
                 event("Page.javascriptDialogClosed", json!({"result": true})),
             ),
         ],
-        Some("Runtime.callFunctionOn"),
+        Some("Input.dispatchMouseEvent:mouseReleased"),
     );
     let err = server
         .call_tool("browser_click", &json!({"cdp": CDP, "index": "@e2"}))
@@ -276,11 +289,26 @@ fn a_press_that_opens_an_alert_fails_fast_with_the_hint_and_is_not_retried() {
     };
     assert_eq!(kind, "alert");
     assert!(
-        message.contains("dialog opened while `Runtime.callFunctionOn` ran")
+        message.contains("dialog opened while `Input.dispatchMouseEvent` ran")
             && message.ends_with("a alert dialog is open; call browser_dialog"),
         "{message}"
     );
-    assert_eq!(presses(&log), 1, "dispatched once, never retried");
+    let kinds = |log: &Log| -> Vec<Value> {
+        calls(log, "Input.dispatchMouseEvent")
+            .into_iter()
+            .map(|p| p["type"].clone())
+            .collect()
+    };
+    let once = [
+        json!("mouseMoved"),
+        json!("mousePressed"),
+        json!("mouseReleased"),
+    ];
+    assert_eq!(kinds(&log), once, "dispatched once, never retried");
+    assert!(
+        calls(&log, "Runtime.callFunctionOn").is_empty(),
+        "no DOM tier"
+    );
     let status = call(&mut server, "browser_dialog", json!({"cdp": CDP}));
     assert_eq!(status["open"], true, "{status}");
     assert_eq!(status["message"], "Saved");
@@ -290,7 +318,7 @@ fn a_press_that_opens_an_alert_fails_fast_with_the_hint_and_is_not_retried() {
         json!({"cdp": CDP, "action": "accept"}),
     );
     assert_eq!(accepted["handled"], "accept", "{accepted}");
-    assert_eq!(presses(&log), 1);
+    assert_eq!(presses(&log), 3, "still the one pointer press");
 }
 
 #[test]
@@ -353,13 +381,14 @@ fn check_that_already_holds_does_not_press() {
 
 #[test]
 fn check_presses_once_through_the_executor_and_reads_back() {
-    // observe → executor's fresh observe → DOM click → read-back observe;
-    // then a second check sees it already set and does not press again.
+    // observe → executor's fresh observe → pointer click → read-back
+    // observe; then a second check sees it already set and does not press
+    // again.
     let (mut server, log) = server(
         ScriptBuilder::new()
             .observe_compact(&login(false))
             .observe_compact(&login(false))
-            .dom_click(12)
+            .pointer_click()
             .observe_compact(&login(true))
             .observe_compact(&login(true)),
     );
@@ -370,8 +399,14 @@ fn check_presses_once_through_the_executor_and_reads_back() {
     );
     assert_eq!(out["changed"], true, "{out}");
     assert_eq!(out["checked"], true);
-    assert_eq!(calls(&log, "DOM.resolveNode"), [json!({"nodeId": 12})]);
-    assert_eq!(calls(&log, "Runtime.callFunctionOn").len(), 1);
+    let pointer = calls(&log, "Input.dispatchMouseEvent");
+    assert_eq!(pointer.len(), 3, "{pointer:?}");
+    // Remember me (20, 140, 20 × 20): pressed at its center.
+    assert!(
+        pointer.iter().all(|p| p["x"] == 30.0 && p["y"] == 150.0),
+        "{pointer:?}"
+    );
+    assert!(calls(&log, "Runtime.callFunctionOn").is_empty());
 
     let again = call(
         &mut server,
@@ -379,7 +414,7 @@ fn check_presses_once_through_the_executor_and_reads_back() {
         json!({"cdp": CDP, "index": "3", "checked": true}),
     );
     assert_eq!(again["changed"], false, "{again}");
-    assert_eq!(presses(&log), 1, "the ticket was consumed once");
+    assert_eq!(presses(&log), 3, "the ticket was consumed once");
 }
 
 /// The snapshot showed it checked, then the page unchecked it: the state
@@ -392,7 +427,7 @@ fn check_with_a_snapshot_reads_the_state_from_the_page_now() {
             .observe_compact(&login(true))
             .observe_compact(&login(false))
             .observe_compact(&login(false))
-            .dom_click(12)
+            .pointer_click()
             .observe_compact(&login(true)),
     );
     let state = call(&mut server, "browser_get_state", json!({"cdp": CDP}));
@@ -403,7 +438,11 @@ fn check_with_a_snapshot_reads_the_state_from_the_page_now() {
     );
     assert_eq!(out["changed"], true, "{out}");
     assert_eq!(out["checked"], true, "{out}");
-    assert_eq!(calls(&log, "DOM.resolveNode"), [json!({"nodeId": 12})]);
+    assert_eq!(
+        calls(&log, "Input.dispatchMouseEvent").len(),
+        3,
+        "one press"
+    );
 }
 
 /// Already in the requested state on the page, but the element the
@@ -450,7 +489,7 @@ fn check_errors_when_the_state_does_not_change() {
         ScriptBuilder::new()
             .observe_compact(&login(false))
             .observe_compact(&login(false))
-            .dom_click(12)
+            .pointer_click()
             .observe_compact(&login(false)),
     );
     let err = server

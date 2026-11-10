@@ -114,13 +114,19 @@ fn tools_call(server: &mut Server, params: &Value) -> Result<Value, ToolError> {
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
     match server.call_tool(name, &arguments) {
         Ok(body) if name == "browser_screenshot" => Ok(image_result(body)),
-        // The text state goes back as plain text, not a JSON-escaped string.
+        // Plain text, with the snapshot id in `_meta`.
         Ok(body)
             if name == "browser_get_state"
                 && body.get("format").and_then(Value::as_str) == Some("text") =>
         {
             match body.get("text").and_then(Value::as_str) {
-                Some(text) => Ok(tool_result(text.to_owned(), false)),
+                Some(text) => {
+                    let mut result = tool_result(text.to_owned(), false);
+                    if let Some(snapshot) = body.get("snapshot") {
+                        result["_meta"] = json!({"snapshot": snapshot});
+                    }
+                    Ok(result)
+                }
                 None => Ok(tool_result(body.to_string(), false)),
             }
         }

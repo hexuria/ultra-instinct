@@ -150,8 +150,14 @@ Sign up  https://shop.example/join
 ```
 
 - `@eN` is a ref: pass it to `click`, `type`, `select`, `key` (`5` works
-  too). Refs are recomputed on every call: after the page changes, run
-  `aui snap` again before you use a ref.
+  too). A ref names the element your latest `aui snap` showed. If the page
+  changed since (that element moved, changed or left), the press refuses
+  with `· run aui snap` and presses nothing: run `aui snap` and use the new
+  refs. A press before any snap refuses too.
+- `--snap` on an input verb (`click`, `type`, `select`, `key`, `check`,
+  `uncheck`, `focus`, `keyboard`, `open`, `scroll`, `forward`, `reload`,
+  `download`) prints the page after it, like `aui snap`, and the next refs
+  come from that look: one call instead of two.
 - State after the label: `value="…"`, `checked` / `unchecked`, `expanded` /
   `collapsed`, `selected="…"`. Password fields never show a value.
 - `aui snap --json` gives the `elements[]` JSON instead.
@@ -162,7 +168,7 @@ Verbs:
 |---|---|
 | `open <url>` | navigate the session's tab (spawns the daemon) |
 | `snap [--json]` | read the page |
-| `click <ref> [--confirm <label>] [--mouse]` | ticketed click; `--mouse` presses a real pointer |
+| `click <ref> [--confirm <label>] [--script]` | ticketed click: a real pointer press at the center, like a person; `--script` sends a DOM script click instead |
 | `type <ref> <text>` | set a field's text; the value is read back |
 | `select <ref> <option>` | pick one option of a `<select>` |
 | `key <ref> <key>` | one key on that control: `Enter`, `Escape`, arrows, `Home`, `End`, `PageUp`, `PageDown`; an Enter that would press or submit through a `--confirm-press` label is refused like a click |
@@ -174,7 +180,7 @@ Verbs:
 | `tabs` | list tabs |
 | `dialog [status]` / `dialog accept ["text"]` / `dialog dismiss` | see or answer an alert / confirm / prompt |
 | `forward`, `reload [--ignore-cache]` | history forward, reload |
-| `check <ref>`, `uncheck <ref>` | set a checkbox; `--mouse` presses a real pointer |
+| `check <ref>`, `uncheck <ref>` | set a checkbox (a pointer press; `--script` for a DOM script click) |
 | `focus <ref>` | focus a control (ticketed) |
 | `keyboard type\|insert <text> [--confirm <label>]` | keys into whatever has focus (`insert` sends the text in one go); refused off `--allow-domain`; with `--confirm-press` set, an Enter / space on a focused matching button, Enter in a field whose form submits through one, or Enter / space when no control is seen focused (`(unobserved focus)`) needs `--confirm`; an Enter after a Tab in the same text, or a space right after one, is refused: send it in its own call |
 | `get value\|label\|role\|box <ref>`, `get attr <ref> <name>` | read one fact; never a password value |
@@ -205,8 +211,8 @@ sockets.
 
 Every verb takes `--session <name>` (letters, digits, `-`; default
 `default`) and `--cdp <url>` (default `http://127.0.0.1:9222`). `aui open
---launch [--headed]` makes the daemon start its own Chrome (headless unless
-`--headed`), which ends when the daemon does; without it, start Chrome first
+--launch [--headed]` makes the daemon start its own Chrome (headless at
+1440×900 unless `--headed`, which opens maximized), which ends when the daemon does; without it, start Chrome first
 (step 2). `open` also takes `--allow-domain`, `--confirm-press` and `--idle
 <secs>` (the daemon, and its Chrome, end after that long without a verb: 1 s
 to 24 h, default 60 min); these and `--launch` are fixed when the daemon

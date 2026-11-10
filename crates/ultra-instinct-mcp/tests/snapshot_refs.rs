@@ -148,7 +148,7 @@ fn a_shifted_page_refuses_a_snapshot_bound_click_with_no_press() {
         ScriptBuilder::new()
             .observe_compact(&shifted())
             .observe_compact(&shifted())
-            .dom_click(10),
+            .pointer_click(),
     );
     let out = call(
         &mut bare,
@@ -156,7 +156,12 @@ fn a_shifted_page_refuses_a_snapshot_bound_click_with_no_press() {
         json!({"cdp": CDP, "index": "@e2"}),
     );
     assert_eq!(out["region"], "n100", "bare index 2 is Email now: {out}");
-    assert_eq!(presses(&log).len(), 2);
+    assert_eq!(
+        presses(&log).len(),
+        3,
+        "one pointer press: {:?}",
+        log.borrow()
+    );
 }
 
 #[test]
@@ -166,7 +171,7 @@ fn an_unchanged_page_presses_the_snapshot_region() {
             .observe_compact(&page())
             .observe_compact(&page())
             .observe_compact(&page())
-            .dom_click(11),
+            .pointer_click(),
     );
     let state = call(&mut server, "browser_get_state", json!({"cdp": CDP}));
     let out = call(
@@ -177,10 +182,102 @@ fn an_unchanged_page_presses_the_snapshot_region() {
     assert_eq!(out["region"], "n101", "{out}");
     assert_eq!(
         presses(&log),
-        ["DOM.resolveNode", "Runtime.callFunctionOn"],
+        [
+            "Input.dispatchMouseEvent",
+            "Input.dispatchMouseEvent",
+            "Input.dispatchMouseEvent"
+        ],
         "{:?}",
         log.borrow()
     );
+}
+
+/// `state: true` answers a press with the page after it and that look's
+/// snapshot, and the next press binds to it with no get_state call between.
+#[test]
+fn state_after_a_press_gives_the_next_press_its_snapshot() {
+    let (mut server, log) = replay(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&page())
+            .pointer_click()
+            .observe_compact(&shifted())
+            .observe_compact(&shifted())
+            .observe_compact(&shifted())
+            .pointer_click(),
+    );
+    let out = call(
+        &mut server,
+        "browser_click",
+        json!({"cdp": CDP, "index": 2, "state": true}),
+    );
+    assert_eq!(out["region"], "n101", "{out}");
+    let text = out["state"].as_str().expect("state text");
+    assert!(text.contains("@e3 button \"Sign in\""), "{text}");
+    let snapshot = snapshot_of(&out);
+    assert!(text.ends_with(&format!("snapshot {snapshot}")), "{text}");
+    let next = call(
+        &mut server,
+        "browser_click",
+        json!({"cdp": CDP, "index": "@e3", "snapshot": snapshot}),
+    );
+    assert_eq!(next["region"], "n101", "{next}");
+    assert_eq!(
+        presses(&log).len(),
+        6,
+        "two pointer presses: {:?}",
+        log.borrow()
+    );
+}
+
+/// `bind_to_latest_look`: a press that names no snapshot is bound to the
+/// tab's latest look, so a page that shifted since refuses with no input.
+#[test]
+fn a_bare_press_binds_to_the_latest_look_when_the_host_asks() {
+    let (server, log) = replay(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&shifted())
+            .observe_compact(&shifted()),
+    );
+    let mut server = server.bind_to_latest_look(true);
+    call(&mut server, "browser_get_state", json!({"cdp": CDP}));
+    let err = server
+        .call_tool("browser_click", &json!({"cdp": CDP, "index": "@e2"}))
+        .expect_err("Sign in moved since the look");
+    assert_eq!(err.to_value()["code"], "stale_ref", "{err:?}");
+    assert!(presses(&log).is_empty(), "{:?}", log.borrow());
+}
+
+/// A `state: true` reply is a look too: the next bare press binds to it.
+#[test]
+fn a_bare_press_binds_to_the_look_a_state_reply_printed() {
+    let (server, log) = replay(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&page())
+            .pointer_click()
+            .observe_compact(&shifted())
+            .observe_compact(&shifted())
+            .observe_compact(&shifted())
+            .pointer_click(),
+    );
+    let mut server = server.bind_to_latest_look(true);
+    call(
+        &mut server,
+        "browser_click",
+        json!({"cdp": CDP, "index": 2, "state": true}),
+    );
+    let next = call(
+        &mut server,
+        "browser_click",
+        json!({"cdp": CDP, "index": "@e3"}),
+    );
+    assert_eq!(
+        next["region"], "n101",
+        "@e3 of the state look is Sign in: {next}"
+    );
+    assert_eq!(presses(&log).len(), 6, "{:?}", log.borrow());
 }
 
 /// The consume_ticket_once path (double click) and hover refuse the same
@@ -245,7 +342,7 @@ fn require_snapshot_refuses_a_bare_index_before_any_cdp_call() {
             .observe_compact(&page())
             .observe_compact(&page())
             .observe_compact(&page())
-            .dom_click(11),
+            .pointer_click(),
     );
     let mut server = server_.require_snapshot(true);
     for (tool, arguments) in [

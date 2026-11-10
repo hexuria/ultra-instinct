@@ -44,7 +44,9 @@ const VALUE_FLAGS: [&str; 21] = [
 ];
 
 /// Flags that take no value.
-const SWITCHES: [&str; 11] = [
+const SWITCHES: [&str; 13] = [
+    "--snap",
+    "--script",
     "--json",
     "--mouse",
     "--launch",
@@ -220,8 +222,22 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         ultra_instinct_guard::LabelGlob::parse(glob)
             .map_err(|err| CliError::Config(err.to_string()))?;
     }
+    let snap_after = flags.switch("--snap");
     let mut request = build(verb, &mut flags)?;
     flags.finish()?;
+    // `--snap`: the page after the input, printed and bound like `aui snap`.
+    if snap_after {
+        match &mut request {
+            Request::Tool { name, arguments } if ultra_instinct_mcp::STATE_AFTER.contains(name) => {
+                arguments["state"] = json!(true);
+            }
+            _ => {
+                return Err(CliError::Config(format!(
+                    "--snap: aui {verb} is not an input; run aui snap"
+                )))
+            }
+        }
+    }
     if let (Some(max), Request::Tool { name, arguments }) = (max_output, &mut request) {
         if OUTPUT_TOOLS.contains(name) {
             arguments["max_chars"] = json!(max);
@@ -238,6 +254,18 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         headed,
         idle_secs,
     })
+}
+
+/// `--script`: script click; `--mouse`: pointer (the default); not both.
+fn click_kind(flags: &mut Flags) -> Result<Option<bool>, CliError> {
+    match (flags.switch("--mouse"), flags.switch("--script")) {
+        (true, true) => Err(CliError::Config(
+            "--mouse and --script: pick one (a pointer press is the default)".into(),
+        )),
+        (_, true) => Ok(Some(false)),
+        (true, false) => Ok(Some(true)),
+        (false, false) => Ok(None),
+    }
 }
 
 /// One verb's request. Usage errors name the verb's own form.
@@ -260,16 +288,16 @@ fn build(verb: &'static str, flags: &mut Flags) -> Result<Request, CliError> {
         }
         "click" => {
             let confirm = flags.one("--confirm")?;
-            let mouse = flags.switch("--mouse");
+            let mouse = click_kind(flags)?;
             let [index] = p[..] else {
-                return usage("<ref> [--confirm <label>] [--mouse]");
+                return usage("<ref> [--confirm <label>] [--script]");
             };
             let mut arguments = json!({"index": index, "verify": true});
             if let Some(label) = confirm {
                 arguments["confirm"] = json!(label);
             }
-            if mouse {
-                arguments["mouse"] = json!(true);
+            if let Some(mouse) = mouse {
+                arguments["mouse"] = json!(mouse);
             }
             tool("browser_click", arguments)
         }
@@ -345,13 +373,13 @@ fn build(verb: &'static str, flags: &mut Flags) -> Result<Request, CliError> {
             }
         }
         "check" | "uncheck" => {
-            let mouse = flags.switch("--mouse");
+            let mouse = click_kind(flags)?;
             let [index] = p[..] else {
-                return usage("<ref> [--mouse]");
+                return usage("<ref> [--script]");
             };
             let mut arguments = json!({"index": index, "checked": verb == "check"});
-            if mouse {
-                arguments["mouse"] = json!(true);
+            if let Some(mouse) = mouse {
+                arguments["mouse"] = json!(mouse);
             }
             tool("browser_check", arguments)
         }
@@ -759,7 +787,15 @@ pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
         "browser_network" => render_network(&body, arguments),
         _ => text.to_owned(),
     };
-    Ok(format!("{line}\n"))
+    // `--snap`: the page after the input, like `aui snap` prints it.
+    match (&body["state"], &body["state_error"]) {
+        (Value::String(state), _) => Ok(format!("{line}\n{state}\n")),
+        (_, Value::Null) => Ok(format!("{line}\n")),
+        (_, error) => Ok(format!(
+            "{line}\nnote: the press ran, but reading the page after it failed ({}); run aui snap\n",
+            error["message"].as_str().unwrap_or("read failed")
+        )),
+    }
 }
 
 fn render_dialog(body: &Value) -> String {
@@ -909,6 +945,15 @@ fn render_error(text: &str) -> String {
         _ => error["message"].as_str(),
     }
     .unwrap_or(text);
+    match error["code"].as_str() {
+        Some("snapshot_required") => {
+            return "✗ refused: no aui snap on this session yet · run aui snap".into()
+        }
+        Some("unknown_snapshot" | "snapshot_evicted") => {
+            return "✗ refused: the last aui snap expired · run aui snap".into()
+        }
+        _ => {}
+    }
     if error["variant"] != "TicketInvalid" {
         return format!("✗ error: {message}");
     }
@@ -1343,6 +1388,36 @@ mod tests {
         assert!(std::path::Path::new(arguments["path"].as_str().unwrap()).is_absolute());
     }
 
+    /// `--snap` prints the page after the input.
+    #[test]
+    fn snap_after_an_input_prints_the_page_after_it() {
+        for (verb, args) in [
+            ("click", &["@e5", "--snap"][..]),
+            ("type", &["@e2", "rust", "--snap"][..]),
+            ("open", &["https://a/", "--snap"][..]),
+            ("scroll", &["--snap"][..]),
+        ] {
+            assert_eq!(tool(verb, args).1["state"], true, "{verb}");
+        }
+        let click = parse_verb("click", &a(&["@e5", "--snap"])).unwrap();
+        let body = json!({"acted": "click", "ticket": 41, "verification": "navigation",
+                          "state": "Done  http://h/\n@e1 link \"Home\"\n1 control · snapshot 8",
+                          "snapshot": 8});
+        let out = render(&click, &reply(&body.to_string(), false)).unwrap();
+        assert_eq!(
+            out,
+            "✓ ticket 41 · navigation\nDone  http://h/\n@e1 link \"Home\"\n1 control · snapshot 8\n"
+        );
+        let failed = json!({"acted": "click", "ticket": 41,
+                            "state_error": {"code": "dialog_open", "message": "a dialog is open"}});
+        let out = render(&click, &reply(&failed.to_string(), false)).unwrap();
+        assert!(out.ends_with("(a dialog is open); run aui snap\n"), "{out}");
+        assert!(
+            !out.contains('✗'),
+            "the press ran: not an error line: {out}"
+        );
+    }
+
     #[test]
     fn max_output_reaches_only_the_text_tools() {
         assert_eq!(
@@ -1354,6 +1429,30 @@ mod tests {
             json!({"index": "@e1", "verify": true})
         );
         assert!(parse_verb("snap", &a(&["--max-output", "lots"])).is_err());
+    }
+
+    /// `--script` → `mouse: false`, `--mouse` → `true`, neither → no key, both → error.
+    #[test]
+    fn click_flags_pick_the_press() {
+        assert_eq!(
+            tool("click", &["@e1", "--script"]),
+            (
+                "browser_click",
+                json!({"index": "@e1", "verify": true, "mouse": false})
+            )
+        );
+        assert_eq!(
+            tool("click", &["@e1", "--mouse"]),
+            (
+                "browser_click",
+                json!({"index": "@e1", "verify": true, "mouse": true})
+            )
+        );
+        let (_, arguments) = tool("click", &["@e1"]);
+        assert_eq!(arguments, json!({"index": "@e1", "verify": true}));
+        assert!(arguments.get("mouse").is_none(), "{arguments}");
+        let err = parse_verb("click", &a(&["@e1", "--mouse", "--script"])).unwrap_err();
+        assert!(err.to_string().contains("pick one"), "{err}");
     }
 
     #[test]
@@ -1416,6 +1515,8 @@ mod tests {
             ("reload", &["--mouse"][..]),
             ("check", &[][..]),
             ("focus", &["@e1", "--mouse"][..]),
+            ("snap", &["--snap"][..]),
+            ("get", &["value", "@e1", "--snap"][..]),
             ("keyboard", &["type"][..]),
             ("keyboard", &["press", "x"][..]),
             ("get", &["attr", "@e1"][..]),

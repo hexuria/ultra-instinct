@@ -44,8 +44,9 @@ it through to its "Hard rules" before your first browser command.
 
   With `--policy instinct`, Instinct picks every step inside the binary,
   with no model, and ends `abstained` rather than guess; after `abstained`,
-  switch to the verbs. The guide says when a remote policy fits instead. `--launch` starts a
-  private Chrome; `--cdp` drives one already listening on `127.0.0.1:9222`.
+  switch to the verbs. The guide says when a remote policy fits instead.
+  `--launch` starts a private Chrome; `--cdp` drives one already listening
+  on `127.0.0.1:9222`.
 
 ## 4. Fence the run
 

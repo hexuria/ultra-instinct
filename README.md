@@ -135,6 +135,7 @@ Every tool and verb: [`docs/tools.md`](docs/tools.md). Run flags:
   through a matching button count as presses.
 - **Snapshot-bound presses.** An MCP press given the `snapshot` id it was
   chosen from refuses `stale_ref` if that element moved, changed or left.
+  Every `aui` verb press is bound to the latest `aui snap` the same way.
 - **Secrets fail closed.** Password, hidden, file and secret-labelled fields
   never show a value; text typed into one is masked in every later output,
   error and HAR file; screenshots hide those fields or refuse.

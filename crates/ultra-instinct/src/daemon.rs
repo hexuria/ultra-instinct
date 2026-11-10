@@ -453,6 +453,9 @@ mod imp {
                 .map_err(|err| if hint { connect_hint(err, &cdp) } else { err })
         })
         .with_env_policy()
+        // A ref press binds to the latest `aui snap` of its tab, and needs one.
+        .require_snapshot(true)
+        .bind_to_latest_look(true)
     }
 
     /// The hidden `aui daemon` body.
@@ -814,10 +817,13 @@ mod tests {
             // (it is not Send).
             std::thread::spawn(move || {
                 let mut once = Some(json);
+                // The same options as `daemon_server`.
                 let mut server = ultra_instinct_mcp::Server::with_connector(move |_url| {
                     let json = once.take().expect("one connect");
                     Ok(Box::new(ReplayTransport::parse(&json)?) as Box<dyn CdpTransport>)
-                });
+                })
+                .require_snapshot(true)
+                .bind_to_latest_look(true);
                 serve_on(
                     daemon,
                     &mut server,
@@ -835,7 +841,7 @@ mod tests {
                 .observe_compact(&page())
                 .observe_compact(&page())
                 .observe_compact(&page())
-                .dom_click(11)
+                .pointer_click()
                 .ready_state("complete")
                 .observe_compact(&page());
             let handle = start(&path, script);
@@ -861,6 +867,58 @@ mod tests {
             );
             handle.join().unwrap();
             assert!(!path.exists(), "socket removed on exit");
+            let _ = std::fs::remove_dir(path.parent().unwrap());
+        }
+
+        /// A ref names what the last snap showed; a moved target refuses unpressed.
+        #[test]
+        fn a_press_after_the_page_changed_since_snap_refuses_unpressed() {
+            let path = path("st");
+            let moved = PageSpec::of(
+                &[
+                    Control::text_field(10, 100, "Email", (20.0, 20.0, 300.0, 28.0)),
+                    Control::button(11, 101, "Sign in", (20.0, 300.0, 120.0, 28.0)),
+                ],
+                "http://127.0.0.1/form",
+                "Form",
+            );
+            // No press scripted: a press would fail the replay.
+            let script = ScriptBuilder::new()
+                .observe_compact(&page())
+                .observe_compact(&moved)
+                .observe_compact(&moved);
+            let handle = start(&path, script);
+            let no_spawn = || panic!("the daemon is running");
+            run_verb_with(&parse_verb("snap", &[]).unwrap(), &path, no_spawn).unwrap();
+            let click = parse_verb("click", &a(&["@e2"])).unwrap();
+            let err = run_verb_with(&click, &path, no_spawn)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.starts_with("✗ refused: ") && err.ends_with("· run aui snap"),
+                "{err}"
+            );
+            run_verb_with(&parse_verb("close", &[]).unwrap(), &path, no_spawn).unwrap();
+            handle.join().unwrap();
+            let _ = std::fs::remove_dir(path.parent().unwrap());
+        }
+
+        /// A ref press before any snap refuses before any CDP call.
+        #[test]
+        fn a_press_before_any_snap_refuses() {
+            let path = path("ns");
+            let handle = start(&path, ScriptBuilder::new());
+            let no_spawn = || panic!("the daemon is running");
+            let click = parse_verb("click", &a(&["@e2"])).unwrap();
+            let err = run_verb_with(&click, &path, no_spawn)
+                .unwrap_err()
+                .to_string();
+            assert_eq!(
+                err,
+                "✗ refused: no aui snap on this session yet · run aui snap"
+            );
+            run_verb_with(&parse_verb("close", &[]).unwrap(), &path, no_spawn).unwrap();
+            handle.join().unwrap();
             let _ = std::fs::remove_dir(path.parent().unwrap());
         }
 

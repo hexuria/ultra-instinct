@@ -53,7 +53,9 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    press at the region center (`Input::Click`); the DOM `this.click()` tiers
 >    are its CDP-refusal fallback and the retry (`Input::ScriptClick`) after a
 >    pointer click shows no visible change. The MCP host's
->    `browser_click` stays DOM-side unless called with `mouse: true`. The host
+>    `browser_click` (and `browser_check` / `browser_download`) presses the
+>    same trusted pointer by default; `mouse: false` sends the DOM script
+>    click. The host
 >    helper `consume_ticket_once` uses
 >    the same consume-before-press order. `Predicted` carries no fingerprint of
 >    its own; do not add a "pre-ticket check" that is not wired into a refusal.
@@ -201,7 +203,7 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 |---|---|
 | `ultra-instinct-core` | `InteractionManifold`, regions, `ActionSpace`, fixture grammar |
 | `ultra-instinct-cdp` | CDP transport trait, websocket, replay transport, replay script builder; unix `--remote-debugging-pipe` transport (`PipeBrowser` / `PipePage`, caller-owned fds, one thread); tab backends: `TargetBackend` (list / create / activate / close pages, connect a session key), `HttpBackend` (the `/json` endpoints + a connector, the default) and unix `PipeBackend` (`Target.*` on a `PipeBrowser`, keys `pipe:<targetId>`) |
-| `ultra-instinct-chrome` | Find / start a local Chrome (`find_chrome`, `launch`, `ChromeProcess` killed on drop); std only, re-exported as `ultra_instinct_browser::launch` |
+| `ultra-instinct-chrome` | Find / start a local Chrome (`find_chrome`, `launch`, `ChromeProcess` killed on drop; headless at `DEFAULT_WINDOW` 1440×900, headed maximized, `LaunchOptions::window_size` overrides); std only, re-exported as `ultra_instinct_browser::launch` |
 | `ultra-instinct-browser` | CDP observe (DOM/AX fusion, identity, stacking), raw CDP inputs; `launch` (re-export of `ultra-instinct-chrome`); `storage_state` (save / load cookies + storage, the 0600 state file and its parser) |
 | `ultra-instinct-observe` | Observation history and id diff |
 | `ultra-instinct-geometry` | Geometry helpers; `RegionState` (availability / visibility of a region) |
@@ -210,7 +212,7 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 | `ultra-instinct-agent` | `Agent` state machine, `execute_ticketed` / `execute_ticketed_with` (policy), `AgentBuilder::guard_policy`, `AgentBuilder::deadline` (checked between steps), `BrowserRuntime`, `BeforeDispatch` (forwards every `BrowserRuntime` method and runs a hook just before `dispatch`; handed only to `execute_ticketed_with`), verification mapping, `MockBrowser` |
 | `ultra-instinct-protocol` | Guard / ticket / verify wire types |
 | `ultra-instinct-browser-tools` | The `browser_*` host surface as MCP tool families (`call` / `spec`, the tool-name lists, `ToolError` with a stable `code` on every variant) over a `BrowserHost` trait (sessions, tab binding, ledgers, events, snapshot record and lookup, `require_snapshot`, `Policy`, the tab `backend`, `ToolLimits`, `Downloads`, `Uploads`, the tools' own `ToolState`): snapshot-bound index refs (`bound.rs`), secret masking (`secrets.rs`: `sensitive`, typed secrets scrubbed from every output), browser-use names, `browser_wait` conditions, `browser_extra` (dialog, forward / reload, check, focus, keyboard, get / is / count, annotate, `max_chars`), `browser_state` (state save / load, cookies, storage), `browser_env` (set, download, network) |
-| `ultra-instinct-mcp` | Optional JSON-RPC adapter (observe / guard / verify), `TOOLS`, and the `Server` that keeps sessions and the snapshot ring and serves the `browser_*` tools through a crate-private `BrowserHost` adapter (`Server` itself does not implement it); host options (`with_pipe` / `with_backend`, `require_snapshot`, `set_policy`, `with_limits`, `with_downloads`, `with_uploads`, `with_tool_allowlist`); `run_goal` / `run_goal_on` / `Server::run_goal` (the agent loop with InstinctPolicy and the deterministic resolver, no model); re-exports `ToolError`, `Policy` and the tool-name lists ([`docs/embedding.md`](docs/embedding.md)) |
+| `ultra-instinct-mcp` | Optional JSON-RPC adapter (observe / guard / verify), `TOOLS`, and the `Server` that keeps sessions and the snapshot ring and serves the `browser_*` tools through a crate-private `BrowserHost` adapter (`Server` itself does not implement it); host options (`with_pipe` / `with_backend`, `require_snapshot`, `bind_to_latest_look`, `set_policy`, `with_limits`, `with_downloads`, `with_uploads`, `with_tool_allowlist`); `run_goal` / `run_goal_on` / `Server::run_goal` (the agent loop with InstinctPolicy and the deterministic resolver, no model); re-exports `ToolError`, `Policy` and the tool-name lists ([`docs/embedding.md`](docs/embedding.md)) |
 | `ultra-instinct-remote` | Remote decision transports and the HTTP text model, the only crate with a model SDK / HTTP client: `typesafe` (feature `jev`), `clef` (feature `clef`), `http_text` (feature `model-text`); re-exported by `ultra-instinct` |
 | `ultra-instinct` | `ultra-instinct run` (agent loop, `--policy instinct|jev|clef|clef-flash`, `--diary <dir>`); `replay --diary` (offline arena: agree / would-abstain / regress per recorded decision); `observe` / `guard` / `verify` preflight commands; `mcp` (stdio); the shell verbs over the session daemon (`verbs.rs`, `daemon.rs`), `batch`, `session`, `skills`, `doctor`, `install`; `run --launch/--load-state/--save-state/--allow-domain/--confirm-press/--confirm`; `TypesafeTransport` (feature `jev`: JEV-primary over the closed remote wire); `ClefTransport` (feature `clef`: Cloudflare Workers AI Clef / Clef-Flash over the same wire through `typesafe-sdk`'s Clef provider, one decision call, single-candidate heads answered locally) |
 | `ultra-instinct-dojo` | Battle diary schema v1 (`DiaryLine` JSONL), `DiaryWriter` / `read_diary`, site + situation keys, decision→`ActionSpace` rebuild for the replay arena; versioned `LessonStore` (words / places / moves / trust, keyed per situation, carrying proving diary ids); lessons only adjust evidence inside the finite `ActionSpace` |
@@ -237,7 +239,9 @@ deliberate eval.
   the guard's `activating_keys_are_presses_of_the_target_or_its_form`.
 - Shell verbs and the session daemon: `verbs.rs` / `batch.rs` unit tests and
   the `daemon.rs` socket tests (round trip, spawn / stale socket, idle exit,
-  `--idle`, failed launch, session list). `browser_*` families over CDP
+  `--idle`, failed launch, session list; a press after the page changed
+  since `snap` refuses unpressed, a press before any snap refuses;
+  `bind_to_latest_look` in `snapshot_refs.rs`). `browser_*` families over CDP
   replay: `crates/ultra-instinct-mcp/tests/browser_tools.rs`,
   `browser_extra.rs`, `browser_state.rs`, `browser_env.rs`, and the
   `ultra-instinct-browser-tools` unit tests. A call that
@@ -364,7 +368,15 @@ return its `snapshot` id. Index arguments take `5`, `"5"` or `"@e5"`; an
 index press given `snapshot` resolves the index in that snapshot and mints
 its ticket there, so an element that moved, changed, or left refuses
 `stale_ref` and nothing is pressed (`Server::require_snapshot(true)` refuses
-a bare index, `snapshot_required`). A sensitive field (password / hidden /
+a bare index, `snapshot_required`). Over MCP the text format also carries
+the id in the result's `_meta.snapshot`, and a cut text keeps its
+`· snapshot N` line. Input tools (`STATE_AFTER`) take `state: true`: the
+reply adds the page after the input (`state`, text) and its `snapshot`,
+or `state_error` (the input still ran). `Server::bind_to_latest_look(true)`
+binds a press that names no snapshot to its tab's latest look (a
+`get_state` or a `state: true` reply); the `aui` daemon sets it with
+`require_snapshot(true)`, so a verb press binds to the latest `aui snap`
+(or `--snap`) and refuses `snapshot_required` before any. A sensitive field (password / hidden /
 file, a secret label, or an unreadable type) never shows its value, and text
 typed into one is masked in every later output, error, and HAR. Every error
 carries a stable `code`; the table is in [`docs/embedding.md`](docs/embedding.md).

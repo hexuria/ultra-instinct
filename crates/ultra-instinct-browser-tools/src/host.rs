@@ -235,6 +235,13 @@ pub trait BrowserHost {
         false
     }
 
+    /// The snapshot an index press that names none is bound to: the
+    /// latest one recorded for `origin`, when the host binds to the latest
+    /// look. Default: none (the index resolves on a fresh observation).
+    fn latest_snapshot(&self, _origin: &str) -> Option<u64> {
+        None
+    }
+
     /// The policy navigation and presses run under.
     fn policy(&self) -> Result<&Policy, ToolError>;
 
