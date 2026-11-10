@@ -54,6 +54,8 @@ pub fn element_state(state: &OfferedState) -> ElementState {
         value: state.value.clone(),
         checked: state.checked,
         expanded: state.expanded,
+        selected_item: None,
+        aria_current: None,
         selected: state.selected.clone(),
         options: state.options.clone(),
         input_type: state.input_type.clone(),

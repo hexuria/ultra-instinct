@@ -31,7 +31,9 @@ pub use manifold::InteractionManifold;
 pub use query::LocateQuery;
 pub use rect::{Point, Rect};
 pub use region::{InteractionRegion, RegionParts};
-pub use text::{token_jaccard, token_precision, token_recall, tokenize};
+pub use text::{
+    normalize_label, token_jaccard, token_precision, token_recall, tokenize, INVISIBLE,
+};
 pub use vocab::{Action, RegionFlags, Relation, Role, SizeClass, SourceMask, Zone};
 
 #[cfg(test)]
@@ -131,6 +133,9 @@ mod tests {
         let fingerprint = region.fingerprint();
         let state = ElementState {
             value: Some("Ana".to_owned()),
+            expanded: Some(true),
+            selected_item: Some(true),
+            aria_current: Some("page".to_owned()),
             ..ElementState::default()
         };
 

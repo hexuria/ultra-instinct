@@ -99,7 +99,8 @@ impl fmt::Display for HostPattern {
 }
 
 /// A label pattern: `*` matches any run of characters, everything else
-/// matches itself case-insensitively. Runs of whitespace count as one space.
+/// matches itself case-insensitively. Runs of whitespace count as one space;
+/// invisible characters ([`ultra_instinct_core::INVISIBLE`]) count as none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LabelGlob {
     raw: String,
@@ -516,12 +517,10 @@ fn normalize_host(host: &str) -> String {
     host.trim().trim_end_matches('.').to_ascii_lowercase()
 }
 
-/// Lowercase, whitespace runs folded to one space, trimmed.
+/// Lowercase, invisible characters dropped, whitespace runs folded to one
+/// space, trimmed ([`ultra_instinct_core::normalize_label`]).
 fn fold(text: &str) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+    ultra_instinct_core::normalize_label(text).to_lowercase()
 }
 
 /// `*`-only glob over chars (iterative, linear backtracking).
@@ -677,6 +676,22 @@ mod tests {
             confirmed.check(url, note, Action::Click, None),
             Err(GuardReason::NeedsConfirm)
         );
+    }
+
+    /// An invisible character in a confirm pattern or in a label counts as
+    /// none: "Pa\u{34F}y*" still gates the "Pay $18" press.
+    #[test]
+    fn a_hidden_character_in_a_pattern_still_gates_the_press() {
+        let m = parse_fixture(PAGE).unwrap();
+        let pay = m.get(&RegionId::try_new("pay").unwrap()).unwrap();
+        let p = policy("", "Pa\u{34F}y*");
+        assert_eq!(
+            p.check(Some("https://shop.example/"), pay, Action::Click, None),
+            Err(GuardReason::NeedsConfirm)
+        );
+        let glob = LabelGlob::parse("Pay $18").unwrap();
+        assert!(glob.matches("P\u{200B}ay\u{AD} $18"));
+        assert!(LabelGlob::parse("\u{200B}").is_err());
     }
 
     /// An activating KEY is a press: Enter / Space on a button-like target

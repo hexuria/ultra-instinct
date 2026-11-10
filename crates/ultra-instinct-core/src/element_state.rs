@@ -10,6 +10,11 @@ pub struct ElementState {
     pub checked: Option<bool>,
     /// `aria-expanded` "true"/"false".
     pub expanded: Option<bool>,
+    /// `aria-selected` "true"/"false" (a selected tab, option, or row).
+    pub selected_item: Option<bool>,
+    /// `aria-current` when present and not "false" ("page", "step", "date",
+    /// …; an empty value is "true"), lowercased, ≤ 16 chars.
+    pub aria_current: Option<String>,
     /// SELECT: labels of the selected options, trimmed, joined with ", ".
     pub selected: Option<String>,
     /// SELECT: enabled option labels in document order (skip disabled options and options in a disabled optgroup), trimmed, each ≤ 80 chars, at most 50.
@@ -57,10 +62,15 @@ pub enum FormSubmit {
 
 impl ElementState {
     pub fn is_empty(&self) -> bool {
-        self.is_empty_but_form() && self.form.is_none() && self.submit_action.is_none()
+        self.is_empty_but_form()
+            && self.selected_item.is_none()
+            && self.aria_current.is_none()
+            && self.form.is_none()
+            && self.submit_action.is_none()
     }
 
-    /// Empty apart from the form evidence (`form`, `submit_action`): what a
+    /// Empty apart from the form evidence (`form`, `submit_action`) and
+    /// `selected_item` / `aria_current`, which neither carries: what a
     /// remote request or a diary line decides on, so a control observe
     /// found in no form still sends no `state`.
     pub fn is_empty_but_form(&self) -> bool {

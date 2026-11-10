@@ -49,7 +49,7 @@ use crate::error::BrowserError;
 /// `[x,y,w,h]` or null, `s` the computed-style name/value pairs
 /// `style_from_computed` consumes, and `h` the `data-hu-k` of the element
 /// under the content center (null when nothing is there). `s`, `h`, and
-/// control state (`v`, `c`, `x`, `sel`, `o`, `it`, `hr`) and the click hint `ck` are collected only for boxed
+/// control state (`v`, `c`, `x`, `as`, `ac`, `sel`, `o`, `it`, `hr`) and the click hint `ck` are collected only for boxed
 /// elements that can become regions: controls, roles, surfaces, shapes,
 /// drag-marked elements, and every plain box (`extract::is_box`), since a
 /// box's click listener is read after the walk.
@@ -69,7 +69,7 @@ var next=0;
 // submits no form. `fa` on a submit button: where pressing it sends it.
 var FORMS=new Map(),forms=[];
 var BLOCKS={text:1,search:1,url:1,tel:1,email:1,password:1,date:1,month:1,week:1,time:1,'datetime-local':1,number:1};
-function fold(t){return String(t||'').replace(/\s+/g,' ').trim();}
+function fold(t){return String(t||'').replace(/[\u200B\u200C\u200D\u2060\uFEFF\u034F\u00AD]/g,'').replace(/\s+/g,' ').trim();}
 function accName(b){
   var root=b.getRootNode?b.getRootNode():b.ownerDocument;
   var by=fold(b.getAttribute('aria-labelledby')).split(' ').map(function(id){
@@ -282,6 +282,9 @@ function visit(el,doc,off){
       }
       var expanded=el.getAttribute('aria-expanded');
       if(expanded==='true'||expanded==='false')rec.x=expanded==='true';
+      var asel=el.getAttribute('aria-selected'),cur=el.getAttribute('aria-current');
+      if(asel==='true'||asel==='false')rec.as=asel==='true';
+      if(cur!==null){cur=cur.trim().toLowerCase()||'true';if(cur!=='false')rec.ac=cur.slice(0,16);}
       if(name==='SELECT'){
         var selected=[];
         var options=[];
@@ -533,6 +536,12 @@ fn parse_element_state(record: &Value, forms: &[Option<FormSubmit>]) -> ElementS
             .map(|value| truncate_chars(value, 200)),
         checked: record.get("c").and_then(Value::as_bool),
         expanded: record.get("x").and_then(Value::as_bool),
+        selected_item: record.get("as").and_then(Value::as_bool),
+        aria_current: record
+            .get("ac")
+            .and_then(Value::as_str)
+            .map(|cur| truncate_chars(&cur.to_lowercase(), 16))
+            .filter(|cur| cur != "false"),
         selected: record.get("sel").and_then(Value::as_str).map(str::to_owned),
         options,
         input_type: record.get("it").and_then(Value::as_str).map(str::to_owned),
@@ -561,6 +570,15 @@ fn truncate_chars(value: &str, limit: usize) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_walk_folds_the_same_invisible_characters() {
+        let class: String = ultra_instinct_core::INVISIBLE
+            .iter()
+            .map(|c| format!("\\u{:04X}", u32::from(*c)))
+            .collect();
+        assert!(COMPACT_JS.contains(&format!("/[{class}]/g")), "{class}");
+    }
 
     fn parse_state(record: Value) -> Result<ElementState, BrowserError> {
         let forms = json!([
@@ -593,6 +611,8 @@ mod tests {
                 "v":"Ana",
                 "c":true,
                 "x":false,
+                "as":true,
+                "ac":"PAGE-and-more-than-16",
                 "sel":"UTC, Asia/Manila",
                 "o":["UTC", "Asia/Manila"],
                 "hr":"https://example.com/a",
@@ -604,6 +624,8 @@ mod tests {
                 value: Some("Ana".to_owned()),
                 checked: Some(true),
                 expanded: Some(false),
+                selected_item: Some(true),
+                aria_current: Some("page-and-more-th".to_owned()),
                 selected: Some("UTC, Asia/Manila".to_owned()),
                 options: vec!["UTC".to_owned(), "Asia/Manila".to_owned()],
                 input_type: None,
