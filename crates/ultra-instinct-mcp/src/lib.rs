@@ -26,7 +26,9 @@ pub use rpc::{handle_line, serve_stdio};
 pub use run::{
     run_goal, run_goal_on, BlockKind, RunLimits, RunOutcome, RunReport, RunStep, Typed, TypedText,
 };
-pub use server::{CdpConnector, Server, ENV_ALLOW_DOMAINS, ENV_CONFIRM_PRESS, MAX_LIVE_SESSIONS};
+pub use server::{
+    CdpConnector, Server, ENV_ALLOW_DOMAINS, ENV_CONFIRM_PRESS, ENV_REFUSE_BLOB, MAX_LIVE_SESSIONS,
+};
 pub use tools::call_tool;
 pub use ultra_instinct_browser_tools::{
     sensitive, Downloads, HttpBackend, PageTab, TargetBackend, ToolError, ToolLimits, Uploads, MASK,

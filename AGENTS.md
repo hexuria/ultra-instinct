@@ -70,7 +70,8 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    after the gate; `consume_ticket_once_checked` runs it after `revalidate`,
 >    before consume. An empty policy allows everything. With an allow-list,
 >    only `http` / `https` on a listed host passes (plus `about:blank`, and
->    a `blob:` by its origin); `data:`, `javascript:`, `file:` and other
+>    a `blob:` by its origin, none with `Policy::refuse_blob`); `data:`,
+>    `javascript:`, `file:` and other
 >    schemes refuse, and a host is read only after a real `scheme://`
 >    (`Policy::check_url`, `host_of`). A confirm applies to
 >    a press (`Policy::press_label`): the CLICK family on the target, an
@@ -402,7 +403,8 @@ never network idle) observes about every 200 ms until every given condition
 holds or `seconds` (default 10, cap `ToolLimits::max_wait`, 60 s) runs out; it never acts.
 
 Policy: `ULTRA_INSTINCT_ALLOW_DOMAINS` / `ULTRA_INSTINCT_CONFIRM_PRESS`
-(comma lists) set the server's `Policy`; a press tool's `confirm` argument
+(comma lists) set the server's `Policy`, and `ULTRA_INSTINCT_REFUSE_BLOB=1`
+refuses every `blob:` page under the list; a press tool's `confirm` argument
 names the label the user confirmed, for that call only (`Server::set_policy`
 replaces the policy between calls). Ticketed inputs return `ticket`;
 `verify:true` adds `verification`. `browser_send_key` with `index` is a

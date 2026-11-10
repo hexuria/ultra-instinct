@@ -49,6 +49,10 @@ pub const ENV_ALLOW_DOMAINS: &str = "ULTRA_INSTINCT_ALLOW_DOMAINS";
 /// `confirm` argument naming the label. Read by [`Server::new`].
 pub const ENV_CONFIRM_PRESS: &str = "ULTRA_INSTINCT_CONFIRM_PRESS";
 
+/// `1` or `true`: with an allow-list set, refuse every `blob:` page
+/// ([`Policy::refuse_blob`]). Read by [`Server::new`].
+pub const ENV_REFUSE_BLOB: &str = "ULTRA_INSTINCT_REFUSE_BLOB";
+
 pub(crate) struct Snapshot {
     pub(crate) origin: String,
     /// Shared with the index presses that resolve in it (no copy per press).
@@ -122,12 +126,19 @@ impl Server {
     }
 
     /// This server under the policy in [`ENV_ALLOW_DOMAINS`] /
-    /// [`ENV_CONFIRM_PRESS`] (unset: allow all; unparsable: every call that
-    /// needs the policy fails with the parse error).
+    /// [`ENV_CONFIRM_PRESS`] / [`ENV_REFUSE_BLOB`] (unset: allow all;
+    /// unparsable: every call that needs the policy fails with the parse
+    /// error).
     pub fn with_env_policy(mut self) -> Self {
         let var = |name: &str| std::env::var(name).unwrap_or_default();
+        let refuse_blob = match var(ENV_REFUSE_BLOB).trim().to_ascii_lowercase().as_str() {
+            "" | "0" | "false" => Ok(false),
+            "1" | "true" => Ok(true),
+            other => Err(format!("{ENV_REFUSE_BLOB}: expected 1 or 0, got {other:?}")),
+        };
         self.policy = Policy::from_lists(&var(ENV_ALLOW_DOMAINS), &var(ENV_CONFIRM_PRESS))
-            .map_err(|err| format!("{ENV_ALLOW_DOMAINS} / {ENV_CONFIRM_PRESS}: {err}"));
+            .map_err(|err| format!("{ENV_ALLOW_DOMAINS} / {ENV_CONFIRM_PRESS}: {err}"))
+            .and_then(|policy| Ok(policy.with_refuse_blob(refuse_blob?)));
         self
     }
 

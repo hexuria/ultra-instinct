@@ -1819,6 +1819,45 @@ fn domain_off_the_allowlist_ends_blocked() {
     assert!(agent.browser_mut().input_log().is_empty());
 }
 
+/// A page reached mid-run that is a `blob:` of a listed origin ends BLOCKED,
+/// unpressed, when the policy refuses blob: pages; without the switch it
+/// passes by its origin.
+#[test]
+fn a_blob_page_mid_run_ends_blocked_with_refuse_blob() {
+    let blob = ultra_instinct_browser::PageState::new(
+        "blob:https://shop.example/5f1c",
+        "made by script",
+        None,
+    );
+    let run = |refuse_blob: bool| {
+        let policy = ultra_instinct_guard::Policy::from_lists("shop.example", "")
+            .unwrap()
+            .with_refuse_blob(refuse_blob);
+        let mut agent = AgentBuilder::new(
+            MockBrowser::new(manifold(PAY_PAGE)).with_page(blob.clone()),
+            InstinctPolicy::default(),
+        )
+        .max_steps(3)
+        .guard_policy(policy)
+        .build("click Back to cart");
+        let outcome = agent.run();
+        let pressed = !agent.browser_mut().input_log().is_empty();
+        (outcome, pressed)
+    };
+    match run(true) {
+        (AgentOutcome::Blocked { reason, .. }, false) => assert_eq!(
+            reason,
+            "domain-not-allowed: a blob: page is not an allowed domain"
+        ),
+        other => panic!("expected Blocked with nothing pressed, got {other:?}"),
+    }
+    let (outcome, pressed) = run(false);
+    assert!(
+        pressed,
+        "a listed blob: origin passes without the switch: {outcome:?}"
+    );
+}
+
 /// A passed deadline ends the run FAILED before the next step, with nothing
 /// pressed; no deadline (the default) changes nothing.
 #[test]

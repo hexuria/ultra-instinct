@@ -1593,11 +1593,17 @@ where
                         "{reason}: {label:?} matches a confirm-press pattern; confirm {label:?} to press it"
                     ),
                     _ => {
-                        // The page's host, or where a form submit would go.
-                        let host = url
-                            .as_deref()
-                            .and_then(ultra_instinct_guard::host_of)
-                            .unwrap_or_else(|| "(unknown url)".to_owned());
+                        // The page's host, or where a form submit would go;
+                        // a URL with no host is named by its scheme.
+                        let host = url.as_deref().map_or_else(
+                            || "(unknown url)".to_owned(),
+                            |url| {
+                                ultra_instinct_guard::host_of(url).unwrap_or_else(|| {
+                                    let scheme = url.trim().split(':').next().unwrap_or_default();
+                                    format!("a {scheme}: page")
+                                })
+                            },
+                        );
                         format!("{reason}: {host} is not an allowed domain")
                     }
                 };

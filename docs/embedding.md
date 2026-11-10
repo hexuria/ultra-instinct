@@ -362,7 +362,10 @@ the page first and, before any `Input.*` call:
   `domain_not_allowed {host}`, an unreadable URL while the list is set
   fails closed (`ticket_invalid`, `domain-not-allowed`, as for a press), a
   URL that is not `http` / `https` refuses too (`data:`, `javascript:`,
-  `file:`), except `about:blank` and a `blob:` whose origin is listed;
+  `file:`), except `about:blank` and a `blob:` whose origin is listed
+  (no `blob:` at all with `Policy::with_refuse_blob(true)` or
+  `ULTRA_INSTINCT_REFUSE_BLOB=1`: a script makes its content, so a host
+  that cannot see each page a `run_goal` reaches can close that door);
 - runs the key on the focused control through the guard's press rule
   (below), as a ticketed KEY on that control would be. With confirm
   patterns set, an Enter / Space to a focus no observation names (no
