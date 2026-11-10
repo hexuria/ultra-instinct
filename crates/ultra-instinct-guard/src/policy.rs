@@ -452,12 +452,10 @@ pub fn refused_place(url: &str) -> String {
         return host;
     }
     let url = url.trim();
-    // `shop.example:443/cart` or `localhost:8080` is a host and port with no
-    // scheme, not a scheme: a dot in it, or a digit right after the colon.
-    let scheme = scheme_of(url).filter(|scheme| {
-        !scheme.contains('.') && !url[scheme.len() + 1..].starts_with(|c: char| c.is_ascii_digit())
-    });
-    match scheme.map(str::to_ascii_lowercase) {
+    if let Some(host) = scheme_less_host(url) {
+        return host;
+    }
+    match scheme_of(url).map(str::to_ascii_lowercase) {
         Some(web) if web == "http" || web == "https" => format!("an {web}: URL with no host"),
         Some(scheme) => {
             let article = if scheme.starts_with(['a', 'e', 'i', 'o', 'u']) {
@@ -469,6 +467,23 @@ pub fn refused_place(url: &str) -> String {
         }
         None => "(unknown url)".to_owned(),
     }
+}
+
+/// The host of a scheme-less `host:port[/…]` (`shop.example:443/cart`,
+/// `localhost:8080`, `10.0.0.1:80`): a name with a dot, `localhost`, or one
+/// starting with a digit, then a port of 1 to 5 digits. `tel:5551234`,
+/// `mailto:…` and `com.example.app:/x` are schemes, not hosts.
+fn scheme_less_host(url: &str) -> Option<String> {
+    let (name, rest) = url.split_once(':')?;
+    let port = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let looks_like_host = name.contains('.')
+        || name.eq_ignore_ascii_case("localhost")
+        || name.starts_with(|c: char| c.is_ascii_digit());
+    let is_port = (1..=5).contains(&port.len()) && port.bytes().all(|b| b.is_ascii_digit());
+    let plain = name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
+    (looks_like_host && is_port && plain && !name.is_empty()).then(|| normalize_host(name))
 }
 
 /// The lowercase host of `url`, `None` when it has none (`about:blank`,
@@ -621,13 +636,22 @@ mod tests {
         );
         assert_eq!(refused_place(" DATA:text/html,<b>long</b>"), "a data: page");
         assert_eq!(refused_place("about:srcdoc"), "an about: page");
-        for host_port in ["shop.example:443/cart", "localhost:8080", " 10.0.0.1:80"] {
-            assert_eq!(refused_place(host_port), "(unknown url)", "{host_port}");
+        // A scheme-less host:port names its host; a scheme keeps its name.
+        for (host_port, host) in [
+            ("shop.example:443/cart", "shop.example"),
+            ("LocalHost:8080", "localhost"),
+            (" 10.0.0.1:80", "10.0.0.1"),
+        ] {
+            assert_eq!(refused_place(host_port), host, "{host_port}");
         }
-        assert_eq!(
-            refused_place("view-source:https://x/"),
-            "a view-source: page"
-        );
+        for (url, named) in [
+            ("tel:5551234", "a tel: page"),
+            ("mailto:1234@x.example", "a mailto: page"),
+            ("com.example.app:/oauth", "a com.example.app: page"),
+            ("view-source:https://x/", "a view-source: page"),
+        ] {
+            assert_eq!(refused_place(url), named, "{url}");
+        }
         assert_eq!(refused_place("https:///x"), "an https: URL with no host");
         assert_eq!(refused_place("https://Evil.test/x"), "evil.test");
         for none in ["", "  ", "no-scheme", ":x"] {
