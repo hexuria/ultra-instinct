@@ -210,16 +210,8 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         if headed && !launch {
             return Err(CliError::Config("--headed needs --launch".into()));
         }
-        profile = flags
-            .one("--profile")?
-            .map(|dir| absolute_dir(&dir))
-            .transpose()?;
-        if profile.is_some() && (!launch || cdp.is_some()) {
-            return Err(CliError::Config(
-                "--profile needs --launch (and no --cdp): it is the launched Chrome's profile"
-                    .into(),
-            ));
-        }
+        let dir = flags.one("--profile")?;
+        profile = crate::daemon::launch_profile(launch, cdp.is_some(), dir.as_deref())?;
         idle_secs = flags
             .one("--idle")?
             .map(|raw| crate::daemon::parse_idle(&raw))
@@ -266,23 +258,6 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         profile,
         idle_secs,
     })
-}
-
-/// `dir` as an absolute path (relative to this shell), since the daemon
-/// that uses it does not share the shell's working directory.
-fn absolute_dir(dir: &str) -> Result<String, CliError> {
-    let path = std::path::Path::new(dir);
-    let path = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map_err(|err| CliError::Io {
-                path: dir.to_owned(),
-                message: err.to_string(),
-            })?
-            .join(path)
-    };
-    Ok(path.display().to_string())
 }
 
 /// `--script`: script click; `--mouse`: pointer (the default); not both.
@@ -1519,22 +1494,25 @@ mod tests {
             parse_verb("open", &a(&["https://a/", "--launch", "--profile", "rel"])).unwrap();
         let expect = std::env::current_dir().unwrap().join("rel");
         assert_eq!(relative.profile.as_deref(), Some(expect.to_str().unwrap()));
-        for args in [
-            &["https://a/", "--profile", "/p"][..],
-            &[
-                "https://a/",
-                "--launch",
-                "--cdp",
-                "http://x",
-                "--profile",
-                "/p",
-            ][..],
-        ] {
-            let err = parse_verb("open", &a(args)).unwrap_err();
-            assert!(
-                err.to_string().contains("--profile needs --launch"),
-                "{err}"
-            );
+        let everyday = ultra_instinct_browser::launch::default_user_data_dirs();
+        let mut refused = vec![
+            (vec!["--profile", "/p"], "--profile needs --launch"),
+            (vec!["--launch", "--cdp", "http://x"], "pick one"),
+            (
+                vec!["--launch", "--cdp", "http://x", "--profile", "/p"],
+                "pick one",
+            ),
+            (vec!["--launch", "--profile", ""], "needs a folder"),
+            (vec!["--launch", "--profile", "  "], "needs a folder"),
+        ];
+        let dir = everyday.first().map(|dir| format!("{}/", dir.display()));
+        if let Some(dir) = &dir {
+            refused.push((vec!["--launch", "--profile", dir], "separate folder"));
+        }
+        for (args, says) in refused {
+            let err = parse_verb("open", &a(&[&["https://a/"], &args[..]].concat()));
+            let err = err.unwrap_err().to_string();
+            assert!(err.contains(says), "{args:?}: {err}");
         }
         assert_eq!(launch.idle_secs, None);
         let idle = parse_verb("open", &a(&["https://a/", "--launch", "--idle", "90"])).unwrap();

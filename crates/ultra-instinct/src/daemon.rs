@@ -25,11 +25,14 @@
 //! with neither `--cdp` nor `--launch` it refuses ([`NO_BROWSER`]) instead
 //! of guessing a port, which could be the user's own Chrome; when nothing
 //! answers at `--cdp` the error says to run `aui open --launch` or `aui
-//! doctor`. `aui open --launch [--headed] [--profile <dir>]` (and
-//! no `--cdp`) makes the daemon start its own Chrome once, right after it
-//! binds its socket; that Chrome lives exactly as long as the daemon
-//! (`close`, idle exit and daemon exit all end it); with `--profile` it
-//! runs on that profile folder, which stays on disk. A failed launch answers
+//! doctor`. `aui open --launch [--headed] [--profile <dir>]` makes the
+//! daemon start its own Chrome once, right after it binds its socket
+//! (`--launch` with `--cdp` refuses: pick one); that Chrome lives exactly as
+//! long as the daemon (`close`, idle exit and daemon exit all end it); with
+//! `--profile` it runs on that profile folder, which stays on disk, and is
+//! asked to quit (up to 5 s) before it is killed. `--profile` refuses an
+//! empty value, a browser's own everyday profile folder, and a profile a
+//! running Chrome holds. A failed launch answers
 //! the waiting verb with the launch error, unchanged, and the daemon exits.
 //! `--idle`, `--allow-domain` and `--confirm-press` are start-time settings
 //! like `--launch`: a running session refuses them.
@@ -120,9 +123,13 @@ pub struct Verb {
 }
 
 impl Verb {
-    /// Whether the spawned daemon launches its own Chrome.
-    fn launches(&self) -> bool {
-        self.launch && self.cdp.is_none()
+    /// The browser a daemon this verb spawns runs on.
+    fn browser(&self) -> Result<Browser, CliError> {
+        let own = Launch {
+            headed: self.headed,
+            profile: self.profile.clone(),
+        };
+        Browser::named(self.cdp.as_deref(), self.launch.then_some(own))
     }
 
     /// Settings that only take effect when this verb spawns the daemon.
@@ -140,11 +147,75 @@ pass --launch (its own Chrome; --profile <dir> keeps a profile) or --cdp <url> \
 (a Chrome you started with --remote-debugging-port and its own --user-data-dir)";
 
 /// How the daemon starts its own Chrome (`--launch`).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Launch {
     pub headed: bool,
     /// `--profile <dir>`: the user-data dir, kept on disk.
     pub profile: Option<String>,
+}
+
+/// The one browser a new session runs on.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Browser {
+    /// `--cdp <url>`: a Chrome the user started.
+    Cdp(String),
+    /// `--launch`: the daemon's own Chrome.
+    Launch(Launch),
+}
+
+impl Browser {
+    /// The browser `--cdp` or `--launch` names; neither is [`NO_BROWSER`].
+    pub(crate) fn named(cdp: Option<&str>, launch: Option<Launch>) -> Result<Self, CliError> {
+        match (cdp, launch) {
+            (Some(cdp), None) => Ok(Self::Cdp(cdp.to_owned())),
+            (None, Some(own)) => Ok(Self::Launch(own)),
+            (Some(_), Some(_)) => Err(CliError::Config(LAUNCH_OR_CDP.into())),
+            (None, None) => Err(CliError::Config(NO_BROWSER.into())),
+        }
+    }
+}
+
+const LAUNCH_OR_CDP: &str = "--launch and --cdp: pick one";
+
+/// The `--launch` / `--cdp` / `--profile` rules of `open`, `run` and the
+/// daemon: not both `--launch` and `--cdp`; `--profile` needs `--launch`,
+/// a folder name, and not one of Chrome's own profiles. Returns the
+/// profile as an absolute path (the daemon does not share this shell's
+/// working directory).
+pub(crate) fn launch_profile(
+    launch: bool,
+    cdp: bool,
+    profile: Option<&str>,
+) -> Result<Option<String>, CliError> {
+    if launch && cdp {
+        return Err(CliError::Config(LAUNCH_OR_CDP.into()));
+    }
+    let Some(dir) = profile else { return Ok(None) };
+    if !launch {
+        return Err(CliError::Config(
+            "--profile needs --launch: it is the launched Chrome's profile".into(),
+        ));
+    }
+    if dir.trim().is_empty() {
+        return Err(CliError::Config("--profile needs a folder".into()));
+    }
+    let path = std::path::Path::new(dir);
+    let path = match path.is_absolute() {
+        true => path.to_path_buf(),
+        false => std::env::current_dir()
+            .map_err(|err| CliError::Io {
+                path: dir.to_owned(),
+                message: err.to_string(),
+            })?
+            .join(path),
+    };
+    if ultra_instinct_browser::launch::is_default_user_data_dir(&path) {
+        return Err(CliError::Config(format!(
+            "--profile {}: that is a browser's own everyday profile; use a separate folder",
+            path.display()
+        )));
+    }
+    Ok(Some(path.display().to_string()))
 }
 
 /// An `--idle` value: whole seconds, 1 to [`MAX_IDLE_SECS`].
@@ -192,7 +263,7 @@ pub(crate) fn daemon_command(args: &[String]) -> Result<String, CliError> {
     let cdp = flags.one("--cdp")?;
     let launch = flags.switch("--launch");
     let headed = flags.switch("--headed");
-    let profile = flags.one("--profile")?;
+    let profile = launch_profile(launch, cdp.is_some(), flags.one("--profile")?.as_deref())?;
     let idle = flags
         .one("--idle")?
         .map(|raw| parse_idle(&raw))
@@ -202,15 +273,11 @@ pub(crate) fn daemon_command(args: &[String]) -> Result<String, CliError> {
     if let Some(extra) = flags.positional().first() {
         return Err(CliError::UnknownFlag(extra.clone()));
     }
-    if cdp.is_none() && !launch {
-        return Err(CliError::Config(NO_BROWSER.into()));
+    if headed && !launch {
+        return Err(CliError::Config("--headed needs --launch".into()));
     }
-    imp::serve_session(
-        &session,
-        cdp.as_deref(),
-        launch.then_some(Launch { headed, profile }),
-        std::time::Duration::from_secs(idle),
-    )?;
+    let browser = Browser::named(cdp.as_deref(), launch.then_some(Launch { headed, profile }))?;
+    imp::serve_session(&session, browser, std::time::Duration::from_secs(idle))?;
     Ok(String::new())
 }
 
@@ -282,7 +349,7 @@ mod imp {
     use ultra_instinct_browser::{CdpTransport, WebSocketTransport};
 
     use super::{
-        connect_hint, render, request_line, with_endpoint, SessionName, Verb, STOP_METHOD,
+        connect_hint, render, request_line, with_endpoint, Browser, SessionName, Verb, STOP_METHOD,
     };
     use crate::CliError;
 
@@ -484,35 +551,29 @@ mod imp {
     /// The hidden `aui daemon` body.
     pub(super) fn serve_session(
         session: &SessionName,
-        cdp: Option<&str>,
-        launch: Option<super::Launch>,
+        browser: Browser,
         idle: Duration,
     ) -> Result<(), CliError> {
         // Bind first: the spawning verb is already waiting on this socket,
         // and a launch can take longer than its 3 s spawn wait.
         let daemon = Daemon::bind(&socket_path(session))?;
-        let chrome = match (launch, cdp) {
-            (Some(own), None) => match launch::launch(&LaunchOptions {
+        let (chrome, endpoint) = match browser {
+            Browser::Cdp(cdp) => (None, cdp),
+            Browser::Launch(own) => match launch::launch(&LaunchOptions {
                 headed: own.headed,
                 profile_dir: own.profile.map(std::path::PathBuf::from),
                 ..LaunchOptions::default()
             }) {
-                Ok(chrome) => Some(chrome),
+                Ok(chrome) => {
+                    let endpoint = chrome.endpoint();
+                    (Some(chrome), endpoint)
+                }
                 Err(err) => {
                     let message = err.to_string();
                     serve_failure(daemon, &message, FAILURE_WAIT);
                     return Err(CliError::Browser(message));
                 }
             },
-            _ => None,
-        };
-        let endpoint = match (&chrome, cdp) {
-            (Some(chrome), _) => chrome.endpoint(),
-            (None, Some(cdp)) => cdp.to_owned(),
-            (None, None) => {
-                serve_failure(daemon, super::NO_BROWSER, FAILURE_WAIT);
-                return Err(CliError::Config(super::NO_BROWSER.into()));
-            }
         };
         let mut owned = Owned {
             server: daemon_server(&endpoint, chrome.is_none()),
@@ -620,16 +681,18 @@ mod imp {
         })?;
         let mut command = std::process::Command::new(&exe);
         command.args(["daemon", "--session", verb.session.as_str()]);
-        if let Some(cdp) = &verb.cdp {
-            command.args(["--cdp", cdp]);
-        }
-        if verb.launches() {
-            command.arg("--launch");
-            if verb.headed {
-                command.arg("--headed");
+        match verb.browser()? {
+            Browser::Cdp(cdp) => {
+                command.args(["--cdp", &cdp]);
             }
-            if let Some(profile) = &verb.profile {
-                command.args(["--profile", profile]);
+            Browser::Launch(own) => {
+                command.arg("--launch");
+                if own.headed {
+                    command.arg("--headed");
+                }
+                if let Some(profile) = &own.profile {
+                    command.args(["--profile", profile]);
+                }
             }
         }
         if let Some(secs) = verb.idle_secs {
@@ -677,12 +740,7 @@ mod imp {
             }
         } else {
             // A new session must name its browser; nothing is spawned else.
-            let spawned = connect_or_spawn(path, || {
-                if verb.cdp.is_none() && !verb.launch {
-                    return Err(CliError::Config(super::NO_BROWSER.into()));
-                }
-                spawn()
-            })?;
+            let spawned = connect_or_spawn(path, || verb.browser().and_then(|_| spawn()))?;
             if verb.spawn_settings() && !spawned {
                 return Err(CliError::Config(format!(
                     "session {} is already running; --launch, --idle and its policy are set when it starts (aui close first)",
@@ -692,7 +750,7 @@ mod imp {
             let reply = send(path, &request_line(&verb.request))?;
             let out = render(verb, &reply)?;
             if spawned && verb.verb == "open" {
-                let started = if verb.launches() {
+                let started = if verb.launch {
                     " · daemon started with its own Chrome · opened"
                 } else {
                     " · daemon started · opened"
@@ -708,7 +766,7 @@ mod imp {
 
 #[cfg(not(unix))]
 mod imp {
-    use super::{SessionName, Verb};
+    use super::{Browser, SessionName, Verb};
     use crate::CliError;
 
     const UNSUPPORTED: &str =
@@ -720,8 +778,7 @@ mod imp {
 
     pub(super) fn serve_session(
         _session: &SessionName,
-        _cdp: Option<&str>,
-        _launch: Option<super::Launch>,
+        _browser: Browser,
         _idle: std::time::Duration,
     ) -> Result<(), CliError> {
         Err(CliError::Config(UNSUPPORTED.into()))
@@ -814,6 +871,38 @@ mod tests {
         ] {
             assert!(daemon_command(&a(bad)).is_err(), "{bad:?}");
         }
+    }
+
+    /// `--launch` / `--cdp` / `--profile` are refused on the hidden daemon
+    /// as on `open`, before it binds anything.
+    #[test]
+    fn the_daemon_takes_exactly_one_browser() {
+        let everyday = ultra_instinct_browser::launch::default_user_data_dirs();
+        let everyday = everyday.first().map(|dir| dir.display().to_string());
+        let mut cases = vec![
+            (vec!["--session", "t"], "no browser named"),
+            (vec!["--launch", "--cdp", "http://x"], "pick one"),
+            (vec!["--profile", "/p"], "--profile needs --launch"),
+            (
+                vec!["--cdp", "http://x", "--profile", "/p"],
+                "needs --launch",
+            ),
+            (vec!["--launch", "--profile", " "], "needs a folder"),
+            (vec!["--launch", "--profile="], "needs a folder"),
+            (
+                vec!["--cdp", "http://x", "--headed"],
+                "--headed needs --launch",
+            ),
+        ];
+        if let Some(dir) = &everyday {
+            cases.push((vec!["--launch", "--profile", dir], "separate folder"));
+        }
+        for (args, says) in cases {
+            let err = daemon_command(&a(&args)).unwrap_err().to_string();
+            assert!(err.contains(says), "{args:?}: {err}");
+        }
+        let both = Browser::named(Some("http://x"), Some(Launch::default()));
+        assert!(both.unwrap_err().to_string().contains("pick one"));
     }
 
     #[cfg(unix)]

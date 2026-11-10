@@ -116,7 +116,7 @@ struct RunArgs {
     /// from outside still leaves every step it took.
     live_steps: bool,
     /// `--launch [--headed] [--profile <dir>]`: start this run's own Chrome
-    /// when `--cdp` is absent; `--profile` is its user-data dir, kept on disk.
+    /// (not with `--cdp`); `--profile` is its user-data dir, kept on disk.
     launch: bool,
     headed: bool,
     profile: Option<String>,
@@ -283,11 +283,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     if cdp.is_none() && fixture.is_none() && !launch {
         return Err(CliError::MissingSource);
     }
-    if profile.is_some() && (!launch || cdp.is_some()) {
-        return Err(CliError::UnknownFlag(
-            "--profile needs --launch (and no --cdp): it is the launched Chrome's profile".into(),
-        ));
-    }
+    let profile = crate::daemon::launch_profile(launch, cdp.is_some(), profile.as_deref())?;
     if url.is_some() && cdp.is_none() && !launch {
         return Err(CliError::UnknownFlag(
             "--url requires --cdp or --launch".into(),
@@ -368,7 +364,7 @@ fn set<T>(slot: &mut Option<T>, flag: &'static str, value: T) -> Result<(), CliE
 pub(crate) fn run_command(args: &[String]) -> Result<String, CliError> {
     let mut args = parse(args)?;
     // Declared before the session, so the run's tab closes before Chrome is killed.
-    let _chrome = match args.launch && args.cdp.is_none() {
+    let _chrome = match args.launch {
         true => Some(crate::doctor_cmd::launch_chrome(
             args.headed,
             args.profile.as_deref().map(std::path::Path::new),
@@ -1111,6 +1107,21 @@ mod tests {
         ]))
         .is_err());
         assert!(parse(&a(&["--goal", "Go", "--fixture", "x", "--profile", "/p"])).is_err());
+        let everyday = ultra_instinct_browser::launch::default_user_data_dirs();
+        let mut refused = vec![
+            (vec!["--launch", "--cdp", "http://x"], "pick one"),
+            (vec!["--launch", "--profile", " "], "needs a folder"),
+        ];
+        let dir = everyday.first().map(|dir| dir.display().to_string());
+        if let Some(dir) = &dir {
+            refused.push((vec!["--launch", "--profile", dir], "separate folder"));
+        }
+        for (args, says) in refused {
+            let Err(err) = parse(&a(&[&["--goal", "Go"], &args[..]].concat())) else {
+                panic!("{args:?} parsed");
+            };
+            assert!(err.to_string().contains(says), "{args:?}: {err}");
+        }
         assert!(parse(&a(&["--goal", "Go", "--launch=1"])).is_err());
     }
 

@@ -220,8 +220,12 @@ Every verb takes `--session <name>` (letters, digits, `-`; default
 its browser: `aui open --launch [--headed] [--profile <dir>]` makes the
 daemon start its own Chrome (headless at 1440×900 unless `--headed`, which
 opens maximized), which ends when the daemon does; `--profile <dir>` runs it
-on that profile folder and keeps it, so a login there lasts. Or start Chrome
-first (step 2) and pass `--cdp http://127.0.0.1:<port>`. With neither, the
+on that profile folder and keeps it, so a login there lasts (`aui close`
+lets that Chrome quit cleanly, up to 5 s). Use a folder of its own: your
+browser's everyday profile folder, an empty value, or a profile another
+Chrome has open is refused. Or start Chrome first (step 2) and pass
+`--cdp http://127.0.0.1:<port>`; `--launch` with `--cdp` refuses (pick
+one). With neither, the
 verb refuses ("no browser named") rather than try port 9222, which could be
 the user's own Chrome. `open` also takes `--allow-domain`, `--confirm-press` and `--idle
 <secs>` (the daemon, and its Chrome, end after that long without a verb: 1 s
