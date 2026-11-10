@@ -121,7 +121,8 @@ aui run --goal "buy the blue mug" --cdp --url https://shop.example/ \
   `*.shop.example` is any subdomain of it. Input only starts on an allowed
   host (`domain-not-allowed`), and `--url` itself must match. A form that
   would be sent to another host is refused too; a link to one is checked
-  at the next step there.
+  at the next step there. Pages that are not `http` / `https` (`data:`,
+  `javascript:`, `file:`) refuse; `about:blank` passes.
 - `--confirm-press <glob>` (repeatable, `*` wildcard, case-insensitive): a
   press of a matching label ends the run `blocked` with
   `rerun with --confirm "<label>"`. Ask the user. Only when they say yes,

@@ -139,7 +139,8 @@ Every tool and verb: [`docs/tools.md`](docs/tools.md). Run flags:
   refuses instead of pressing the wrong element.
 - **Domain allow-list.** `--allow-domain shop.example` (or `*.shop.example`)
   allows input only on those hosts, checks navigation URLs first, and
-  refuses a press that would submit a form to another host.
+  refuses a press that would submit a form to another host. `data:`,
+  `javascript:`, `file:` and other non-web pages refuse too.
 - **Confirm before press.** `--confirm-press "Pay*"` blocks a matching press
   until the user's `--confirm "<label>"` (or a tool call's `confirm`, that
   call only). Enter / Space on a button and Enter in a form that submits

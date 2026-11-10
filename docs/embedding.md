@@ -361,7 +361,8 @@ the page first and, before any `Input.*` call:
 - checks the page's host exactly as a press does: off the allow-list is
   `domain_not_allowed {host}`, an unreadable URL while the list is set
   fails closed (`ticket_invalid`, `domain-not-allowed`, as for a press), a
-  URL with no host (`about:blank`, `data:`) passes;
+  URL that is not `http` / `https` refuses too (`data:`, `javascript:`,
+  `file:`), except `about:blank` and a `blob:` whose origin is listed;
 - runs the key on the focused control through the guard's press rule
   (below), as a ticketed KEY on that control would be. With confirm
   patterns set, an Enter / Space to a focus no observation names (no

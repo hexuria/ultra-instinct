@@ -180,15 +180,24 @@ impl Policy {
         self
     }
 
-    /// May the browser go to (or give input on) `url`?
+    /// May the browser go to (or give input on) `url`? With an allow-list
+    /// set, only an `http` / `https` URL on a listed host passes, plus
+    /// `about:blank` (an empty page) and a `blob:` URL whose origin passes;
+    /// `data:`, `javascript:`, `file:` and every other scheme refuse.
     pub fn check_url(&self, url: &str) -> Result<(), GuardReason> {
         if self.allow_domains.is_empty() {
             return Ok(());
         }
-        match host_of(url) {
-            None => Ok(()),
-            Some(host) if self.allow_domains.iter().any(|p| p.matches(&host)) => Ok(()),
-            Some(_) => Err(GuardReason::DomainNotAllowed),
+        let url = url.trim();
+        let scheme = scheme_of(url).map(str::to_ascii_lowercase);
+        match scheme.as_deref() {
+            Some("http" | "https") => match host_of(url) {
+                Some(host) if self.allow_domains.iter().any(|p| p.matches(&host)) => Ok(()),
+                _ => Err(GuardReason::DomainNotAllowed),
+            },
+            Some("blob") => self.check_url(&url["blob:".len()..]),
+            Some("about") if url.eq_ignore_ascii_case("about:blank") => Ok(()),
+            _ => Err(GuardReason::DomainNotAllowed),
         }
     }
 
@@ -408,11 +417,25 @@ fn is_press(action: Action) -> bool {
     matches!(action, Action::Click | Action::Toggle | Action::Point)
 }
 
+/// The scheme of `url` (`https` in `https://…`, `data` in `data:…`), when
+/// it starts with one: a letter, then letters, digits, `+ - .`, then `:`.
+fn scheme_of(url: &str) -> Option<&str> {
+    let (scheme, _) = url.split_once(':')?;
+    let mut chars = scheme.chars();
+    let first = chars.next()?;
+    (first.is_ascii_alphabetic() && chars.all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c)))
+        .then_some(scheme)
+}
+
 /// The lowercase host of `url`, `None` when it has none (`about:blank`,
-/// `file:///…`, `data:…`, a bare path). The authority ends at `/ ? # \`
-/// (browsers read `\` as `/`); userinfo and port are dropped.
+/// `file:///…`, `data:…`, a bare path). Only a real scheme followed by
+/// `://` starts an authority, so a URL inside another (`data:…,https://h/`)
+/// names no host. The authority ends at `/ ? # \` (browsers read `\` as
+/// `/`); userinfo and port are dropped.
 pub fn host_of(url: &str) -> Option<String> {
-    let (_, rest) = url.trim().split_once("://")?;
+    let url = url.trim();
+    let scheme = scheme_of(url)?;
+    let rest = url[scheme.len() + 1..].strip_prefix("//")?;
     let end = rest.find(['/', '?', '#', '\\']).unwrap_or(rest.len());
     let authority = &rest[..end];
     let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
@@ -535,9 +558,27 @@ mod tests {
         assert_eq!(p.check_url("https://shop.example.evil.test/"), refused);
         assert_eq!(p.check_url("https://shop.example@evil.test/"), refused);
         assert_eq!(p.check_url("https://evil.test\\@shop.example/"), refused);
-        // No host: allowed.
+        // An empty page passes; a blob: is its origin's.
         assert_eq!(p.check_url("about:blank"), Ok(()));
-        assert_eq!(p.check_url("file:///tmp/page.html"), Ok(()));
+        assert_eq!(p.check_url("blob:https://shop.example/5f1c"), Ok(()));
+        assert_eq!(p.check_url("blob:https://evil.test/5f1c"), refused);
+        // Any other scheme, or a listed host inside another URL, refuses.
+        for url in [
+            "file:///tmp/page.html",
+            "data:text/html,https://shop.example/",
+            "data:text/html,<form action=https://evil.test>",
+            "javascript:location='https://shop.example/'",
+            "about:srcdoc",
+            "chrome://settings",
+            "view-source:https://shop.example/",
+            "ftp://shop.example/",
+            "//shop.example/",
+            "shop.example",
+            "",
+        ] {
+            assert_eq!(p.check_url(url), refused, "{url}");
+        }
+        assert_eq!(host_of("data:text/html,https://shop.example/"), None);
     }
 
     #[test]
