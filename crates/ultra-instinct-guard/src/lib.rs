@@ -44,8 +44,8 @@ pub use gate::{
     gate_point,
 };
 pub use policy::{
-    consume_ticket_once_checked, host_of, is_activating_key, refused_place, HostPattern, LabelGlob,
-    Policy, PolicyError, Refusal, FORM_SUBMIT_UNKNOWN, UNOBSERVED_FOCUS,
+    consume_ticket_once_checked, host_of, is_activating_key, refused_host, refused_place,
+    HostPattern, LabelGlob, Policy, PolicyError, Refusal, FORM_SUBMIT_UNKNOWN, UNOBSERVED_FOCUS,
 };
 #[allow(deprecated)]
 pub use ticket::consume_ticket;
