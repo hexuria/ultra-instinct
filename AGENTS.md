@@ -8,7 +8,8 @@ named `hgra` or `resonance` is a bug.
 
 **Product:** Ultra-Instinct is a **Rust-native browser-agent runtime**.
 The library `Agent` **owns the loop**: it observes the page, builds a finite
-`ActionSpace`, lets a policy choose (Instinct first, optional explicit escalation),
+`ActionSpace`, lets a policy choose (Instinct by default; a remote decider —
+JEV, Clef, or the `TEXT_MODEL_*` model — only when chosen with `--decision`),
 hard-gates the choice, executes only through a one-shot `ActionTicket`, then
 re-observes, diffs, and verifies.
 
@@ -183,7 +184,9 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    `--decision model` (feature `model-text`, `decide.rs`) sends the same
 >    request to the `TEXT_MODEL_*` model with the viewport JPEG and page
 >    text; a reply that is not an offered id + kind is asked once more with
->    the reason, and the second reply goes to `parse_reply` unchanged.
+>    the reason, and the second reply goes to `parse_reply` unchanged (both
+>    share `reply_shape`). Its DONE is checked by a second question (goal
+>    met?); a refused DONE is asked again without it, a second one abstains.
 > 9. **No matcher.** HGRA and the weighted matcher are removed.
 >    Do not reintroduce label ranking on the agent path or in `guard`.
 > 10. **One blocking CDP socket per agent.** Parallelism means separate agents

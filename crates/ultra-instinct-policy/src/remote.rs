@@ -340,40 +340,62 @@ fn label_without_goal_echo<'a>(label: &'a str, goal: &str) -> &'a str {
     }
 }
 
-/// Parse and validate a reply against the offered space.
-pub fn parse_reply(space: &ActionSpace, reply: &str) -> Result<PolicyOutcome, PolicyError> {
-    let bad = |m: &str| PolicyError::Internal(format!("remote reply: {m}"));
-    let value: Value = serde_json::from_str(reply).map_err(|e| bad(&e.to_string()))?;
-    let obj = value.as_object().ok_or_else(|| bad("not an object"))?;
+/// A reply in the closed shape, before its id is checked against a menu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReplyShape {
+    Abstain(String),
+    Choice { id: String, kind: String },
+}
+
+/// The closed reply shape: exactly one of `{"abstain": "<why>"}` or
+/// `{"choice": {"id", "kind"}}`, nothing else. [`parse_reply`] and any
+/// transport that checks a reply before handing it on share this.
+pub fn reply_shape(reply: &str) -> Result<ReplyShape, String> {
+    let value: Value = serde_json::from_str(reply).map_err(|e| e.to_string())?;
+    let obj = value.as_object().ok_or("not an object")?;
     if obj.len() != 1 {
-        return Err(bad("expected exactly one of `choice` or `abstain`"));
+        return Err("expected exactly one of `choice` or `abstain`".into());
     }
     if let Some(reason) = obj.get("abstain") {
-        let reason = reason
-            .as_str()
-            .ok_or_else(|| bad("abstain must be a string"))?;
-        return Ok(PolicyOutcome::Abstain {
-            reason: format!("remote: {reason}"),
-            operation_ranked: Vec::new(),
-            target_ranked: Vec::new(),
-        });
+        let reason = reason.as_str().ok_or("abstain must be a string")?;
+        return Ok(ReplyShape::Abstain(reason.to_owned()));
     }
     let choice = obj
         .get("choice")
         .and_then(Value::as_object)
-        .ok_or_else(|| bad("expected `choice` object"))?;
+        .ok_or("expected `choice` object")?;
     if choice.keys().any(|k| k != "id" && k != "kind") {
-        return Err(bad("choice may only carry `id` and `kind`"));
+        return Err("choice may only carry `id` and `kind`".into());
     }
     let id = choice
         .get("id")
         .and_then(Value::as_str)
-        .ok_or_else(|| bad("choice.id missing"))?;
+        .ok_or("choice.id missing")?;
     let kind = choice
         .get("kind")
         .and_then(Value::as_str)
-        .and_then(ActionKind::parse)
-        .ok_or_else(|| bad("choice.kind missing or unknown"))?;
+        .ok_or("choice.kind missing")?;
+    Ok(ReplyShape::Choice {
+        id: id.to_owned(),
+        kind: kind.to_owned(),
+    })
+}
+
+/// Parse and validate a reply against the offered space.
+pub fn parse_reply(space: &ActionSpace, reply: &str) -> Result<PolicyOutcome, PolicyError> {
+    let bad = |m: &str| PolicyError::Internal(format!("remote reply: {m}"));
+    let (id, kind) = match reply_shape(reply).map_err(|m| bad(&m))? {
+        ReplyShape::Abstain(reason) => {
+            return Ok(PolicyOutcome::Abstain {
+                reason: format!("remote: {reason}"),
+                operation_ranked: Vec::new(),
+                target_ranked: Vec::new(),
+            })
+        }
+        ReplyShape::Choice { id, kind } => (id, kind),
+    };
+    let id = id.as_str();
+    let kind = ActionKind::parse(&kind).ok_or_else(|| bad("choice.kind missing or unknown"))?;
     let offered = space
         .get_str(id)
         .ok_or_else(|| bad(&format!("off-menu id `{id}`")))?;

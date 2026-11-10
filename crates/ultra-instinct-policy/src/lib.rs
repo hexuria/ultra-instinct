@@ -34,8 +34,8 @@ pub use model_text::{
 pub type PuaPolicy = InstinctPolicy;
 #[cfg(feature = "remote")]
 pub use remote::{
-    parse_reply, request_json, request_json_with_evidence, request_json_with_page, RemotePolicy,
-    RemoteTransport, ScriptedRemote, UnconfiguredRemote,
+    parse_reply, reply_shape, request_json, request_json_with_evidence, request_json_with_page,
+    RemotePolicy, RemoteTransport, ReplyShape, ScriptedRemote, UnconfiguredRemote,
 };
 pub use text::{
     form_value, ground_select, is_secret_field, DeterministicTextResolver, TextContext, TextError,

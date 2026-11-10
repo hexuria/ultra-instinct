@@ -135,6 +135,16 @@ impl TextApi {
     }
 }
 
+/// OpenAI's reasoning models (`gpt-5*`, `o1` / `o3` / `o4*`, with or without a
+/// `vendor/` prefix): they take `max_completion_tokens` and `reasoning_effort`.
+fn openai_reasoning_model(model: &str) -> bool {
+    let name = model.rsplit('/').next().unwrap_or(model);
+    name.starts_with("gpt-5")
+        || ["o1", "o3", "o4"]
+            .iter()
+            .any(|o| name == *o || name.starts_with(&format!("{o}-")))
+}
+
 /// A failed [`HttpTextModel::chat_json_image`] call; `status` is the HTTP
 /// status when the endpoint answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,7 +223,13 @@ impl HttpTextModel {
             .to_owned();
         let (url, reasoning) = match api {
             TextApi::OpenAi => {
-                let reasoning = if reasoning_off {
+                let reasoning = if openai_reasoning_model(&model) {
+                    // OpenAI's own reasoning models take `reasoning_effort`.
+                    match reasoning_off {
+                        true => json!({}),
+                        false => json!({"reasoning_effort": "low"}),
+                    }
+                } else if reasoning_off {
                     json!({"reasoning": {"enabled": false}})
                 } else if host_of(&base) == Some("api.deepseek.com") {
                     json!({"thinking": {"type": "disabled"}})
@@ -259,6 +275,17 @@ impl HttpTextModel {
         })
     }
 
+    /// OpenAI's reasoning models reject `max_tokens`; their reasoning also
+    /// counts against the cap, so they get room.
+    fn openai_token_cap(&self, body: &mut Value) {
+        if openai_reasoning_model(&self.model) {
+            if let Some(map) = body.as_object_mut() {
+                map.remove("max_tokens");
+                map.insert("max_completion_tokens".into(), json!(4096));
+            }
+        }
+    }
+
     /// The wire shape this model speaks.
     pub fn api(&self) -> TextApi {
         self.api
@@ -277,6 +304,7 @@ impl HttpTextModel {
                     ],
                 });
                 merge(&mut body, &self.reasoning);
+                self.openai_token_cap(&mut body);
                 body
             }
             TextApi::Anthropic => {
@@ -360,9 +388,16 @@ impl HttpTextModel {
         let response = result.map_err(|err| failure(None, format!("text model http: {err}")))?;
         let status = response.status();
         if !status.is_success() {
+            // The endpoint's own reason, cut short; keys ride headers, never bodies.
+            let detail: String = response
+                .text()
+                .unwrap_or_default()
+                .chars()
+                .take(300)
+                .collect();
             return Err(failure(
                 Some(status.as_u16()),
-                format!("text model http: status {status}"),
+                format!("text model http: status {status}: {}", detail.trim()),
             ));
         }
         let response: Value = response
@@ -400,6 +435,8 @@ impl HttpTextModel {
             reasoning["reasoning"]["effort"] = json!(effort);
         } else if reasoning.get("effort").is_some() {
             reasoning["effort"] = json!(effort);
+        } else if reasoning.get("reasoning_effort").is_some() {
+            reasoning["reasoning_effort"] = json!(effort);
         }
         match self.api {
             TextApi::OpenAi => {
@@ -421,6 +458,7 @@ impl HttpTextModel {
                     ],
                 });
                 merge(&mut body, &reasoning);
+                self.openai_token_cap(&mut body);
                 body
             }
             TextApi::Anthropic => {
@@ -637,6 +675,38 @@ mod tests {
             body("https://api.deepseek.com/v1", true)["reasoning"],
             json!({"enabled": false})
         );
+    }
+
+    /// OpenAI reasoning models (bare or `vendor/`-prefixed) get
+    /// `max_completion_tokens` and `reasoning_effort`; others keep jev's shape.
+    #[test]
+    fn openai_reasoning_models_get_their_own_parameters() {
+        for name in ["openai/gpt-5-nano", "gpt-5", "o3-mini", "o4"] {
+            let model = HttpTextModel::new(
+                TextApi::OpenAi,
+                Some("https://gw.example/v1"),
+                Some(name),
+                "k".into(),
+                false,
+            )
+            .expect("model");
+            let body = model.chat_body("s", "u", "medium", None);
+            assert_eq!(body["max_completion_tokens"], 4096, "{name}");
+            assert!(body.get("max_tokens").is_none(), "{name}");
+            assert_eq!(body["reasoning_effort"], "medium", "{name}");
+            assert!(body.get("reasoning").is_none(), "{name}");
+        }
+        let other = HttpTextModel::new(
+            TextApi::OpenAi,
+            Some("https://gw.example/v1"),
+            Some("openai/gpt-4.1"),
+            "k".into(),
+            false,
+        )
+        .expect("model")
+        .chat_body("s", "u", "medium", None);
+        assert_eq!(other["max_tokens"], 1024);
+        assert_eq!(other["reasoning"], json!({"effort": "medium"}));
     }
 
     /// A JPEG rides beside the user turn in each API's own image shape.

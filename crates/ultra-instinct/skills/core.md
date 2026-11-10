@@ -79,15 +79,18 @@ aui run --goal "<the user's words, unchanged>" --cdp
 `--decision` picks who chooses each step (`--policy` is an alias):
 
 - `TYPESAFE_API_KEY` set → no flag needed; `jev` is the default.
-- `TEXT_MODEL_API_KEY` set → `--decision model`: that model (any
-  OpenAI-compatible, Anthropic, or Gemini endpoint, for example a gateway via
-  `TEXT_MODEL_BASE_URL`, `TEXT_MODEL_API`, `TEXT_MODEL`) chooses every step
-  from the offered actions, with the screenshot and page text.
 - `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN` set → `--decision clef-flash`.
 - None → `--decision instinct` (fully offline, deterministic, abstains
   rather than guessing).
-- Optional `--text-model-cmd <program>` makes a model write TYPE_TEXT/SELECT
-  payloads only; the choice of action is never model-written.
+- `--decision model` only when the user asks for their own model to choose
+  the steps: the `TEXT_MODEL_*` model (any OpenAI-compatible, Anthropic, or
+  Gemini endpoint, for example a gateway via `TEXT_MODEL_BASE_URL`,
+  `TEXT_MODEL_API`, `TEXT_MODEL`) then picks every step from the offered
+  actions, with the screenshot and page text. A `TEXT_MODEL_API_KEY` alone
+  is not that request: it also serves typed values.
+- `TEXT_MODEL_*` or `--text-model-cmd <program>` otherwise writes
+  TYPE_TEXT / SELECT payloads only; with any decision but `model`, the
+  choice of action is never written by that model.
 
 ## 4. Report back
 

@@ -183,7 +183,13 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
                 value("--text-model-cmd")?,
             )?,
             "--decision" | "--policy" => {
-                let raw = value("--decision")?;
+                // Errors name the flag the user typed.
+                let flag = if name == "--policy" {
+                    "--policy"
+                } else {
+                    "--decision"
+                };
+                let raw = value(flag)?;
                 let kind = match raw.as_str() {
                     "instinct" | "pua" => PolicyKind::Instinct,
                     "jev" => PolicyKind::Jev,
@@ -197,7 +203,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
                         )))
                     }
                 };
-                set(&mut policy, "--decision", kind)?;
+                set(&mut policy, flag, kind)?;
             }
             "--lessons" => set(&mut lessons, "--lessons", value("--lessons")?)?,
             "--load-state" => set(&mut load_state, "--load-state", value("--load-state")?)?,
@@ -1130,6 +1136,8 @@ mod tests {
             "jev",
         ];
         assert!(parse(&a(&both)).is_err());
+        let bare = parse(&a(&["--goal", "Go", "--fixture", "x", "--policy"])).err();
+        assert!(matches!(bare, Some(CliError::MissingValue("--policy"))));
     }
 
     /// Without a text model configured, `--decision model` says what to set.
