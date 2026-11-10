@@ -218,6 +218,59 @@ fn get_state_text_carries_control_state_and_never_a_password() {
     assert!(!text.contains("hunter2"), "{text}");
 }
 
+/// A label with zero-width characters reads plain, and the selected tab
+/// says `selected` (text) / `current: true` (json values).
+#[test]
+fn get_state_drops_zero_width_characters_and_marks_the_selected_tab() {
+    let tab = |node, backend, label, x| Control {
+        tag: "DIV",
+        role: "tab",
+        ..Control::button(node, backend, label, (x, 20.0, 80.0, 28.0))
+    };
+    let mut page = PageSpec::of(
+        &[
+            tab(10, 100, "Inbox", 20.0),
+            tab(11, 101, "Sent", 110.0),
+            Control::link(
+                12,
+                102,
+                "S\u{34F}p\u{34F}o\u{AD}n\u{200B}sored",
+                (20.0, 80.0, 120.0, 28.0),
+            ),
+        ],
+        "https://feed.example/",
+        "Feed",
+    );
+    page.dom[0] = page.dom[0].clone().with_compact_state(json!({"cu": true}));
+    page.dom[1] = page.dom[1].clone().with_compact_state(json!({"cu": false}));
+    let script = ScriptBuilder::new()
+        .observe_compact(&page)
+        .observe_compact(&page);
+    let (mut server, _log) = server(script);
+    let out = call(&mut server, "browser_get_state", json!({"cdp": CDP}));
+    let text = out["text"].as_str().expect("text");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        lines[1..4],
+        [
+            "@e1 tab \"Inbox\"  selected",
+            "@e2 tab \"Sent\"",
+            "@e3 link \"Sponsored\"",
+        ],
+        "{text}"
+    );
+    let out = call(
+        &mut server,
+        "browser_get_state",
+        json!({"cdp": CDP, "format": "json", "values": true}),
+    );
+    let elements = &out["elements"];
+    assert_eq!(elements[0]["current"], true, "{out}");
+    assert_eq!(elements[1]["current"], false, "{out}");
+    assert!(elements[2].get("current").is_none(), "{out}");
+    assert_eq!(elements[2]["label"], "Sponsored", "{out}");
+}
+
 /// `values: true`: a select's value is its selected option, and a value
 /// past the state / text limit is cut and marked.
 #[test]

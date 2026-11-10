@@ -169,7 +169,8 @@ Sign up  https://shop.example/join
   `download`) prints the page after it, like `aui snap`, and the next refs
   come from that look: one call instead of two.
 - State after the label: `value="…"`, `checked` / `unchecked`, `expanded` /
-  `collapsed`, `selected="…"`. Password fields never show a value.
+  `collapsed`, `selected` (the selected tab or current item), `selected="…"`
+  (a select's option). Password fields never show a value.
 - `aui snap --json` gives the `elements[]` JSON instead.
 
 Verbs:

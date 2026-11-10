@@ -458,7 +458,12 @@ fn add_values(element: &mut Value, region: &InteractionRegion, max: usize) {
         }
         element["value"] = json!(cut);
     }
-    for (key, on) in [("checked", state.checked), ("expanded", state.expanded)] {
+    let flags = [
+        ("checked", state.checked),
+        ("expanded", state.expanded),
+        ("current", state.current),
+    ];
+    for (key, on) in flags {
         if let Some(on) = on {
             element[key] = json!(on);
         }
@@ -1610,9 +1615,9 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             );
             props.insert(
                 "values".into(),
-                json!({"type": "boolean", "description": "json only: each element also carries the state observe read (`value`, a select's selected option as `value`, `checked`, `expanded`); never for a `sensitive` element; masked like every output; a value cut at the state / text limit has `value_truncated`. Default false."}),
+                json!({"type": "boolean", "description": "json only: each element also carries the state observe read (`value`, a select's selected option as `value`, `checked`, `expanded`, `current`); never for a `sensitive` element; masked like every output; a value cut at the state / text limit has `value_truncated`. Default false."}),
             );
-            "Page title, url, and interactive elements as 1-based indexes in reading order (@e1, @e2, …) — the refs browser_click/browser_type take. Default format text: one short line per control with its value / checked / expanded / selected state; format json returns elements[]."
+            "Page title, url, and interactive elements as 1-based indexes in reading order (@e1, @e2, …) — the refs browser_click/browser_type take. Default format text: one short line per control with its value / checked / expanded / selected state (a selected tab: `selected`); format json returns elements[]."
         }
         "browser_get_html" => "document.documentElement.outerHTML of the current tab.",
         "browser_get_page_text" => "Visible text of the current tab (alias of browser_get_text).",

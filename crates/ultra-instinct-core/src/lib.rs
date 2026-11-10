@@ -131,6 +131,8 @@ mod tests {
         let fingerprint = region.fingerprint();
         let state = ElementState {
             value: Some("Ana".to_owned()),
+            expanded: Some(true),
+            current: Some(true),
             ..ElementState::default()
         };
 

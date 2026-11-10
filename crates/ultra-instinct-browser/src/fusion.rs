@@ -41,6 +41,7 @@ use ultra_instinct_core::{
 };
 use ultra_instinct_geometry::is_fully_offscreen;
 
+use crate::compact::drop_invisible;
 use crate::error::BrowserError;
 use crate::extract::{AxElement, DomElement};
 
@@ -407,7 +408,8 @@ fn labels_compatible(left: &str, right: &str) -> bool {
     if left.is_empty() || right.is_empty() {
         return true;
     }
-    token_jaccard(left, right) >= MIN_LABEL_JACCARD
+    let (left, right) = (drop_invisible(left), drop_invisible(right));
+    token_jaccard(&left, &right) >= MIN_LABEL_JACCARD
 }
 
 fn roles_compatible(left: Role, right: Role) -> bool {
@@ -504,7 +506,7 @@ fn to_region(
     InteractionRegion::try_new(RegionParts {
         id: id.clone(),
         role: node.role,
-        label: node.label.clone(),
+        label: drop_invisible(&node.label).into_owned(),
         rect: node.rect,
         actions: node.actions.clone(),
         parent,
@@ -600,6 +602,20 @@ mod tests {
         );
         assert!(separate.get_str("n100").is_some());
         assert!(separate.get_str("ax101").is_some());
+    }
+
+    #[test]
+    fn an_invisible_character_in_a_label_still_merges() {
+        let (merged, _) = fuse(
+            viewport(),
+            &[dom("Spon\u{034F}sored", Role::Link, 400.0)],
+            &[with_backend(ax("Sponsored", Role::Link, 401.0), 101)],
+        )
+        .unwrap();
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged.get_str("n100").unwrap().label(), "Sponsored");
+        let (alone, _) = fuse(viewport(), &[dom("S\u{34F}p", Role::Link, 1.0)], &[]).unwrap();
+        assert_eq!(alone.get_str("n100").unwrap().label(), "Sp");
     }
 
     #[test]

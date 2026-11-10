@@ -153,8 +153,10 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    text; unrendered text names nothing, and neither does a text area's
 >    own text (its value). Observe
 >    also records control state (value, checked,
->    expanded, select options) as evidence only: it is not in the region
->    fingerprint, and password values are never read. A label (`for`,
+>    expanded, current (aria-selected / aria-current), select options) as
+>    evidence only: it is not in the region fingerprint, and password values
+>    are never read. Labels drop zero-width characters (U+200B-D, U+2060,
+>    U+FEFF, U+034F, U+00AD; `compact::INVISIBLE`) on both trees. A label (`for`,
 >    wrapping, or `aria-labelledby` text) folds into the one offered control
 >    it names, in fusion, with compact hit evidence; a zero-size, transparent,
 >    or covered checkbox / radio folds the other way, onto its label's box.

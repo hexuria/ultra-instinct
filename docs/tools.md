@@ -39,7 +39,7 @@ These never click. They are for hosts that keep their own executor.
 
 | Tool | Does | Key arguments |
 |---|---|---|
-| `browser_get_state` | Title, URL and one line per control (`@eN role "label"  state`), and the `snapshot` id | `format` (`text` default, `json` for `elements[]` with `input_type` / `sensitive`), `values` (json: adds `value` / `checked` / `expanded`, never on a sensitive element), `max_chars` |
+| `browser_get_state` | Title, URL and one line per control (`@eN role "label"  state`), and the `snapshot` id | `format` (`text` default, `json` for `elements[]` with `input_type` / `sensitive`), `values` (json: adds `value` / `checked` / `expanded` / `current`, never on a sensitive element), `max_chars` |
 | `browser_find` | Interactive elements whose label and / or role match, with their indexes | `text`, `role` |
 | `browser_count` | How many interactive elements match an exact label and / or role, and their indexes | `label`, `role` |
 | `browser_get` | One fact about an element: `value` (never a password's), `attr`, `box`, `label`, `role` | `index`, `what`, `name` (for `attr`) |

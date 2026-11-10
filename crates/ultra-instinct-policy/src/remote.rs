@@ -548,6 +548,7 @@ mod tests {
                 value: Some("Ana".to_owned()),
                 checked: Some(false),
                 expanded: Some(true),
+                current: None,
                 selected: Some("UTC".to_owned()),
                 options: vec!["UTC".to_owned()],
                 input_type: None,

@@ -77,6 +77,9 @@ pub(crate) fn control_line(index: usize, region: &InteractionRegion) -> String {
         Some(false) => line.push_str("  collapsed"),
         None => {}
     }
+    if state.current == Some(true) {
+        line.push_str("  selected");
+    }
     if let Some(selected) = state.selected.as_deref() {
         line.push_str(&format!("  selected={}", quoted(selected)));
     }
