@@ -214,6 +214,8 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    websocket of the user's own Chrome (pages as flat sessions on it, no
 >    reader thread); the daemon works in a tab it opens and, on close or
 >    idle exit, closes only the tabs it opened, never the user's Chrome.
+>    `Server::with_attach` never serves `ATTACH_DENIED` (cookies, state,
+>    storage, download: profile-wide).
 >
 > Any change to observable semantics on this path names the boundary it
 > affects (gate, ticket, executor, world, policy, text) and the test that owns

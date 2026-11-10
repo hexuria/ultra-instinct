@@ -263,7 +263,9 @@ When the user wants their own logged-in Chrome driven (not a fresh one):
 4. `aui close` closes only that tab and leaves their Chrome running.
 
 `--attach` does not mix with `--launch`, `--cdp`, `--profile` or
-`--headed`, and `aui run` does not take it.
+`--headed`, and `aui run` does not take it. On the user's own Chrome,
+`cookies`, `state save|load`, `storage` and `download` refuse
+(`tool_not_allowed`): they reach every site in the profile.
 
 `aui run --goal` is the one-command path for a run nobody checks step by
 step; after it ends `abstained`, carry on here with the verbs.

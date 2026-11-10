@@ -384,10 +384,13 @@ impl Server {
     /// `attach:<targetId>`. An unbound first call binds the first page tab,
     /// which is the user's: open one with `browser_new_tab` first (the `aui`
     /// daemon does). Dropping the server closes the tabs it opened, never
-    /// the user's tabs or their Chrome.
+    /// the user's tabs or their Chrome. It never serves
+    /// [`crate::ATTACH_DENIED`] (cookies, state, storage, download: they
+    /// reach the whole profile); those answer `tool_not_allowed`.
     #[cfg(unix)]
     pub fn with_attach(browser: ultra_instinct_cdp::CdpBrowser) -> Self {
         Self::with_backend(ultra_instinct_cdp::SessionBackend::attached(browser))
+            .with_tool_allowlist(crate::attach_tools())
     }
 
     /// One inbound JSON-RPC line. `None` means the client must not be answered.
