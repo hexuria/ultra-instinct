@@ -150,7 +150,7 @@ the full guide.
 
 | Verb | Tool | Does |
 |---|---|---|
-| `open <url> [--launch [--headed]] [--idle <secs>] [--allow-domain <host>]... [--confirm-press <glob>]...` | `browser_navigate` | Start the daemon (and with `--launch` its own Chrome: headless at 1440×900, or maximized with `--headed`), then navigate. Session flags are fixed when the daemon starts; `--idle` is 1 to 86400 s, default 3600 |
+| `open <url> [--launch [--headed] [--profile <dir>]] [--idle <secs>] [--allow-domain <host>]... [--confirm-press <glob>]...` | `browser_navigate` | Start the daemon (and with `--launch` its own Chrome: headless at 1440×900, or maximized with `--headed`; `--profile <dir>` keeps that profile on disk, asks Chrome to quit up to 5 s before killing it at close, and refuses an empty value, a browser's everyday profile folder, or a profile a running Chrome holds), then navigate. A new session needs `--launch` or `--cdp <url>`, not both; with neither, the verb refuses instead of trying port 9222. Session flags are fixed when the daemon starts; `--idle` is 1 to 86400 s, default 3600 |
 | `snap [--json]` | `browser_get_state` | Read the page |
 | `click <ref> [--confirm <label>] [--script]` | `browser_click` | Ticketed click: a pointer press; `--script` for a DOM script click |
 | `type <ref> <text>` | `browser_type` | Set a field's text |

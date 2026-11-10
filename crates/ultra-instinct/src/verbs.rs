@@ -19,7 +19,7 @@ pub const VERBS: [&str; 27] = [
 ];
 
 /// Flags that take a value (`--flag v` or `--flag=v`).
-const VALUE_FLAGS: [&str; 21] = [
+const VALUE_FLAGS: [&str; 22] = [
     "--session",
     "--cdp",
     "--max-output",
@@ -41,6 +41,7 @@ const VALUE_FLAGS: [&str; 21] = [
     "--same-site",
     "--timeout-ms",
     "--idle",
+    "--profile",
 ];
 
 /// Flags that take no value.
@@ -200,7 +201,7 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         .map(|raw| number::<usize>("--max-output", &raw))
         .transpose()?;
     let (mut allow_domains, mut confirm_press) = (Vec::new(), Vec::new());
-    let (mut launch, mut headed, mut idle_secs) = (false, false, None);
+    let (mut launch, mut headed, mut idle_secs, mut profile) = (false, false, None, None);
     if verb == "open" {
         allow_domains = flags.all("--allow-domain");
         confirm_press = flags.all("--confirm-press");
@@ -209,6 +210,8 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         if headed && !launch {
             return Err(CliError::Config("--headed needs --launch".into()));
         }
+        let dir = flags.one("--profile")?;
+        profile = crate::daemon::launch_profile(launch, cdp.is_some(), dir.as_deref())?;
         idle_secs = flags
             .one("--idle")?
             .map(|raw| crate::daemon::parse_idle(&raw))
@@ -252,6 +255,7 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         confirm_press,
         launch,
         headed,
+        profile,
         idle_secs,
     })
 }
@@ -277,7 +281,7 @@ fn build(verb: &'static str, flags: &mut Flags) -> Result<Request, CliError> {
     match verb {
         "open" => match p[..] {
             [url] => tool("browser_navigate", json!({"url": url})),
-            _ => usage("<url> [--launch [--headed]] [--idle <secs>] [--allow-domain <host>]... [--confirm-press <glob>]..."),
+            _ => usage("<url> [--launch [--headed] [--profile <dir>]] [--idle <secs>] [--allow-domain <host>]... [--confirm-press <glob>]..."),
         },
         "snap" => {
             let format = if flags.switch("--json") { "json" } else { "text" };
@@ -1479,6 +1483,37 @@ mod tests {
         assert_eq!(parse_verb("snap", &[]).unwrap().cdp, None);
         let launch = parse_verb("open", &a(&["https://a/", "--launch", "--headed"])).unwrap();
         assert!(launch.launch && launch.headed);
+        assert_eq!(launch.profile, None);
+        let kept = parse_verb(
+            "open",
+            &a(&["https://a/", "--launch", "--profile", "/p/shop"]),
+        )
+        .unwrap();
+        assert_eq!(kept.profile.as_deref(), Some("/p/shop"));
+        let relative =
+            parse_verb("open", &a(&["https://a/", "--launch", "--profile", "rel"])).unwrap();
+        let expect = std::env::current_dir().unwrap().join("rel");
+        assert_eq!(relative.profile.as_deref(), Some(expect.to_str().unwrap()));
+        let everyday = ultra_instinct_browser::launch::default_user_data_dirs();
+        let mut refused = vec![
+            (vec!["--profile", "/p"], "--profile needs --launch"),
+            (vec!["--launch", "--cdp", "http://x"], "pick one"),
+            (
+                vec!["--launch", "--cdp", "http://x", "--profile", "/p"],
+                "pick one",
+            ),
+            (vec!["--launch", "--profile", ""], "needs a folder"),
+            (vec!["--launch", "--profile", "  "], "needs a folder"),
+        ];
+        let dir = everyday.first().map(|dir| format!("{}/", dir.display()));
+        if let Some(dir) = &dir {
+            refused.push((vec!["--launch", "--profile", dir], "separate folder"));
+        }
+        for (args, says) in refused {
+            let err = parse_verb("open", &a(&[&["https://a/"], &args[..]].concat()));
+            let err = err.unwrap_err().to_string();
+            assert!(err.contains(says), "{args:?}: {err}");
+        }
         assert_eq!(launch.idle_secs, None);
         let idle = parse_verb("open", &a(&["https://a/", "--launch", "--idle", "90"])).unwrap();
         assert_eq!(idle.idle_secs, Some(90));

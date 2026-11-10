@@ -115,9 +115,11 @@ struct RunArgs {
     /// recorded instead of in the end-of-run transcript, so a run stopped
     /// from outside still leaves every step it took.
     live_steps: bool,
-    /// `--launch [--headed]`: start this run's own Chrome when `--cdp` is absent.
+    /// `--launch [--headed] [--profile <dir>]`: start this run's own Chrome
+    /// (not with `--cdp`); `--profile` is its user-data dir, kept on disk.
     launch: bool,
     headed: bool,
+    profile: Option<String>,
     /// `--allow-domain` / `--confirm-press` / `--confirm`.
     guard_policy: Policy,
 }
@@ -155,6 +157,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     let mut second_opinion = false;
     let mut live_steps = false;
     let (mut launch, mut headed) = (false, false);
+    let mut profile = None;
     let mut guard_policy = Policy::default();
     let mut i = 0;
     while i < args.len() {
@@ -176,6 +179,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
         match name {
             "--goal" => set(&mut goal, "--goal", value("--goal")?)?,
             "--url" => set(&mut url, "--url", value("--url")?)?,
+            "--profile" => set(&mut profile, "--profile", value("--profile")?)?,
             "--fixture" => set(&mut fixture, "--fixture", value("--fixture")?)?,
             "--text-model-cmd" => set(
                 &mut text_model_cmd,
@@ -279,6 +283,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     if cdp.is_none() && fixture.is_none() && !launch {
         return Err(CliError::MissingSource);
     }
+    let profile = crate::daemon::launch_profile(launch, cdp.is_some(), profile.as_deref())?;
     if url.is_some() && cdp.is_none() && !launch {
         return Err(CliError::UnknownFlag(
             "--url requires --cdp or --launch".into(),
@@ -338,6 +343,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
         live_steps,
         launch,
         headed,
+        profile,
         guard_policy,
     })
 }
@@ -370,8 +376,11 @@ fn set<T>(slot: &mut Option<T>, flag: &'static str, value: T) -> Result<(), CliE
 pub(crate) fn run_command(args: &[String]) -> Result<String, CliError> {
     let mut args = parse(args)?;
     // Declared before the session, so the run's tab closes before Chrome is killed.
-    let _chrome = match args.launch && args.cdp.is_none() {
-        true => Some(crate::doctor_cmd::launch_chrome(args.headed)?),
+    let _chrome = match args.launch {
+        true => Some(crate::doctor_cmd::launch_chrome(
+            args.headed,
+            args.profile.as_deref().map(std::path::Path::new),
+        )?),
         false => None,
     };
     if let Some(chrome) = &_chrome {
@@ -1098,6 +1107,33 @@ mod tests {
         assert!(p.launch && p.headed && p.cdp.is_none());
         assert!(parse(&a(&["--goal", "Go", "--cdp", "--headed"])).is_err());
         assert!(parse(&a(&["--goal", "Go", "--fixture", "x", "--launch"])).is_err());
+        let kept = parse(&a(&["--goal", "Go", "--launch", "--profile", "/p/shop"])).unwrap();
+        assert_eq!(kept.profile.as_deref(), Some("/p/shop"));
+        assert!(parse(&a(&[
+            "--goal",
+            "Go",
+            "--cdp",
+            "http://x",
+            "--profile",
+            "/p"
+        ]))
+        .is_err());
+        assert!(parse(&a(&["--goal", "Go", "--fixture", "x", "--profile", "/p"])).is_err());
+        let everyday = ultra_instinct_browser::launch::default_user_data_dirs();
+        let mut refused = vec![
+            (vec!["--launch", "--cdp", "http://x"], "pick one"),
+            (vec!["--launch", "--profile", " "], "needs a folder"),
+        ];
+        let dir = everyday.first().map(|dir| dir.display().to_string());
+        if let Some(dir) = &dir {
+            refused.push((vec!["--launch", "--profile", dir], "separate folder"));
+        }
+        for (args, says) in refused {
+            let Err(err) = parse(&a(&[&["--goal", "Go"], &args[..]].concat())) else {
+                panic!("{args:?} parsed");
+            };
+            assert!(err.to_string().contains(says), "{args:?}: {err}");
+        }
         assert!(parse(&a(&["--goal", "Go", "--launch=1"])).is_err());
     }
 

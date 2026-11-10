@@ -48,13 +48,9 @@ If nothing answers, the simplest fix is to let `aui` start its own Chrome:
 verbs. `aui doctor` says what is missing; `aui install` prints the Chrome for
 Testing install command. Or launch Chrome yourself:
 
-```bash
-google-chrome --remote-debugging-port=9222 &
-```
-
-Gotcha: if a Chrome is already running WITHOUT the debug port, a new
-`google-chrome` call hands off to the existing process and the port never
-opens. Either close that Chrome first, or launch a separate profile:
+Chrome 136 and later ignore `--remote-debugging-port` on the default
+profile, and a Chrome already running hands a new `google-chrome` call to
+the existing process, so the port never opens. Launch a separate profile:
 
 ```bash
 google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/aui-chrome &
@@ -220,10 +216,18 @@ session name in use; `aui session list` lists live sessions and removes stale
 sockets.
 
 Every verb takes `--session <name>` (letters, digits, `-`; default
-`default`) and `--cdp <url>` (default `http://127.0.0.1:9222`). `aui open
---launch [--headed]` makes the daemon start its own Chrome (headless at
-1440×900 unless `--headed`, which opens maximized), which ends when the daemon does; without it, start Chrome first
-(step 2). `open` also takes `--allow-domain`, `--confirm-press` and `--idle
+`default`) and `--cdp <url>`. A verb that starts a new session must name
+its browser: `aui open --launch [--headed] [--profile <dir>]` makes the
+daemon start its own Chrome (headless at 1440×900 unless `--headed`, which
+opens maximized), which ends when the daemon does; `--profile <dir>` runs it
+on that profile folder and keeps it, so a login there lasts (`aui close`
+lets that Chrome quit cleanly, up to 5 s). Use a folder of its own: your
+browser's everyday profile folder, an empty value, or a profile another
+Chrome has open is refused. Or start Chrome first (step 2) and pass
+`--cdp http://127.0.0.1:<port>`; `--launch` with `--cdp` refuses (pick
+one). With neither, the
+verb refuses ("no browser named") rather than try port 9222, which could be
+the user's own Chrome. `open` also takes `--allow-domain`, `--confirm-press` and `--idle
 <secs>` (the daemon, and its Chrome, end after that long without a verb: 1 s
 to 24 h, default 60 min); these and `--launch` are fixed when the daemon
 starts, so `aui close` before you change them.

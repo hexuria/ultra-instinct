@@ -42,6 +42,8 @@ pub enum LaunchError {
     /// Chrome exited before writing `DevToolsActivePort`.
     Exited(String),
     Timeout(Duration),
+    /// The profile's `SingletonLock` names a live Chrome (this pid).
+    ProfileInUse(u32),
 }
 
 impl std::fmt::Display for LaunchError {
@@ -57,6 +59,9 @@ impl std::fmt::Display for LaunchError {
             Self::Timeout(after) => {
                 write!(f, "chrome wrote no DevToolsActivePort within {after:?}")
             }
+            Self::ProfileInUse(pid) => {
+                write!(f, "profile in use by a running Chrome (pid {pid})")
+            }
         }
     }
 }
@@ -67,6 +72,82 @@ impl std::error::Error for LaunchError {}
 pub fn chrome_cache_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
     Some(PathBuf::from(home).join(".cache/ultra-instinct/chrome"))
+}
+
+/// Everyday user-data dirs of Chrome (stable / Beta / Canary or Dev),
+/// Chromium, Brave and Edge under `$HOME` (`$XDG_CONFIG_HOME` on Linux).
+/// A DevTools port must not open on one of these: it is the user's own
+/// logged-in profile.
+pub fn default_user_data_dirs() -> Vec<PathBuf> {
+    let env = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
+    env("HOME").map_or_else(Vec::new, |home| {
+        default_user_data_dirs_in(Path::new(&home), env("XDG_CONFIG_HOME").map(PathBuf::from))
+    })
+}
+
+fn default_user_data_dirs_in(home: &Path, xdg_config: Option<PathBuf>) -> Vec<PathBuf> {
+    let (base, names) = if cfg!(target_os = "macos") {
+        let names = [
+            "Google/Chrome",
+            "Google/Chrome Beta",
+            "Google/Chrome Canary",
+        ];
+        let more = ["Chromium", "BraveSoftware/Brave-Browser", "Microsoft Edge"];
+        (home.join("Library/Application Support"), [names, more])
+    } else {
+        let names = [
+            "google-chrome",
+            "google-chrome-beta",
+            "google-chrome-unstable",
+        ];
+        let more = ["chromium", "BraveSoftware/Brave-Browser", "microsoft-edge"];
+        (
+            xdg_config.unwrap_or_else(|| home.join(".config")),
+            [names, more],
+        )
+    };
+    names.iter().flatten().map(|name| base.join(name)).collect()
+}
+
+/// Whether `path` is one of [`default_user_data_dirs`]: canonical paths
+/// when both exist, else the paths as written.
+pub fn is_default_user_data_dir(path: &Path) -> bool {
+    is_one_of(path, &default_user_data_dirs())
+}
+
+fn is_one_of(path: &Path, dirs: &[PathBuf]) -> bool {
+    dirs.iter()
+        .any(|dir| match (path.canonicalize(), dir.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => path == dir,
+        })
+}
+
+/// The pid at the end of a `SingletonLock` link target, `<hostname>-<pid>`.
+fn singleton_lock_pid(target: &str) -> Option<u32> {
+    target
+        .rsplit_once('-')?
+        .1
+        .parse()
+        .ok()
+        .filter(|pid| *pid != 0)
+}
+
+/// The pid of a live Chrome holding `profile` (its `SingletonLock` link
+/// names a pid that `kill -0` reaches). A dangling or unparsable lock is
+/// stale: `None`. Unix only; elsewhere always `None`.
+fn profile_holder(profile: &Path) -> Option<u32> {
+    let target = std::fs::read_link(profile.join("SingletonLock")).ok()?;
+    let pid = singleton_lock_pid(target.to_str()?)?;
+    let alive = cfg!(unix)
+        && Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+    alive.then_some(pid)
 }
 
 /// Find a Chrome binary on this machine, in the module's search order.
@@ -255,8 +336,14 @@ fn window_args(options: &LaunchOptions) -> Vec<String> {
     }
 }
 
-/// A Chrome this process started. Dropping it kills Chrome and removes a
-/// temp profile unless [`LaunchOptions::keep_alive`] was set.
+/// How long a drop waits for Chrome on a kept profile to quit after SIGTERM.
+const QUIT_WAIT: Duration = Duration::from_secs(5);
+
+/// A Chrome this process started. Dropping it ends Chrome unless
+/// [`LaunchOptions::keep_alive`] was set: a temp profile is killed at once
+/// and removed; a kept profile (`profile_dir`) is first asked to quit
+/// (SIGTERM, unix) and given up to 5 s to flush cookies and storage, then
+/// killed.
 #[derive(Debug)]
 pub struct ChromeProcess {
     child: Child,
@@ -291,6 +378,22 @@ impl Drop for ChromeProcess {
         if self.keep_alive {
             return;
         }
+        if !self.temp_profile && cfg!(unix) {
+            let asked = Command::new("kill")
+                .args(["-TERM", &self.child.id().to_string()])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success());
+            let started = Instant::now();
+            while asked && started.elapsed() < QUIT_WAIT {
+                if !matches!(self.child.try_wait(), Ok(None)) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
         if self.temp_profile {
@@ -321,6 +424,10 @@ pub fn launch(options: &LaunchOptions) -> Result<ChromeProcess, LaunchError> {
         }
     };
     std::fs::create_dir_all(&profile).map_err(io)?;
+    // Another live Chrome on this profile would write the port file we read.
+    if let Some(pid) = profile_holder(&profile) {
+        return Err(LaunchError::ProfileInUse(pid));
+    }
     let port_file = profile.join("DevToolsActivePort");
     // A profile reused after a crash still holds the old port.
     let _ = std::fs::remove_file(&port_file);
@@ -495,6 +602,69 @@ mod tests {
             };
             assert_eq!(window_args(&sized), ["--window-size=390,844"]);
         }
+    }
+
+    #[test]
+    fn singleton_lock_targets_name_a_pid() {
+        assert_eq!(singleton_lock_pid("my-mac.local-4242"), Some(4242));
+        assert_eq!(singleton_lock_pid("host-7"), Some(7));
+        for stale in ["", "host", "host-", "host-x12", "host-0"] {
+            assert_eq!(singleton_lock_pid(stale), None, "{stale}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_profile_held_by_a_live_pid_refuses_and_a_stale_lock_does_not() {
+        let dir = scratch("lock");
+        let lock = dir.join("SingletonLock");
+        assert_eq!(profile_holder(&dir), None);
+        let me = std::process::id();
+        std::os::unix::fs::symlink(format!("host-{me}"), &lock).unwrap();
+        assert_eq!(profile_holder(&dir), Some(me));
+        let options = LaunchOptions {
+            binary: Some(PathBuf::from("/nonexistent/ultra-instinct-chrome")),
+            profile_dir: Some(dir.clone()),
+            ..LaunchOptions::default()
+        };
+        assert_eq!(launch(&options).unwrap_err(), LaunchError::ProfileInUse(me));
+        std::fs::remove_file(&lock).unwrap();
+        std::os::unix::fs::symlink("host-not-a-pid", &lock).unwrap();
+        assert_eq!(profile_holder(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_user_data_dirs_are_found_lexically_or_through_links() {
+        let dir = scratch("defaults");
+        let home = dir.join("home");
+        let dirs = default_user_data_dirs_in(&home, None);
+        assert_eq!(dirs.len(), 6);
+        let chrome = if cfg!(target_os = "macos") {
+            home.join("Library/Application Support/Google/Chrome")
+        } else {
+            home.join(".config/google-chrome")
+        };
+        assert_eq!(dirs[0], chrome);
+        assert!(is_one_of(&chrome, &dirs));
+        assert!(is_one_of(
+            Path::new(&format!("{}/", chrome.display())),
+            &dirs
+        ));
+        assert!(!is_one_of(&dir.join("shop-profile"), &dirs));
+        assert!(!is_one_of(&chrome.join("Default"), &dirs));
+        if !cfg!(target_os = "macos") {
+            let xdg = default_user_data_dirs_in(&home, Some(dir.join("xdg")));
+            assert_eq!(xdg[3], dir.join("xdg/chromium"));
+        }
+        #[cfg(unix)]
+        {
+            std::fs::create_dir_all(&chrome).unwrap();
+            let link = dir.join("link");
+            std::os::unix::fs::symlink(&chrome, &link).unwrap();
+            assert!(is_one_of(&link, &dirs));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
