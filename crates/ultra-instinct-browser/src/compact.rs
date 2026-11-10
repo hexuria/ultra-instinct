@@ -33,7 +33,6 @@
 //! frame) is dropped by `extract` and those elements fall back per node.
 //! A walk that throws (hostile page globals) falls back entirely.
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -46,28 +45,11 @@ pub(crate) use ultra_instinct_cdp::HU_K_ATTR;
 
 use crate::error::BrowserError;
 
-/// Characters that render as nothing inside a word (zero-width space /
-/// joiners, word joiner, BOM, combining grapheme joiner, soft hyphen):
-/// "S\u{34F}p\u{34F}o…" reads "Sponsored". Labels drop them, in fusion
-/// and in the walk's `fold` (the same list).
-pub(crate) const INVISIBLE: [char; 7] = [
-    '\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}', '\u{034F}', '\u{00AD}',
-];
-
-/// `text` without [`INVISIBLE`] characters, whitespace folded when any went.
-pub(crate) fn drop_invisible(text: &str) -> Cow<'_, str> {
-    if !text.contains(INVISIBLE) {
-        return Cow::Borrowed(text);
-    }
-    let kept: String = text.chars().filter(|c| !INVISIBLE.contains(c)).collect();
-    Cow::Owned(kept.split_whitespace().collect::<Vec<_>>().join(" "))
-}
-
 /// The single-eval walk. Returns `{nodes: {"<k>": {r,s?,h?}}}` where `r` is
 /// `[x,y,w,h]` or null, `s` the computed-style name/value pairs
 /// `style_from_computed` consumes, and `h` the `data-hu-k` of the element
 /// under the content center (null when nothing is there). `s`, `h`, and
-/// control state (`v`, `c`, `x`, `cu`, `sel`, `o`, `it`, `hr`) and the click hint `ck` are collected only for boxed
+/// control state (`v`, `c`, `x`, `as`, `ac`, `sel`, `o`, `it`, `hr`) and the click hint `ck` are collected only for boxed
 /// elements that can become regions: controls, roles, surfaces, shapes,
 /// drag-marked elements, and every plain box (`extract::is_box`), since a
 /// box's click listener is read after the walk.
@@ -300,8 +282,9 @@ function visit(el,doc,off){
       }
       var expanded=el.getAttribute('aria-expanded');
       if(expanded==='true'||expanded==='false')rec.x=expanded==='true';
-      var ariaSel=el.getAttribute('aria-selected'),cur=el.getAttribute('aria-current');
-      if(ariaSel==='true'||(cur!==null&&cur!=='false'))rec.cu=true;else if(ariaSel==='false')rec.cu=false;
+      var asel=el.getAttribute('aria-selected'),cur=el.getAttribute('aria-current');
+      if(asel==='true'||asel==='false')rec.as=asel==='true';
+      if(cur!==null){cur=cur.trim().toLowerCase()||'true';if(cur!=='false')rec.ac=cur.slice(0,16);}
       if(name==='SELECT'){
         var selected=[];
         var options=[];
@@ -553,7 +536,12 @@ fn parse_element_state(record: &Value, forms: &[Option<FormSubmit>]) -> ElementS
             .map(|value| truncate_chars(value, 200)),
         checked: record.get("c").and_then(Value::as_bool),
         expanded: record.get("x").and_then(Value::as_bool),
-        current: record.get("cu").and_then(Value::as_bool),
+        selected_item: record.get("as").and_then(Value::as_bool),
+        aria_current: record
+            .get("ac")
+            .and_then(Value::as_str)
+            .map(|cur| truncate_chars(&cur.to_lowercase(), 16))
+            .filter(|cur| cur != "false"),
         selected: record.get("sel").and_then(Value::as_str).map(str::to_owned),
         options,
         input_type: record.get("it").and_then(Value::as_str).map(str::to_owned),
@@ -585,14 +573,11 @@ mod tests {
 
     #[test]
     fn the_walk_folds_the_same_invisible_characters() {
-        let class: String = INVISIBLE
+        let class: String = ultra_instinct_core::INVISIBLE
             .iter()
             .map(|c| format!("\\u{:04X}", u32::from(*c)))
             .collect();
         assert!(COMPACT_JS.contains(&format!("/[{class}]/g")), "{class}");
-        assert_eq!(drop_invisible("S\u{34F}p\u{AD}o\u{200B}n"), "Spon");
-        assert_eq!(drop_invisible("a \u{FEFF} b"), "a b");
-        assert!(matches!(drop_invisible("Sign in"), Cow::Borrowed(_)));
     }
 
     fn parse_state(record: Value) -> Result<ElementState, BrowserError> {
@@ -626,7 +611,8 @@ mod tests {
                 "v":"Ana",
                 "c":true,
                 "x":false,
-                "cu":true,
+                "as":true,
+                "ac":"PAGE-and-more-than-16",
                 "sel":"UTC, Asia/Manila",
                 "o":["UTC", "Asia/Manila"],
                 "hr":"https://example.com/a",
@@ -638,7 +624,8 @@ mod tests {
                 value: Some("Ana".to_owned()),
                 checked: Some(true),
                 expanded: Some(false),
-                current: Some(true),
+                selected_item: Some(true),
+                aria_current: Some("page-and-more-th".to_owned()),
                 selected: Some("UTC, Asia/Manila".to_owned()),
                 options: vec!["UTC".to_owned(), "Asia/Manila".to_owned()],
                 input_type: None,

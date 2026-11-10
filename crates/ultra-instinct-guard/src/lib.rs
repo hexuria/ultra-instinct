@@ -297,7 +297,7 @@ pub fn guard(
 }
 
 /// Regions whose label equals the query text (trimmed, whitespace collapsed,
-/// case ignored), with the query role and under `within`, in manifold order.
+/// invisible characters dropped, case ignored), with the query role and under `within`, in manifold order.
 fn matches_of<'a>(
     manifold: &'a InteractionManifold,
     query: &LocateQuery,
@@ -318,13 +318,10 @@ fn matches_of<'a>(
         .collect()
 }
 
-/// Trimmed, inner whitespace runs collapsed to one space, lowercased.
+/// [`ultra_instinct_core::normalize_label`] (invisible characters dropped,
+/// whitespace folded, trimmed), lowercased.
 fn normalize_label(label: &str) -> String {
-    label
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+    ultra_instinct_core::normalize_label(label).to_lowercase()
 }
 
 /// `container` is a strict ancestor of `region` in the parent chain. The walk
@@ -576,6 +573,17 @@ mod tests {
                 "{text:?}"
             );
         }
+    }
+
+    /// A label copied from page text with a hidden character still names
+    /// the clean region, and a region label with one matches a clean query.
+    #[test]
+    fn invisible_characters_are_ignored() {
+        let m = manifold(vec![region("n1", "Sponsored", 100.0, "")]);
+        let req = button("S\u{34F}p\u{34F}onsored");
+        assert_eq!(allowed(&guard(&m, &req).unwrap()), "n1");
+        let m = manifold(vec![region("n1", "Pay\u{200B} now", 100.0, "")]);
+        assert_eq!(allowed(&guard(&m, &button("pay now")).unwrap()), "n1");
     }
 
     #[test]

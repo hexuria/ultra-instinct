@@ -281,7 +281,7 @@ impl WaitFor {
         let until = Self {
             text: part("text")?.map(|t| t.to_lowercase()),
             url: part("url")?,
-            control: part("control")?.map(|c| c.trim().to_lowercase()),
+            control: part("control")?.map(|c| collapse_label(&c)),
             gone: part("gone")?.map(|g| collapse_label(&g)),
             load: opt_str(arguments, "load")?
                 .map(LoadState::parse)
@@ -315,7 +315,7 @@ impl WaitFor {
             let present = interactive_index(manifold).iter().any(|id| {
                 manifold
                     .get(id)
-                    .is_some_and(|r| r.label().to_lowercase().contains(want.as_str()))
+                    .is_some_and(|r| collapse_label(r.label()).contains(want.as_str()))
             });
             if !present {
                 return Ok((false, url));
@@ -350,13 +350,10 @@ impl WaitFor {
     }
 }
 
-/// Trimmed, whitespace collapsed, lowercased: the `gone` label match.
+/// The `control` / `gone` label form: invisible characters dropped,
+/// whitespace collapsed, trimmed, lowercased.
 fn collapse_label(label: &str) -> String {
-    label
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+    ultra_instinct_core::normalize_label(label).to_lowercase()
 }
 
 /// With no condition: sleep `seconds` (default 3). With `text`, `url`,
@@ -461,12 +458,15 @@ fn add_values(element: &mut Value, region: &InteractionRegion, max: usize) {
     let flags = [
         ("checked", state.checked),
         ("expanded", state.expanded),
-        ("current", state.current),
+        ("selected_item", state.selected_item),
     ];
     for (key, on) in flags {
         if let Some(on) = on {
             element[key] = json!(on);
         }
+    }
+    if let Some(current) = state.aria_current.as_deref() {
+        element["aria_current"] = json!(current);
     }
 }
 
@@ -1615,9 +1615,9 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             );
             props.insert(
                 "values".into(),
-                json!({"type": "boolean", "description": "json only: each element also carries the state observe read (`value`, a select's selected option as `value`, `checked`, `expanded`, `current`); never for a `sensitive` element; masked like every output; a value cut at the state / text limit has `value_truncated`. Default false."}),
+                json!({"type": "boolean", "description": "json only: each element also carries the state observe read (`value`, a select's selected option as `value`, `checked`, `expanded`, `selected_item`, `aria_current`); never for a `sensitive` element; masked like every output; a value cut at the state / text limit has `value_truncated`. Default false."}),
             );
-            "Page title, url, and interactive elements as 1-based indexes in reading order (@e1, @e2, …) — the refs browser_click/browser_type take. Default format text: one short line per control with its value / checked / expanded / selected state (a selected tab: `selected`); format json returns elements[]."
+            "Page title, url, and interactive elements as 1-based indexes in reading order (@e1, @e2, …) — the refs browser_click/browser_type take. Default format text: one short line per control with its value / checked / expanded / selected state (a selected tab: `selected`; aria-current: `current=page`); format json returns elements[]."
         }
         "browser_get_html" => "document.documentElement.outerHTML of the current tab.",
         "browser_get_page_text" => "Visible text of the current tab (alias of browser_get_text).",

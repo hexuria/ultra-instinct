@@ -36,12 +36,11 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use ultra_instinct_core::{
-    token_jaccard, InteractionManifold, InteractionRegion, Rect, RegionFlags, RegionId,
-    RegionParts, Role, SourceMask, UnitInterval,
+    normalize_label, token_jaccard, InteractionManifold, InteractionRegion, Rect, RegionFlags,
+    RegionId, RegionParts, Role, SourceMask, UnitInterval, INVISIBLE,
 };
 use ultra_instinct_geometry::is_fully_offscreen;
 
-use crate::compact::drop_invisible;
 use crate::error::BrowserError;
 use crate::extract::{AxElement, DomElement};
 
@@ -99,13 +98,23 @@ pub(crate) enum Sight {
     Faint,
 }
 
+/// A node label without [`INVISIBLE`] characters (whitespace folded when
+/// any went), so every fusion step compares and keeps the clean label.
+fn clean_label(label: &str) -> String {
+    if label.contains(INVISIBLE) {
+        normalize_label(label)
+    } else {
+        label.to_owned()
+    }
+}
+
 impl RawNode {
     pub(crate) fn from_dom(element: &DomElement, rect: Rect) -> Self {
         Self {
             dom_node_id: Some(element.node_id),
             backend_node_id: Some(element.backend_node_id),
             role: element.role,
-            label: element.label.clone(),
+            label: clean_label(&element.label),
             rect,
             actions: element.actions.clone(),
             disabled: element.disabled,
@@ -124,7 +133,7 @@ impl RawNode {
             dom_node_id: None,
             backend_node_id: element.backend_dom_node_id,
             role: element.role,
-            label: element.name.clone(),
+            label: clean_label(&element.name),
             rect,
             actions: crate::extract::actions_for_role(element.role),
             disabled: element.disabled,
@@ -408,8 +417,7 @@ fn labels_compatible(left: &str, right: &str) -> bool {
     if left.is_empty() || right.is_empty() {
         return true;
     }
-    let (left, right) = (drop_invisible(left), drop_invisible(right));
-    token_jaccard(&left, &right) >= MIN_LABEL_JACCARD
+    token_jaccard(left, right) >= MIN_LABEL_JACCARD
 }
 
 fn roles_compatible(left: Role, right: Role) -> bool {
@@ -506,7 +514,7 @@ fn to_region(
     InteractionRegion::try_new(RegionParts {
         id: id.clone(),
         role: node.role,
-        label: drop_invisible(&node.label).into_owned(),
+        label: node.label.clone(),
         rect: node.rect,
         actions: node.actions.clone(),
         parent,
@@ -531,7 +539,7 @@ mod tests {
             dom_node_id: Some(10),
             backend_node_id: Some(100),
             role,
-            label: label.into(),
+            label: clean_label(label),
             rect: rect(x, 200.0),
             actions: vec![Action::Click],
             disabled: false,
@@ -550,7 +558,7 @@ mod tests {
             dom_node_id: None,
             backend_node_id: Some(100),
             role,
-            label: label.into(),
+            label: clean_label(label),
             rect: rect(x, 200.0),
             actions: vec![Action::Click],
             disabled: false,
@@ -604,6 +612,8 @@ mod tests {
         assert!(separate.get_str("ax101").is_some());
     }
 
+    /// The test `dom` / `ax` nodes clean their labels like `from_dom` /
+    /// `from_ax`; this pins `from_ax` itself.
     #[test]
     fn an_invisible_character_in_a_label_still_merges() {
         let (merged, _) = fuse(
@@ -614,8 +624,37 @@ mod tests {
         .unwrap();
         assert_eq!(merged.len(), 1);
         assert_eq!(merged.get_str("n100").unwrap().label(), "Sponsored");
-        let (alone, _) = fuse(viewport(), &[dom("S\u{34F}p", Role::Link, 1.0)], &[]).unwrap();
-        assert_eq!(alone.get_str("n100").unwrap().label(), "Sp");
+        let element = AxElement {
+            backend_dom_node_id: Some(100),
+            role: Role::Link,
+            name: "S\u{34F}p".into(),
+            disabled: false,
+            focused: false,
+            modal: false,
+        };
+        assert_eq!(RawNode::from_ax(&element, rect(1.0, 1.0)).label, "Sp");
+    }
+
+    /// Labels made only of invisible characters are empty labels, as two
+    /// empty labels were before the drop: they merge, and an AX name of
+    /// only U+200C does not hide the DOM text.
+    #[test]
+    fn invisible_only_labels_fuse_like_empty_labels() {
+        let labels = |dom_label: &str, ax_label: &str| {
+            let (merged, _) = fuse(
+                viewport(),
+                &[dom(dom_label, Role::Button, 400.0)],
+                &[with_backend(ax(ax_label, Role::Button, 401.0), 101)],
+            )
+            .unwrap();
+            let mut labels: Vec<String> = merged.regions().map(|r| r.label().to_owned()).collect();
+            labels.sort();
+            labels
+        };
+        assert_eq!(labels("\u{200B}", "\u{200C}"), labels("", ""));
+        assert_eq!(labels("\u{200B}", "\u{200C}"), [""]);
+        assert_eq!(labels("Sign in", "\u{200C}"), labels("Sign in", ""));
+        assert_eq!(labels("Sign in", "\u{200C}"), ["Sign in"]);
     }
 
     #[test]

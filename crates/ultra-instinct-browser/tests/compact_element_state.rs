@@ -46,7 +46,7 @@ fn compact_observe_attaches_input_and_select_state_to_regions() {
 }
 
 #[test]
-fn a_zero_width_label_reads_plain_and_a_selected_tab_is_current() {
+fn a_zero_width_label_reads_plain_and_a_selected_tab_is_selected() {
     // Facebook's "S͏p͏o͏n͏s͏o͏r͏e͏d": U+034F between the letters, the AX name
     // plain. One region, labelled without the hidden characters.
     let sponsored = DomSpec::button(
@@ -59,12 +59,13 @@ fn a_zero_width_label_reads_plain_and_a_selected_tab_is_current() {
         .with_tag("DIV")
         .with_attr("role", "tab")
         .with_attr("aria-selected", "true")
-        .with_compact_state(json!({"cu": true}));
+        .with_compact_state(json!({"as": true}));
     let other = DomSpec::button(30, 300, "Sent\u{200B}", (110.0, 60.0, 80.0, 28.0))
         .with_tag("DIV")
         .with_attr("role", "tab")
         .with_attr("aria-selected", "false")
-        .with_compact_state(json!({"cu": false}));
+        .with_attr("aria-current", "step")
+        .with_compact_state(json!({"as": false, "ac": "step"}));
     let page = PageSpec::new(
         vec![sponsored, tab, other],
         vec![AxSpec::new(
@@ -83,12 +84,14 @@ fn a_zero_width_label_reads_plain_and_a_selected_tab_is_current() {
     let region = |id: &str| manifold.get_str(id).unwrap();
     assert_eq!(region("n100").label(), "Sponsored");
     assert_eq!(
-        (region("n200").role(), region("n200").state().current),
+        (region("n200").role(), region("n200").state().selected_item),
         (Role::Tab, Some(true))
     );
     assert_eq!(
-        (region("n300").label(), region("n300").state().current),
+        (region("n300").label(), region("n300").state().selected_item),
         ("Sent", Some(false))
     );
-    assert_eq!(region("n100").state().current, None);
+    assert_eq!(region("n300").state().aria_current.as_deref(), Some("step"));
+    assert_eq!(region("n200").state().aria_current, None);
+    assert_eq!(region("n100").state().selected_item, None);
 }

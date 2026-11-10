@@ -9,8 +9,9 @@ use crate::runtime::FieldValue;
 ///
 /// URL change → navigation; manifold delta → state-changed; title / focus
 /// only → state-changed; a region whose observed control state (checked,
-/// expanded, value, selected, options) changed → state-changed; nothing →
-/// no visible change. Control state stays out of the region fingerprint
+/// expanded, value, selected, options, aria-selected `selected_item`,
+/// `aria_current`) changed → state-changed, so selecting a tab is an effect
+/// and never habituated; nothing → no visible change. Control state stays out of the region fingerprint
 /// (tickets never go stale on it); it is read here as evidence only.
 pub fn classify_delta(
     before_manifold: &InteractionManifold,
@@ -123,6 +124,40 @@ mod tests {
             },
         ] {
             let after = with(&before, "go", state);
+            assert_eq!(
+                classify_delta(&before, &after, None),
+                VerificationKind::StateChanged
+            );
+        }
+    }
+
+    /// Selecting a tab (aria-selected false → true) or moving aria-current
+    /// is a real effect: state-changed, with no fingerprint change.
+    #[test]
+    fn a_selected_item_or_aria_current_change_is_state_changed() {
+        let cases = [
+            (
+                ElementState {
+                    selected_item: Some(false),
+                    ..ElementState::default()
+                },
+                ElementState {
+                    selected_item: Some(true),
+                    ..ElementState::default()
+                },
+            ),
+            (
+                ElementState::default(),
+                ElementState {
+                    aria_current: Some("page".to_owned()),
+                    ..ElementState::default()
+                },
+            ),
+        ];
+        for (was, now) in cases {
+            let before = with(&page(), "go", was);
+            let after = with(&before, "go", now);
+            assert!(diff(&before, &after).is_empty(), "state is not fingerprint");
             assert_eq!(
                 classify_delta(&before, &after, None),
                 VerificationKind::StateChanged

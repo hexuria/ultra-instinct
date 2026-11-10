@@ -219,7 +219,8 @@ fn get_state_text_carries_control_state_and_never_a_password() {
 }
 
 /// A label with zero-width characters reads plain, and the selected tab
-/// says `selected` (text) / `current: true` (json values).
+/// says `selected` (text) / `selected_item: true` (json values); an
+/// aria-current link says `current=page` / `aria_current: "page"`.
 #[test]
 fn get_state_drops_zero_width_characters_and_marks_the_selected_tab() {
     let tab = |node, backend, label, x| Control {
@@ -241,8 +242,11 @@ fn get_state_drops_zero_width_characters_and_marks_the_selected_tab() {
         "https://feed.example/",
         "Feed",
     );
-    page.dom[0] = page.dom[0].clone().with_compact_state(json!({"cu": true}));
-    page.dom[1] = page.dom[1].clone().with_compact_state(json!({"cu": false}));
+    page.dom[0] = page.dom[0].clone().with_compact_state(json!({"as": true}));
+    page.dom[1] = page.dom[1].clone().with_compact_state(json!({"as": false}));
+    page.dom[2] = page.dom[2]
+        .clone()
+        .with_compact_state(json!({"ac": "page"}));
     let script = ScriptBuilder::new()
         .observe_compact(&page)
         .observe_compact(&page);
@@ -255,7 +259,7 @@ fn get_state_drops_zero_width_characters_and_marks_the_selected_tab() {
         [
             "@e1 tab \"Inbox\"  selected",
             "@e2 tab \"Sent\"",
-            "@e3 link \"Sponsored\"",
+            "@e3 link \"Sponsored\"  current=page",
         ],
         "{text}"
     );
@@ -265,9 +269,11 @@ fn get_state_drops_zero_width_characters_and_marks_the_selected_tab() {
         json!({"cdp": CDP, "format": "json", "values": true}),
     );
     let elements = &out["elements"];
-    assert_eq!(elements[0]["current"], true, "{out}");
-    assert_eq!(elements[1]["current"], false, "{out}");
-    assert!(elements[2].get("current").is_none(), "{out}");
+    assert_eq!(elements[0]["selected_item"], true, "{out}");
+    assert_eq!(elements[1]["selected_item"], false, "{out}");
+    assert!(elements[2].get("selected_item").is_none(), "{out}");
+    assert_eq!(elements[2]["aria_current"], "page", "{out}");
+    assert!(elements[0].get("aria_current").is_none(), "{out}");
     assert_eq!(elements[2]["label"], "Sponsored", "{out}");
 }
 
@@ -971,8 +977,8 @@ fn wait_timeout_reports_not_seen_and_the_last_url() {
 }
 
 /// `gone` holds once no control has exactly that label: "Sign" (a
-/// substring) never blocks it, "  SIGN   in " (same label) does until the
-/// button leaves.
+/// substring) never blocks it, "  SIGN   in " or "Si\u{34F}gn in" (same
+/// label) does until the button leaves.
 #[test]
 fn wait_for_gone_observes_until_the_exact_label_leaves() {
     let after = PageSpec::of(
@@ -1006,6 +1012,32 @@ fn wait_for_gone_observes_until_the_exact_label_leaves() {
     );
     assert_eq!(out["seen"], true, "a substring is not the label: {out}");
     assert_eq!(out["looks"], 1, "{out}");
+
+    // A label copied with a hidden character is the same label: not gone
+    // while the button is there, and `control` finds it.
+    let (mut srv, _log) = server(
+        ScriptBuilder::new()
+            .observe_compact(&page())
+            .observe_compact(&after),
+    );
+    let out = call(
+        &mut srv,
+        "browser_wait",
+        json!({"cdp": CDP, "gone": "Si\u{34F}gn in\u{200B}", "seconds": 5}),
+    );
+    assert_eq!(out["seen"], true, "{out}");
+    assert_eq!(out["looks"], 2, "{out}");
+    let (mut srv, _log) = server(ScriptBuilder::new().observe_compact(&page()));
+    let out = call(
+        &mut srv,
+        "browser_wait",
+        json!({"cdp": CDP, "control": "Si\u{34F}gn"}),
+    );
+    assert_eq!(
+        (&out["seen"], &out["looks"]),
+        (&json!(true), &json!(1)),
+        "{out}"
+    );
 }
 
 /// `load` reads `document.readyState` after each observe: `domcontentloaded`

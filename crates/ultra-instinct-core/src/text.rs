@@ -53,6 +53,21 @@ pub fn token_precision(query: &str, candidate: &str) -> f64 {
     hits as f64 / have.len() as f64
 }
 
+/// Characters that render as nothing inside a word (zero-width space /
+/// joiners, word joiner, BOM, combining grapheme joiner, soft hyphen):
+/// "S\u{34F}p\u{34F}o…" reads "Sponsored". Observe drops them from labels
+/// (the browser walk's JS `fold` carries the same list).
+pub const INVISIBLE: [char; 7] = [
+    '\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}', '\u{034F}', '\u{00AD}',
+];
+
+/// A label as matched: [`INVISIBLE`] characters dropped, whitespace runs
+/// collapsed to one space, trimmed. Case is left to the caller.
+pub fn normalize_label(label: &str) -> String {
+    let kept: String = label.chars().filter(|c| !INVISIBLE.contains(c)).collect();
+    kept.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Jaccard index over token sets. Empty/empty is `1.0`.
 pub fn token_jaccard(left: &str, right: &str) -> f64 {
     let a = tokenize(left);
@@ -73,5 +88,17 @@ pub fn token_jaccard(left: &str, right: &str) -> f64 {
         1.0
     } else {
         intersection as f64 / union as f64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_label_drops_invisible_characters_and_folds_whitespace() {
+        assert_eq!(normalize_label("S\u{34F}p\u{AD}o\u{200B}n"), "Spon");
+        assert_eq!(normalize_label("  a \u{FEFF}  B\t"), "a B");
+        assert_eq!(normalize_label("\u{200B}\u{200C}"), "");
     }
 }
