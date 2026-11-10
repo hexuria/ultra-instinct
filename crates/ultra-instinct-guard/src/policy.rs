@@ -453,7 +453,14 @@ pub fn refused_place(url: &str) -> String {
     }
     match scheme_of(url.trim()).map(str::to_ascii_lowercase) {
         Some(web) if web == "http" || web == "https" => format!("an {web}: URL with no host"),
-        Some(scheme) => format!("a {scheme}: page"),
+        Some(scheme) => {
+            let article = if scheme.starts_with(['a', 'e', 'i', 'o', 'u']) {
+                "an"
+            } else {
+                "a"
+            };
+            format!("{article} {scheme}: page")
+        }
         None => "(unknown url)".to_owned(),
     }
 }
@@ -607,6 +614,7 @@ mod tests {
             "a blob: page"
         );
         assert_eq!(refused_place(" DATA:text/html,<b>long</b>"), "a data: page");
+        assert_eq!(refused_place("about:srcdoc"), "an about: page");
         assert_eq!(refused_place("https:///x"), "an https: URL with no host");
         assert_eq!(refused_place("https://Evil.test/x"), "evil.test");
         for none in ["", "  ", "no-scheme", ":x"] {

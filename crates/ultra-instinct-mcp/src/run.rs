@@ -98,8 +98,10 @@ pub enum RunOutcome {
 pub enum BlockKind {
     /// The target's label matches a confirm pattern (the outcome's `label`).
     NeedsConfirm,
-    /// The page is off the domain allow-list; `host` is `None` when its URL
-    /// could not be read.
+    /// The page is off the domain allow-list. `host` is its host, or for a
+    /// URL with no host its scheme (`a blob: page`), the same name a tool's
+    /// `domain_not_allowed {host}` gives; `None` when the URL could not be
+    /// read.
     DomainNotAllowed { host: Option<String> },
 }
 
