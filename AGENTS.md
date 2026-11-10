@@ -8,7 +8,8 @@ named `hgra` or `resonance` is a bug.
 
 **Product:** Ultra-Instinct is a **Rust-native browser-agent runtime**.
 The library `Agent` **owns the loop**: it observes the page, builds a finite
-`ActionSpace`, lets a policy choose (Instinct first, optional explicit escalation),
+`ActionSpace`, lets a policy choose (Instinct by default; a remote decider —
+JEV, Clef, or the `TEXT_MODEL_*` model — only when chosen with `--decision`),
 hard-gates the choice, executes only through a one-shot `ActionTicket`, then
 re-observes, diffs, and verifies.
 
@@ -180,6 +181,12 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    reply must be exactly an offered id + kind, else JEV's answer stands.
 >    Targets come before page controls in the request;
 >    near text and row text that echo the goal are not sent.
+>    `--decision model` (feature `model-text`, `decide.rs`) sends the same
+>    request to the `TEXT_MODEL_*` model with the viewport JPEG and page
+>    text; a reply that is not an offered id + kind is asked once more with
+>    the reason, and the second reply goes to `parse_reply` unchanged (both
+>    share `reply_shape`). Its DONE is checked by a second question (goal
+>    met?); a refused DONE is asked again without it, a second one abstains.
 > 9. **No matcher.** HGRA and the weighted matcher are removed.
 >    Do not reintroduce label ranking on the agent path or in `guard`.
 > 10. **One blocking CDP socket per agent.** Parallelism means separate agents
@@ -213,8 +220,8 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 | `ultra-instinct-protocol` | Guard / ticket / verify wire types |
 | `ultra-instinct-browser-tools` | The `browser_*` host surface as MCP tool families (`call` / `spec`, the tool-name lists, `ToolError` with a stable `code` on every variant) over a `BrowserHost` trait (sessions, tab binding, ledgers, events, snapshot record and lookup, `require_snapshot`, `Policy`, the tab `backend`, `ToolLimits`, `Downloads`, `Uploads`, the tools' own `ToolState`): snapshot-bound index refs (`bound.rs`), secret masking (`secrets.rs`: `sensitive`, typed secrets scrubbed from every output), browser-use names, `browser_wait` conditions, `browser_extra` (dialog, forward / reload, check, focus, keyboard, get / is / count, annotate, `max_chars`), `browser_state` (state save / load, cookies, storage), `browser_env` (set, download, network) |
 | `ultra-instinct-mcp` | Optional JSON-RPC adapter (observe / guard / verify), `TOOLS`, and the `Server` that keeps sessions and the snapshot ring and serves the `browser_*` tools through a crate-private `BrowserHost` adapter (`Server` itself does not implement it); host options (`with_pipe` / `with_backend`, `require_snapshot`, `bind_to_latest_look`, `set_policy`, `with_limits`, `with_downloads`, `with_uploads`, `with_tool_allowlist`); `run_goal` / `run_goal_on` / `Server::run_goal` (the agent loop with InstinctPolicy and the deterministic resolver, no model); re-exports `ToolError`, `Policy` and the tool-name lists ([`docs/embedding.md`](docs/embedding.md)) |
-| `ultra-instinct-remote` | Remote decision transports and the HTTP text model, the only crate with a model SDK / HTTP client: `typesafe` (feature `jev`), `clef` (feature `clef`), `http_text` (feature `model-text`); re-exported by `ultra-instinct` |
-| `ultra-instinct` | `ultra-instinct run` (agent loop, `--policy instinct|jev|clef|clef-flash`, `--diary <dir>`); `replay --diary` (offline arena: agree / would-abstain / regress per recorded decision); `observe` / `guard` / `verify` preflight commands; `mcp` (stdio); the shell verbs over the session daemon (`verbs.rs`, `daemon.rs`), `batch`, `session`, `skills`, `doctor`, `install`; `run --launch/--load-state/--save-state/--allow-domain/--confirm-press/--confirm`; `TypesafeTransport` (feature `jev`: JEV-primary over the closed remote wire); `ClefTransport` (feature `clef`: Cloudflare Workers AI Clef / Clef-Flash over the same wire through `typesafe-sdk`'s Clef provider, one decision call, single-candidate heads answered locally) |
+| `ultra-instinct-remote` | Remote decision transports and the HTTP text model, the only crate with a model SDK / HTTP client: `typesafe` (feature `jev`), `clef` (feature `clef`), `http_text` (feature `model-text`, OpenAI-compatible / Anthropic / Gemini, with an optional JPEG), `decide` (feature `model-text`: `ModelDecider`, the same model choosing every step over the closed wire); re-exported by `ultra-instinct` |
+| `ultra-instinct` | `ultra-instinct run` (agent loop, `--decision instinct|jev|clef|clef-flash|dojo|model` (`--policy` is an alias), `--diary <dir>`); `replay --diary` (offline arena: agree / would-abstain / regress per recorded decision); `observe` / `guard` / `verify` preflight commands; `mcp` (stdio); the shell verbs over the session daemon (`verbs.rs`, `daemon.rs`), `batch`, `session`, `skills`, `doctor`, `install`; `run --launch/--load-state/--save-state/--allow-domain/--confirm-press/--confirm`; `TypesafeTransport` (feature `jev`: JEV-primary over the closed remote wire); `ClefTransport` (feature `clef`: Cloudflare Workers AI Clef / Clef-Flash over the same wire through `typesafe-sdk`'s Clef provider, one decision call, single-candidate heads answered locally) |
 | `ultra-instinct-dojo` | Battle diary schema v1 (`DiaryLine` JSONL), `DiaryWriter` / `read_diary`, site + situation keys, decision→`ActionSpace` rebuild for the replay arena; versioned `LessonStore` (words / places / moves / trust, keyed per situation, carrying proving diary ids); lessons only adjust evidence inside the finite `ActionSpace` |
 
 Instinct (`instinct-core` / `-text` / `-lexicon`) is pinned to 0.1.0 from

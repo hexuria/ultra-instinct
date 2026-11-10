@@ -18,7 +18,7 @@
 //!
 //! Env: `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` (both required,
 //! token needs Workers AI read). `CLEF_MODEL` overrides the model slug set by
-//! `--policy clef` / `--policy clef-flash`. `CLEF_BASE_URL` replaces the
+//! `--decision clef` / `--decision clef-flash`. `CLEF_BASE_URL` replaces the
 //! Workers AI prefix `https://api.cloudflare.com/client/v4`; a value ending
 //! in `/accounts` also works, since
 //! `/accounts/{id}/ai/run/@cf/cloudflare/{model}` is appended either way.

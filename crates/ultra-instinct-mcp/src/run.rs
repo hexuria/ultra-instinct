@@ -1,6 +1,6 @@
 //! `run_goal`: the agent loop for a host that only links this crate.
 //!
-//! The same loop `ultra-instinct run --policy instinct` drives
+//! The same loop `ultra-instinct run --decision instinct` drives
 //! (`AgentBuilder` … `run()`): Instinct chooses among the finite action
 //! space, the deterministic text resolver fills payloads, every press goes
 //! gate → ticket → `execute_ticketed`. No model, no feature, no async. The

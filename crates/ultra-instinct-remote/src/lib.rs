@@ -3,12 +3,15 @@
 //!
 //! Split out of `ultra-instinct` so model SDKs and the HTTP client live in one leaf
 //! crate. Every module is behind a feature: `jev` (System One), `clef`
-//! (Cloudflare Workers AI), `model-text` (HTTP text model). The closed remote
-//! wire contract is `ultra_instinct_policy`'s; nothing here can widen a reply.
+//! (Cloudflare Workers AI), `model-text` (HTTP text model, and the same model
+//! deciding steps: [`decide`]). The closed remote wire contract is
+//! `ultra_instinct_policy`'s; nothing here can widen a reply.
 #![forbid(unsafe_code)]
 
 #[cfg(feature = "clef")]
 pub mod clef;
+#[cfg(feature = "model-text")]
+pub mod decide;
 #[cfg(feature = "model-text")]
 pub mod http_text;
 #[cfg(all(feature = "jev", feature = "model-text"))]

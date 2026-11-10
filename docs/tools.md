@@ -190,6 +190,6 @@ Other commands:
 | `aui skills list`, `aui skills get <name>` | Guides that ship in the binary (`core`) |
 | `aui doctor [--json] [--quick] [--cdp <url>]` | Check Chrome, the endpoint, a test launch, and `$TMPDIR/aui` |
 | `aui install [--run]` | Print (or run) the Chrome for Testing install command |
-| `aui run --goal <text> ...` | The agent loop for runs nobody checks step by step: the runtime picks every step (`--policy instinct`: Instinct, no model; or a remote policy limited to offered actions) and abstains rather than guess; see `aui --help` |
+| `aui run --goal <text> ...` | The agent loop for runs nobody checks step by step: the runtime picks every step (`--decision instinct`: Instinct, no model; `--decision model`: your `TEXT_MODEL_*` endpoint; `jev` / `clef`; every model is limited to offered actions) and abstains rather than guess; see `aui --help` |
 | `aui replay --diary <dir>`, `aui lessons ...`, `aui exams ...` | Offline diary tools |
 | `aui observe`, `aui guard`, `aui verify` | The product tools from the command line (`--fixture` or `--cdp`) |

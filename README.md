@@ -92,14 +92,25 @@ MCP: run `aui mcp` as a stdio server (56 tools: `observe`, `guard`, `verify`
 and the `browser_*` tools). Index presses take the `@eN` refs
 `browser_get_state` returns.
 
-One goal, one command. `--policy instinct` runs it with no model; an `aui`
-built with the `jev` feature (as `install-aui.sh` builds it) otherwise
-defaults to the JEV remote policy. `--launch` starts a headless Chrome for the
-run and kills it at exit; `--cdp <url>` attaches to yours instead.
+One goal, one command. `--decision` picks who chooses each step:
+`instinct` (no model), `model` (your `TEXT_MODEL_*` endpoint), `jev`, or
+`clef` / `clef-flash`; an `aui` built with the `jev` feature (as
+`install-aui.sh` builds it) defaults to `jev`. `--launch` starts a headless
+Chrome for the run and kills it at exit; `--cdp <url>` attaches to yours
+instead.
 
 ```bash
-aui run --launch --policy instinct --url https://example.com --goal 'Type "rust" into Search'
+aui run --launch --decision instinct --url https://example.com --goal 'Type "rust" into Search'
+
+# Any OpenAI-compatible, Anthropic, or Gemini endpoint chooses every step
+TEXT_MODEL_API=openai TEXT_MODEL_BASE_URL=https://api-gateway.merge.dev/v1 \
+TEXT_MODEL_API_KEY=... TEXT_MODEL=openai/gpt-5-nano \
+  aui run --launch --decision model --url https://example.com --goal 'Type "rust" into Search'
 ```
+
+The model only picks from the actions the runtime offers (or abstains),
+with the screenshot and page text as evidence; every pick still goes
+through the gate and a one-shot ticket.
 
 As a library, the same loop:
 

@@ -23,7 +23,7 @@ jev = ["dep:typesafe-sdk", "dep:serde_json", "ultra-instinct-policy/remote"]
 # Cloudflare Workers AI Clef / Clef-Flash over the same closed wire.
 clef = ["jev", "typesafe-sdk/clef"]
 # HTTP text model (OpenAI-compatible, Anthropic, or Gemini wire) for TYPE_TEXT / SELECT payloads.
-model-text = ["ultra-instinct-policy/model-text", "dep:reqwest", "dep:serde_json"]
+model-text = ["ultra-instinct-policy/model-text", "ultra-instinct-policy/remote", "dep:reqwest", "dep:serde_json"]
 
 [dependencies.typesafe-sdk]
 version = "0.3.0"
