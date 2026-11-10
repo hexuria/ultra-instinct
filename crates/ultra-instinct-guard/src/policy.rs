@@ -448,13 +448,10 @@ fn scheme_of(url: &str) -> Option<&str> {
 /// `(unknown url)`. Short whatever the URL holds (a `data:` URL is never
 /// echoed).
 pub fn refused_place(url: &str) -> String {
-    if let Some(host) = host_of(url) {
+    if let Some(host) = refused_host(url) {
         return host;
     }
     let url = url.trim();
-    if let Some(host) = scheme_less_host(url) {
-        return host;
-    }
     match scheme_of(url).map(str::to_ascii_lowercase) {
         Some(web) if web == "http" || web == "https" => format!("an {web}: URL with no host"),
         Some(scheme) => {
@@ -473,6 +470,13 @@ pub fn refused_place(url: &str) -> String {
 /// `localhost:8080`, `10.0.0.1:80`): a name with a dot, `localhost`, or one
 /// starting with a digit, then a port of 1 to 5 digits. `tel:5551234`,
 /// `mailto:…` and `com.example.app:/x` are schemes, not hosts.
+/// The host [`refused_place`] names, when it names one: [`host_of`], else
+/// the host of a scheme-less `host:port` (`shop.example:443/cart`).
+/// `None` when `refused_place` names a scheme or `(unknown url)` instead.
+pub fn refused_host(url: &str) -> Option<String> {
+    host_of(url).or_else(|| scheme_less_host(url.trim()))
+}
+
 fn scheme_less_host(url: &str) -> Option<String> {
     let (name, rest) = url.split_once(':')?;
     let port = rest.split(['/', '?', '#']).next().unwrap_or_default();
@@ -483,7 +487,9 @@ fn scheme_less_host(url: &str) -> Option<String> {
     let plain = name
         .bytes()
         .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
-    (looks_like_host && is_port && plain && !name.is_empty()).then(|| normalize_host(name))
+    let host = normalize_host(name);
+    // `.:80` folds to nothing: no host.
+    (looks_like_host && is_port && plain && !host.is_empty()).then_some(host)
 }
 
 /// The lowercase host of `url`, `None` when it has none (`about:blank`,
@@ -654,7 +660,25 @@ mod tests {
         }
         assert_eq!(refused_place("https:///x"), "an https: URL with no host");
         assert_eq!(refused_place("https://Evil.test/x"), "evil.test");
-        for none in ["", "  ", "no-scheme", ":x"] {
+        // refused_host answers whether a host was named; `.:80` names none.
+        assert_eq!(
+            refused_host("shop.example:443/cart").as_deref(),
+            Some("shop.example")
+        );
+        assert_eq!(
+            refused_host("https://Evil.test/x").as_deref(),
+            Some("evil.test")
+        );
+        for no_host in [
+            "blob:https://shop.example/x",
+            "tel:5551234",
+            ".:80",
+            "..:80",
+            "",
+        ] {
+            assert_eq!(refused_host(no_host), None, "{no_host:?}");
+        }
+        for none in ["", "  ", "no-scheme", ":x", ".:80"] {
             assert_eq!(refused_place(none), "(unknown url)", "{none:?}");
         }
         // Without a list the switch changes nothing.
