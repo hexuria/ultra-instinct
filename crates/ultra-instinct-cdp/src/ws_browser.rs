@@ -13,20 +13,26 @@
 //! for reads and, while a request is unwritten, writes, like the pipe: a
 //! big request never blocks the reads that would drain Chrome's side. One
 //! thread, no reader thread. A message over [`PipeLimits::max_frame_bytes`]
-//! or a request cut off by its deadline ends the link (tungstenite cannot
-//! skip a message), unlike the pipe, which re-syncs.
+//! or a request cut off by its deadline ends the link, and with it the
+//! attached session (tungstenite cannot skip a message), unlike the pipe,
+//! which skips one oversize frame and re-syncs.
+//!
+//! A refused TCP connect (nothing listens on the port: the toggle is off, or
+//! a stale `DevToolsActivePort` a Chrome that quit left) says so and names
+//! the port; only a stalled upgrade or an unanswered first call gets the
+//! "accept Chrome's prompt" hint.
 
 use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
-use rustix::event::{poll, PollFd, PollFlags, Timespec};
+use rustix::event::{PollFd, PollFlags};
 use tungstenite::protocol::WebSocketConfig;
 use tungstenite::{Message, WebSocket};
 
-use crate::pipe::{Frame, Link, PipeLimits, Stop};
-use crate::ws::connect_plain;
+use crate::pipe::{poll_until, Frame, Link, PipeLimits, Stop};
+use crate::ws::{connect_tcp, handshake, plain_host_port};
 use crate::{CdpBrowser, CdpError};
 
 /// How long connecting waits, in all, for Chrome to let the client in (its
@@ -106,24 +112,11 @@ impl Link for WsLink {
             if self.read_one()? {
                 return Ok(());
             }
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Err(Stop::Deadline);
-            }
-            let slice = left.min(Duration::from_secs(3600));
-            let timeout = Timespec {
-                tv_sec: slice.as_secs().try_into().unwrap_or(3600),
-                tv_nsec: slice.subsec_nanos().into(),
-            };
             let mut flags = PollFlags::IN;
             if self.pending {
                 flags |= PollFlags::OUT;
             }
-            let mut fds = [PollFd::new(self.socket.get_ref(), flags)];
-            match poll(&mut fds, Some(&timeout)) {
-                Ok(_) | Err(rustix::io::Errno::INTR) => {}
-                Err(err) => return Err(Stop::Closed(format!("poll: {err}"))),
-            }
+            poll_until(&mut [PollFd::new(self.socket.get_ref(), flags)], deadline)?;
         }
     }
 
@@ -158,9 +151,9 @@ impl CdpBrowser {
 
     /// [`CdpBrowser::connect_websocket`] with `limits` and an `accept_wait`
     /// for the handshake and the first call (`Browser.getVersion`) together. A
-    /// socket that does not open, or a first call that gets no answer in
-    /// time, is a [`CdpError::Transport`] that says to turn on remote
-    /// debugging and accept Chrome's prompt.
+    /// refused TCP connect is a [`CdpError::Transport`] naming the port; an
+    /// upgrade that stalls, or a first call that gets no answer in time, is
+    /// one that says to turn on remote debugging and accept Chrome's prompt.
     pub fn connect_websocket_with(
         ws_url: &str,
         limits: PipeLimits,
@@ -173,11 +166,16 @@ impl CdpBrowser {
         let config = WebSocketConfig::default()
             .max_message_size(Some(limits.max_frame_bytes))
             .max_frame_size(Some(limits.max_frame_bytes));
-        let socket = match connect_plain(ws_url, accept_wait, Some(config)) {
+        let host_port = plain_host_port(ws_url)?;
+        let stream = connect_tcp(&host_port).map_err(|_| CdpError::Transport {
+            message: format!(
+                "nothing listens on {host_port}: is Chrome running with remote debugging on \
+                 (chrome://inspect/#remote-debugging)? A stale DevToolsActivePort is left by a \
+                 Chrome that quit."
+            ),
+        })?;
+        let socket = match handshake(ws_url, stream, accept_wait, Some(config)) {
             Ok(socket) => socket,
-            Err(err @ CdpError::Transport { .. }) if ws_url.starts_with("wss://") => {
-                return Err(err)
-            }
             Err(CdpError::Transport { message }) => return Err(hint(message)),
             Err(err) => return Err(err),
         };

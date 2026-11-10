@@ -251,6 +251,26 @@ pub(crate) trait Link {
     fn try_send(&mut self, message: Vec<u8>);
 }
 
+/// One `poll(2)` on `fds`, bounded by `deadline` (past it: [`Stop::Deadline`]).
+/// Long waits poll in hour slices (macOS caps poll at `c_int::MAX` ms).
+/// `false`: woken with nothing ready (a slice ran out, or `EINTR`).
+pub(crate) fn poll_until(fds: &mut [PollFd<'_>], deadline: Instant) -> Result<bool, Stop> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        return Err(Stop::Deadline);
+    }
+    let slice = left.min(Duration::from_secs(3600));
+    let timeout = Timespec {
+        tv_sec: slice.as_secs().try_into().unwrap_or(3600),
+        tv_nsec: slice.subsec_nanos().into(),
+    };
+    match poll(fds, Some(&timeout)) {
+        Ok(0) | Err(rustix::io::Errno::INTR) => Ok(false),
+        Ok(_) => Ok(true),
+        Err(err) => Err(Stop::Closed(format!("poll: {err}"))),
+    }
+}
+
 /// The pipe link: NUL-delimited frames over two fds, `poll(2)` on both.
 struct PipeLink {
     reader: File,
@@ -285,16 +305,6 @@ impl Link for PipeLink {
     /// request is unwritten, also until the write end takes some of it.
     fn pump(&mut self, deadline: Instant) -> Result<(), Stop> {
         loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Err(Stop::Deadline);
-            }
-            // Long waits poll in hour slices (macOS caps poll at `c_int::MAX` ms).
-            let slice = left.min(Duration::from_secs(3600));
-            let timeout = Timespec {
-                tv_sec: slice.as_secs().try_into().unwrap_or(3600),
-                tv_nsec: slice.subsec_nanos().into(),
-            };
             let pending = !self.flushed();
             let (readable, writable) = {
                 let mut fds = [
@@ -302,10 +312,8 @@ impl Link for PipeLink {
                     PollFd::new(&self.writer, PollFlags::OUT),
                 ];
                 let watched = if pending { 2 } else { 1 };
-                match poll(&mut fds[..watched], Some(&timeout)) {
-                    Ok(0) | Err(rustix::io::Errno::INTR) => continue,
-                    Ok(_) => {}
-                    Err(err) => return Err(Stop::Closed(format!("poll: {err}"))),
+                if !poll_until(&mut fds[..watched], deadline)? {
+                    continue;
                 }
                 (
                     !fds[0].revents().is_empty(),
@@ -782,6 +790,13 @@ impl CdpBrowser {
     pub fn create_target(&self, url: &str) -> Result<String, CdpError> {
         let body = self.call("Target.createTarget", &json!({"url": url}).to_string())?;
         created_target_id(&body)
+    }
+
+    /// Open a page target on `url` in a new window (`Target.createTarget`,
+    /// `newWindow: true`); returns its id.
+    pub fn create_window(&self, url: &str) -> Result<String, CdpError> {
+        let params = json!({"url": url, "newWindow": true}).to_string();
+        created_target_id(&self.call("Target.createTarget", &params)?)
     }
 
     /// Close a target (`Target.closeTarget`); the reported `success` flag.

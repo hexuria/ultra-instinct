@@ -257,9 +257,11 @@ When the user wants their own logged-in Chrome driven (not a fresh one):
 2. `aui open https://mail.example/ --attach --allow-domain mail.example`.
    `--allow-domain` is required: name every site the task needs. Chrome may
    show an "Allow remote debugging?" prompt; the user accepts it (aui waits
-   up to 90 s). `aui doctor` says whether the toggle is on.
-3. Work as usual (`snap`, `click`, …). aui opens its own tab; the user's
-   tabs stay as they are.
+   up to 90 s). `aui doctor` says whether Chrome wrote its port file (a
+   Chrome that quit can leave a stale one).
+3. Work as usual (`snap`, `click`, …). aui opens its own tab in a new
+   Chrome window and never lists, reads, switches to or closes the user's
+   tabs.
 4. `aui close` closes only that tab and leaves their Chrome running.
 
 `--attach` does not mix with `--launch`, `--cdp`, `--profile` or

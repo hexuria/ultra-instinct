@@ -190,17 +190,19 @@ impl Browser {
 
 const LAUNCH_OR_CDP: &str = "--launch and --cdp: pick one";
 
-/// The `--attach` rules of `open` and the daemon: none of the `others`
-/// flags that start or name another browser, and at least one allowed domain.
+/// The `--attach` rules of `open` and the daemon: none of the flags that
+/// start or name another browser (`[launch, cdp, profile, headed]` given),
+/// and at least one allowed domain.
 pub(crate) fn check_attach(
     attach: bool,
-    others: [(bool, &str); 4],
+    others: [bool; 4],
     allow_domains: bool,
 ) -> Result<(), CliError> {
     if !attach {
         return Ok(());
     }
-    if let Some((_, flag)) = others.iter().find(|(given, _)| *given) {
+    let flags = ["--launch", "--cdp", "--profile", "--headed"];
+    if let Some((_, flag)) = others.iter().zip(flags).find(|(given, _)| **given) {
         return Err(CliError::Config(format!("--attach and {flag}: pick one")));
     }
     if !allow_domains {
@@ -300,13 +302,7 @@ pub(crate) fn daemon_command(args: &[String]) -> Result<String, CliError> {
     let attach = flags.switch("--attach");
     let profile = flags.one("--profile")?;
     let allow = std::env::var(ultra_instinct_mcp::ENV_ALLOW_DOMAINS).unwrap_or_default();
-    let others = [(launch, "--launch"), (cdp.is_some(), "--cdp")];
-    let others = [
-        others[0],
-        others[1],
-        (profile.is_some(), "--profile"),
-        (headed, "--headed"),
-    ];
+    let others = [launch, cdp.is_some(), profile.is_some(), headed];
     check_attach(attach, others, !allow.trim().is_empty())?;
     let profile = launch_profile(launch, cdp.is_some(), profile.as_deref())?;
     let idle = flags
@@ -998,7 +994,7 @@ mod tests {
                 "{err}"
             );
         }
-        let err = check_attach(true, [(false, "--launch"); 4], false).unwrap_err();
+        let err = check_attach(true, [false; 4], false).unwrap_err();
         assert!(
             err.to_string()
                 .contains("name the sites with --allow-domain"),

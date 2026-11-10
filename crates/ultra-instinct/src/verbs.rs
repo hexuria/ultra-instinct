@@ -211,13 +211,7 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         headed = flags.switch("--headed");
         attach = flags.switch("--attach");
         let dir = flags.one("--profile")?;
-        let others = [(launch, "--launch"), (cdp.is_some(), "--cdp")];
-        let others = [
-            others[0],
-            others[1],
-            (dir.is_some(), "--profile"),
-            (headed, "--headed"),
-        ];
+        let others = [launch, cdp.is_some(), dir.is_some(), headed];
         crate::daemon::check_attach(attach, others, !allow_domains.is_empty())?;
         if headed && !launch {
             return Err(CliError::Config("--headed needs --launch".into()));

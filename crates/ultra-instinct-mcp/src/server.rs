@@ -381,10 +381,12 @@ impl Server {
     /// A server on the user's own Chrome over its browser websocket
     /// ([`ultra_instinct_cdp::CdpBrowser::connect_websocket`]), under an
     /// empty policy: like [`Server::with_pipe`], with keys
-    /// `attach:<targetId>`. An unbound first call binds the first page tab,
-    /// which is the user's: open one with `browser_new_tab` first (the `aui`
-    /// daemon does). Dropping the server closes the tabs it opened, never
-    /// the user's tabs or their Chrome. It never serves
+    /// `attach:<targetId>`, but it sees only the tabs it opened (each in a
+    /// new Chrome window): the user's tabs are never listed, switched to,
+    /// read or closed. Until `browser_new_tab` opens one (the `aui` daemon
+    /// does at once), a page call refuses: no tab is bound. Dropping the
+    /// server closes the tabs it opened, never the user's tabs or their
+    /// Chrome. It never serves
     /// [`crate::ATTACH_DENIED`] (cookies, state, storage, download: they
     /// reach the whole profile); those answer `tool_not_allowed`.
     #[cfg(unix)]

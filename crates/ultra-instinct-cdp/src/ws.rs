@@ -375,13 +375,19 @@ fn connect_socket(ws_url: &str) -> Result<Socket, CdpError> {
 }
 
 /// A plain `ws://` socket to `ws_url`: TCP within the connect deadline, then
-/// the blocking handshake on a socket whose reads and writes time out after
-/// `handshake_wait` (the socket keeps those timeouts). `wss://` refuses.
+/// [`handshake`]. `wss://` refuses.
 pub(crate) fn connect_plain(
     ws_url: &str,
     handshake_wait: Duration,
     config: Option<tungstenite::protocol::WebSocketConfig>,
 ) -> Result<Socket, CdpError> {
+    let stream = connect_tcp(&plain_host_port(ws_url)?)?;
+    handshake(ws_url, stream, handshake_wait, config)
+}
+
+/// The `host:port` of a `ws://` URL (port 80 when none); `wss://` and other
+/// schemes refuse.
+pub(crate) fn plain_host_port(ws_url: &str) -> Result<String, CdpError> {
     if ws_url.starts_with("wss://") {
         return Err(CdpError::Transport {
             message: "wss is not supported; use a local ws:// debugging port".into(),
@@ -392,19 +398,26 @@ pub(crate) fn connect_plain(
             message: format!("websocket URL `{ws_url}` must use ws://"),
         });
     }
-    // `tungstenite::connect` applies no deadline until it returns — a host
-    // that accepts TCP but never completes the upgrade would stall forever.
-    // Connect with a timeout, then run the blocking handshake over a socket
-    // that already carries read/write timeouts.
     let authority = ws_url["ws://".len()..]
         .split('/')
         .next()
         .unwrap_or_default();
-    let host_port = match authority.contains(':') {
+    Ok(match authority.contains(':') {
         true => authority.to_owned(),
         false => format!("{authority}:80"),
-    };
-    let stream = connect_tcp(&host_port)?;
+    })
+}
+
+/// The blocking websocket handshake over `stream`, whose reads and writes
+/// time out after `handshake_wait` (the socket keeps those timeouts).
+/// `tungstenite::connect` applies no deadline until it returns: a host that
+/// accepts TCP but never completes the upgrade would stall forever.
+pub(crate) fn handshake(
+    ws_url: &str,
+    stream: TcpStream,
+    handshake_wait: Duration,
+    config: Option<tungstenite::protocol::WebSocketConfig>,
+) -> Result<Socket, CdpError> {
     stream
         .set_read_timeout(Some(handshake_wait))
         .and_then(|()| stream.set_write_timeout(Some(handshake_wait)))
@@ -418,7 +431,7 @@ pub(crate) fn connect_plain(
     Ok(socket)
 }
 
-fn connect_tcp(host_port: &str) -> Result<TcpStream, CdpError> {
+pub(crate) fn connect_tcp(host_port: &str) -> Result<TcpStream, CdpError> {
     let mut last_err = String::from("no addresses resolved");
     for addr in host_port
         .to_socket_addrs()

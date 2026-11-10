@@ -150,7 +150,9 @@ fn run_checks(cdp: &str, quick: bool) -> Vec<Check> {
         false,
         launch::find_attach_endpoint()
             .map(|url| {
-                format!("your Chrome has remote debugging on: aui open --attach reaches {url}")
+                let port = url.trim_start_matches("ws://127.0.0.1:");
+                let port = port.split('/').next().unwrap_or_default();
+                format!("port file found (port {port}): aui open --attach tries {url}")
             })
             .map_err(|err| {
                 (

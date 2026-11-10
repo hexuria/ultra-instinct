@@ -225,27 +225,53 @@ fn wss_is_refused_without_a_socket() {
 }
 
 #[test]
-fn the_attached_backend_closes_only_the_tabs_it_opened() {
+fn a_refused_connect_names_the_port_not_the_prompt() {
+    // A stale DevToolsActivePort: the port it names has no listener.
+    let port = TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .expect("bind")
+        .port();
+    let url = format!("ws://127.0.0.1:{port}/devtools/browser/x");
+    let err = CdpBrowser::connect_websocket(&url)
+        .err()
+        .expect("refused")
+        .to_string();
+    assert!(
+        err.contains(&format!("nothing listens on 127.0.0.1:{port}")),
+        "{err}"
+    );
+    assert!(err.contains("stale DevToolsActivePort"), "{err}");
+    assert!(!err.contains("Allow remote debugging"), "{err}");
+}
+
+/// Attached is own-tabs-only: new windows, never activated; the user's tab
+/// (U1) is not listed and refuses activate / close / connect without a
+/// call; a close Chrome refused keeps the tab for the drop.
+#[test]
+fn the_attached_backend_sees_and_closes_only_the_tabs_it_opened() {
     let (url, fake) = fake(|fake| {
         let discover = fake.expect("Target.setDiscoverTargets");
         fake.reply(&discover, json!({}));
+        for id in ["A1", "A2"] {
+            // No `Target.activateTarget` after it: the next call is the next create.
+            let create = fake.expect("Target.createTarget");
+            assert_eq!(create["params"]["newWindow"], true, "{create}");
+            fake.reply(&create, json!({"targetId": id}));
+        }
         let list = fake.expect("Target.getTargets");
         fake.reply(
             &list,
             json!({"targetInfos": [
                 {"targetId": "U1", "type": "page", "url": "https://mail.example/", "title": "Mail"},
+                {"targetId": "A1", "type": "page", "url": "about:blank", "title": ""},
                 {"targetId": "W1", "type": "service_worker", "url": "", "title": ""},
             ]}),
         );
-        for id in ["A1", "A2"] {
-            let create = fake.expect("Target.createTarget");
-            fake.reply(&create, json!({"targetId": id}));
-            let activate = fake.expect("Target.activateTarget");
-            assert_eq!(activate["params"]["targetId"], id);
-            fake.reply(&activate, json!({}));
-        }
         let close = fake.expect("Target.closeTarget");
         assert_eq!(close["params"]["targetId"], "A2");
+        fake.send(json!({"id": close["id"], "error": {"code": -32000, "message": "busy"}}));
+        let close = fake.expect("Target.closeTarget");
+        assert_eq!(close["params"]["targetId"], "A1");
         fake.reply(&close, json!({"success": true}));
         // The drop: only the tab still open that the backend made.
         let mut after = Vec::new();
@@ -257,22 +283,41 @@ fn the_attached_backend_closes_only_the_tabs_it_opened() {
             .iter()
             .map(|r| format!("{} {}", r["method"], r["params"]["targetId"]))
             .collect();
-        assert_eq!(methods, [r#""Target.closeTarget" "A1""#], "{after:?}");
+        assert_eq!(methods, [r#""Target.closeTarget" "A2""#], "{after:?}");
     });
     let browser = CdpBrowser::connect_websocket(&url).expect("connect");
     let mut backend = SessionBackend::attached(browser);
     assert_eq!(backend.endpoint(), Some(ATTACH_ENDPOINT));
+    for id in ["A1", "A2"] {
+        let tab = backend
+            .create_page(ATTACH_ENDPOINT, "about:blank")
+            .expect("tab");
+        assert_eq!(tab.key, format!("attach:{id}"));
+    }
+    // A2 is not alive in Chrome's list, U1 is not ours.
     let tabs = backend.list_pages(ATTACH_ENDPOINT).expect("tabs");
-    assert_eq!(tabs.len(), 1);
-    assert_eq!(tabs[0].key, "attach:U1");
-    let one = backend
-        .create_page(ATTACH_ENDPOINT, "about:blank")
-        .expect("tab");
-    assert_eq!(one.key, "attach:A1");
-    backend
-        .create_page(ATTACH_ENDPOINT, "about:blank")
-        .expect("tab");
-    assert!(backend.close_page(ATTACH_ENDPOINT, "A2").expect("close"));
+    let keys: Vec<_> = tabs.iter().map(|t| t.key.as_str()).collect();
+    assert_eq!(keys, ["attach:A1"]);
+    let not_ours = CdpError::NotOwned {
+        target_id: "U1".into(),
+    };
+    assert_eq!(
+        backend.activate_page(ATTACH_ENDPOINT, "U1"),
+        Err(not_ours.clone())
+    );
+    assert_eq!(
+        backend.close_page(ATTACH_ENDPOINT, "U1"),
+        Err(not_ours.clone())
+    );
+    let refused = |result: Result<Box<dyn CdpTransport>, CdpError>| result.err().expect("refused");
+    assert_eq!(refused(backend.connect("attach:U1")), not_ours);
+    assert!(not_ours
+        .to_string()
+        .contains("not a tab this session opened"));
+    let unbound = refused(backend.connect(ATTACH_ENDPOINT)).to_string();
+    assert!(unbound.contains("browser_new_tab"), "{unbound}");
+    assert!(backend.close_page(ATTACH_ENDPOINT, "A2").is_err());
+    assert!(backend.close_page(ATTACH_ENDPOINT, "A1").expect("close"));
     drop(backend);
     fake.join().expect("fake");
 }

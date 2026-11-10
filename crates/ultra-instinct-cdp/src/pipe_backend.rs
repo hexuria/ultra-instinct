@@ -9,6 +9,13 @@
 //! ([`SessionBackend::attached`]) they are `attach:<targetId>` and
 //! [`ATTACH_ENDPOINT`]. One thread owns the browser, its pages and the
 //! server (`Rc`, no locks, no reader thread).
+//!
+//! **Attached is own-tabs-only.** An attached backend lists only the tabs it
+//! opened that are still open, and refuses to activate, close or connect to
+//! any other target ([`CdpError::NotOwned`]): the user's tabs are never read,
+//! focused or closed. Each tab it opens is a new Chrome window
+//! (`newWindow: true`, not activated), so the user's tabs stay as they are. A websocket message over `max_frame_bytes` ends the attached
+//! session (the pipe skips one oversize frame and goes on).
 
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -54,8 +61,9 @@ impl SessionBackend {
     }
 
     /// The backend for the user's own Chrome over its browser websocket:
-    /// keys `attach:<targetId>`. Dropping it closes the tabs it opened
-    /// (each waited on for up to 2 s) and nothing else.
+    /// keys `attach:<targetId>`, only the tabs it opened (each in a new
+    /// window). Dropping it closes those (each waited on for up to 2 s) and
+    /// nothing else.
     pub fn attached(browser: CdpBrowser) -> Self {
         Self {
             browser,
@@ -74,6 +82,16 @@ impl SessionBackend {
             self.discovering = true;
         }
         Ok(())
+    }
+
+    /// Attached: refuse a target this backend did not open.
+    fn owned(&self, target_id: &str) -> Result<(), CdpError> {
+        match &self.created {
+            Some(created) if !created.contains(target_id) => Err(CdpError::NotOwned {
+                target_id: target_id.to_owned(),
+            }),
+            _ => Ok(()),
+        }
     }
 
     fn tab(&self, target_id: String, url: String, title: String) -> PageTab {
@@ -104,29 +122,42 @@ impl TargetBackend for SessionBackend {
             .browser
             .targets()?
             .into_iter()
+            .filter(|t| self.owned(&t.target_id).is_ok())
             .map(|t| self.tab(t.target_id, t.url, t.title))
             .collect())
     }
 
     fn create_page(&mut self, _endpoint: &str, url: &str) -> Result<PageTab, CdpError> {
         self.discover()?;
-        let target_id = self.browser.create_target(url)?;
-        if let Some(created) = &mut self.created {
-            created.insert(target_id.clone());
-        }
-        self.browser.activate_target(&target_id)?;
+        let target_id = match &mut self.created {
+            // A window of its own, not activated: the user's tab stays in front.
+            Some(created) => {
+                let target_id = self.browser.create_window(url)?;
+                created.insert(target_id.clone());
+                target_id
+            }
+            None => {
+                let target_id = self.browser.create_target(url)?;
+                self.browser.activate_target(&target_id)?;
+                target_id
+            }
+        };
         Ok(self.tab(target_id, url.to_owned(), String::new()))
     }
 
     fn activate_page(&mut self, _endpoint: &str, target_id: &str) -> Result<(), CdpError> {
+        self.owned(target_id)?;
         self.browser.activate_target(target_id)
     }
 
     fn close_page(&mut self, _endpoint: &str, target_id: &str) -> Result<bool, CdpError> {
-        if let Some(created) = &mut self.created {
+        self.owned(target_id)?;
+        let closed = self.browser.close_target(target_id)?;
+        // Kept while still open, so the drop closes it.
+        if let (true, Some(created)) = (closed, &mut self.created) {
             created.remove(target_id);
         }
-        self.browser.close_target(target_id)
+        Ok(closed)
     }
 
     fn connect(&mut self, key: &str) -> Result<Box<dyn CdpTransport>, CdpError> {
@@ -143,6 +174,7 @@ impl TargetBackend for SessionBackend {
                     }
                 ),
             })?;
+        self.owned(target_id)?;
         let mut page = self.browser.page(target_id)?;
         // Like the websocket connect: trusted key / mouse input needs
         // emulated focus or it lands on whatever Chrome has focused.

@@ -57,6 +57,10 @@ pub enum CdpError {
         method: String,
         after: std::time::Duration,
     },
+    /// An attached backend refused a tab it did not open: the user's own.
+    NotOwned {
+        target_id: String,
+    },
 }
 
 impl fmt::Display for CdpError {
@@ -96,6 +100,10 @@ impl fmt::Display for CdpError {
                     "CDP transport: no CDP result for `{method}` within {within}"
                 )
             }
+            Self::NotOwned { target_id } => write!(
+                f,
+                "target {target_id} is not a tab this session opened; open one with browser_new_tab"
+            ),
         }
     }
 }

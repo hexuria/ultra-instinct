@@ -202,6 +202,8 @@ struct Setup {
     destroy_on: Option<&'static str>,
     exit_on: Option<&'static str>,
     alert_on: Option<&'static str>,
+    /// `Server::with_attach` instead of `with_pipe`: T1 is the user's tab.
+    attach: bool,
 }
 
 impl Setup {
@@ -212,6 +214,7 @@ impl Setup {
             destroy_on: None,
             exit_on: None,
             alert_on: None,
+            attach: false,
         }
     }
 
@@ -237,7 +240,10 @@ impl Setup {
         };
         let thread = thread::spawn(move || fake.run());
         (
-            Server::with_pipe(browser),
+            match self.attach {
+                true => Server::with_attach(browser),
+                false => Server::with_pipe(browser),
+            },
             Chrome {
                 log,
                 _thread: thread,
@@ -354,6 +360,61 @@ fn tabs_are_target_calls_and_a_closed_tab_falls_back() {
         assert!(browser.contains(&method.to_owned()), "{browser:?}");
     }
     drop(server);
+}
+
+/// Attached, the user's tab (T1) is out of reach: not listed, not switched
+/// to or closed, never bound; only the tab the server opened, in a window
+/// of its own. Once that closes, a page call refuses: no tab is bound.
+#[test]
+fn an_attached_server_sees_only_the_tabs_it_opened() {
+    let mut setup = Setup::page(ScriptBuilder::new());
+    setup.attach = true;
+    setup
+        .next_pages
+        .push(ScriptBuilder::new().ready_state("complete"));
+    let (mut server, chrome) = setup.start();
+    let ids = |server: &mut Server| -> Vec<String> {
+        call(server, "browser_list_tabs", json!({}))["tabs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["tab_id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert!(ids(&mut server).is_empty());
+    let refused = |server: &mut Server, tool: &str, arguments: Value| {
+        let err = server.call_tool(tool, &arguments).expect_err(tool);
+        err.to_string()
+    };
+    let unbound = refused(&mut server, "browser_get_state", json!({}));
+    assert!(unbound.contains("browser_new_tab"), "{unbound}");
+    for tool in ["browser_switch_tab", "browser_close_tab"] {
+        let err = refused(&mut server, tool, json!({"tab_id": "T1"}));
+        assert!(err.contains("no tab `T1`"), "{tool}: {err}");
+    }
+    let opened = call(&mut server, "browser_new_tab", json!({}));
+    assert_eq!(opened["tab_id"], "T2", "{opened}");
+    assert_eq!(ids(&mut server), ["T2"]);
+    let switched = call(&mut server, "browser_switch_tab", json!({"tab_id": "T2"}));
+    assert_eq!(switched["active_tab"], "T2");
+    let closed = call(&mut server, "browser_close_tab", json!({"tab_id": "T2"}));
+    assert_eq!(closed["closed"], true);
+    let unbound = refused(&mut server, "browser_get_state", json!({}));
+    assert!(unbound.contains("browser_new_tab"), "{unbound}");
+    drop(server);
+    assert!(
+        chrome.page_methods("T1").is_empty(),
+        "{:?}",
+        chrome.methods()
+    );
+    let browser = chrome.browser_methods();
+    let count = |m: &str| browser.iter().filter(|b| *b == m).count();
+    assert_eq!(count("Target.closeTarget"), 1, "{browser:?}");
+    assert_eq!(
+        count("Target.activateTarget"),
+        1,
+        "the switch only: {browser:?}"
+    );
 }
 
 /// `Target.targetDestroyed` reaches the page (discovery is on): its next
