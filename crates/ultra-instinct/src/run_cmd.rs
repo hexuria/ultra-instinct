@@ -289,6 +289,18 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
             "--url requires --cdp or --launch".into(),
         ));
     }
+    // The same switch the daemon and `aui mcp` read from the environment.
+    let refuse_blob = ultra_instinct_mcp::parse_refuse_blob(
+        &std::env::var(ultra_instinct_mcp::ENV_REFUSE_BLOB).unwrap_or_default(),
+    )
+    .map_err(CliError::Config)?;
+    if refuse_blob && guard_policy.allow_domains.is_empty() {
+        return Err(CliError::Config(format!(
+            "{} needs --allow-domain: with no list every page passes",
+            ultra_instinct_mcp::ENV_REFUSE_BLOB
+        )));
+    }
+    guard_policy.refuse_blob = refuse_blob;
     if let Some(url) = &url {
         guard_policy.check_url(url).map_err(|reason| {
             CliError::Refused(format!(
