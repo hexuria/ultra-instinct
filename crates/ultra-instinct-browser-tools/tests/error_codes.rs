@@ -9,7 +9,7 @@ use ultra_instinct_cdp::CdpError;
 /// Every `ToolError::code`, in declaration order (docs/embedding.md). A
 /// code never changes meaning once shipped: change this list only by
 /// appending.
-const ERROR_CODES: [&str; 62] = [
+const ERROR_CODES: [&str; 63] = [
     "missing_fixture",
     "missing_before",
     "missing_after",
@@ -60,6 +60,7 @@ const ERROR_CODES: [&str; 62] = [
     "unknown_ref",
     "snapshot_required",
     "target_gone",
+    "not_owned",
     "dialog_open",
     "timeout",
     "pipe_closed",
@@ -142,6 +143,7 @@ fn every_variant() -> Vec<ToolError> {
         },
         ToolError::SnapshotRequired,
         ToolError::TargetGone { target_id: s("T1") },
+        ToolError::NotOwned { target_id: s("U1") },
         ToolError::DialogOpen {
             kind: s("alert"),
             message: s("Saved"),
@@ -209,6 +211,10 @@ fn named_codes_carry_their_fields() {
     assert_eq!(
         field(ToolError::TargetGone { target_id: s("T1") }, "target_id"),
         "T1"
+    );
+    assert_eq!(
+        field(ToolError::NotOwned { target_id: s("U1") }, "target_id"),
+        "U1"
     );
     let dialog = ToolError::DialogOpen {
         kind: s("confirm"),
@@ -301,6 +307,17 @@ fn typed_refusals_keep_their_old_variant_message_and_display() {
         "stale_ref"
     );
     assert!(ToolError::from_cdp(&CdpError::NoScriptedResponse { method: "X".into() }).is_none());
+    // An attached server's refusal of a tab it did not open has its own code.
+    let not_owned = ToolError::cdp(&CdpError::NotOwned {
+        target_id: "U1".into(),
+    });
+    assert_eq!(not_owned.code(), "not_owned");
+    assert!(
+        not_owned
+            .to_string()
+            .contains("not a tab this session opened"),
+        "{not_owned}"
+    );
 }
 
 /// An oversize frame costs its call only: the wording says the frame was

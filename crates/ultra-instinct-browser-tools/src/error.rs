@@ -123,6 +123,11 @@ pub enum ToolError {
     TargetGone {
         target_id: String,
     },
+    /// On the user's own Chrome (attach), a tab this session did not open:
+    /// it is never read, focused or closed (CDP `NotOwned`).
+    NotOwned {
+        target_id: String,
+    },
     /// A JavaScript dialog is open on the tab: the page answers nothing
     /// else until `browser_dialog` handles it. `detail` is the failure text.
     DialogOpen {
@@ -233,6 +238,7 @@ impl ToolError {
             Self::Fixture(_) => "Fixture",
             Self::Browser(_)
             | Self::TargetGone { .. }
+            | Self::NotOwned { .. }
             | Self::DialogOpen { .. }
             | Self::Timeout { .. }
             | Self::PipeClosed { .. }
@@ -302,6 +308,7 @@ impl ToolError {
             Self::UnknownRef { .. } => "unknown_ref",
             Self::SnapshotRequired => "snapshot_required",
             Self::TargetGone { .. } => "target_gone",
+            Self::NotOwned { .. } => "not_owned",
             Self::DialogOpen { .. } => "dialog_open",
             Self::Timeout { .. } => "timeout",
             Self::PipeClosed { .. } => "pipe_closed",
@@ -326,6 +333,9 @@ impl ToolError {
             },
             CdpError::FrameTooLarge { limit } => Self::FrameTooLarge { limit: *limit },
             CdpError::TargetGone { target_id } => Self::TargetGone {
+                target_id: target_id.clone(),
+            },
+            CdpError::NotOwned { target_id } => Self::NotOwned {
                 target_id: target_id.clone(),
             },
             CdpError::Timeout { method, after } => Self::Timeout {
@@ -378,6 +388,9 @@ impl ToolError {
             Self::TargetGone { target_id } => {
                 format!("CDP target {target_id} detached or was destroyed")
             }
+            Self::NotOwned { target_id } => format!(
+                "target {target_id} is not a tab this session opened; open one with browser_new_tab"
+            ),
             Self::DialogOpen { detail, .. } => detail.clone(),
             Self::Timeout { method, after_ms } => {
                 let within = if after_ms % 1000 == 0 {
@@ -453,7 +466,9 @@ impl ToolError {
             Self::DomainNotAllowed { host } => json!({"host": host}),
             Self::StaleRef { reason } => json!({"reason": reason}),
             Self::UnknownRef { index, indexed } => json!({"index": index, "indexed": indexed}),
-            Self::TargetGone { target_id } => json!({"target_id": target_id}),
+            Self::TargetGone { target_id } | Self::NotOwned { target_id } => {
+                json!({"target_id": target_id})
+            }
             // `message` is the dialog's own text here; the failure is `detail`.
             Self::DialogOpen {
                 kind,
@@ -591,6 +606,7 @@ impl fmt::Display for ToolError {
                 self.message().unwrap_or_default()
             ),
             Self::TargetGone { .. }
+            | Self::NotOwned { .. }
             | Self::DialogOpen { .. }
             | Self::Timeout { .. }
             | Self::PipeClosed { .. }

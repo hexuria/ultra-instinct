@@ -307,6 +307,7 @@ codes are only ever appended.
 | `unknown_ref` | `index`, `indexed` | no element at that index (among those the given snapshot showed, or on the page) |
 | `snapshot_required` | | the server requires `snapshot` with an index press |
 | `target_gone` | `target_id` | the tab detached or was closed |
+| `not_owned` | `target_id` | on an attached server (the user's own Chrome), a tab this session did not open: it is never read, focused or closed |
 | `dialog_open` | `type`, `message` (the dialog's), `detail` | a JavaScript dialog is open; handle it with `browser_dialog` |
 | `timeout` | `method`, `after_ms` | a CDP call got no answer in time |
 | `pipe_closed` | `message` | the pipe is closed (Chromium exited); every later call fails the same way |
@@ -337,7 +338,7 @@ The rest (`missing_fixture`, `missing_before`, `missing_after`,
 `browser_use_is_replay`, `browser_use_rejected`, `browser_use_script`,
 `cua_is_replay`, `cua_rejected`, `cua_script`, `verify_no_effect`) belong to
 observe / guard / verify, or to executors that are gone and kept their codes.
-The table and this list together are the 62 codes.
+The table and this list together are the 63 codes.
 
 ## Policy at runtime
 
