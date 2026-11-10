@@ -43,6 +43,9 @@ pub struct SessionBackend {
     /// these are closed when it drops; the user's own tabs and their Chrome
     /// are never closed (no `Browser.close`).
     created: Option<BTreeSet<String>>,
+    /// Attached: the tabs it opened and then closed. A late call to one is
+    /// `TargetGone` (the tab went away), not `NotOwned`.
+    closed: BTreeSet<String>,
 }
 
 /// The pipe backend's name before the websocket link: the same type.
@@ -57,6 +60,7 @@ impl SessionBackend {
             discovering: false,
             endpoint: PIPE_ENDPOINT,
             created: None,
+            closed: BTreeSet::new(),
         }
     }
 
@@ -70,6 +74,7 @@ impl SessionBackend {
             discovering: false,
             endpoint: ATTACH_ENDPOINT,
             created: Some(BTreeSet::new()),
+            closed: BTreeSet::new(),
         }
     }
 
@@ -84,12 +89,13 @@ impl SessionBackend {
         Ok(())
     }
 
-    /// Attached: refuse a target this backend did not open.
+    /// Attached: refuse a target this backend did not open (`NotOwned`);
+    /// one it opened and closed is `TargetGone`.
     fn owned(&self, target_id: &str) -> Result<(), CdpError> {
+        let target_id = target_id.to_owned();
         match &self.created {
-            Some(created) if !created.contains(target_id) => Err(CdpError::NotOwned {
-                target_id: target_id.to_owned(),
-            }),
+            Some(_) if self.closed.contains(&target_id) => Err(CdpError::TargetGone { target_id }),
+            Some(created) if !created.contains(&target_id) => Err(CdpError::NotOwned { target_id }),
             _ => Ok(()),
         }
     }
@@ -156,6 +162,7 @@ impl TargetBackend for SessionBackend {
         // Kept while still open, so the drop closes it.
         if let (true, Some(created)) = (closed, &mut self.created) {
             created.remove(target_id);
+            self.closed.insert(target_id.to_owned());
         }
         Ok(closed)
     }

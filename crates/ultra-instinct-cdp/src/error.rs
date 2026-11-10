@@ -102,7 +102,7 @@ impl fmt::Display for CdpError {
             }
             Self::NotOwned { target_id } => write!(
                 f,
-                "target {target_id} is not a tab this session opened; open one with browser_new_tab"
+                "target {target_id} is not a tab this session opened: the user's own tabs are never read, focused or closed"
             ),
         }
     }

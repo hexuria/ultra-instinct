@@ -60,7 +60,6 @@ const ERROR_CODES: [&str; 63] = [
     "unknown_ref",
     "snapshot_required",
     "target_gone",
-    "not_owned",
     "dialog_open",
     "timeout",
     "pipe_closed",
@@ -73,6 +72,7 @@ const ERROR_CODES: [&str; 63] = [
     "secrets_full",
     "secret_on_screen",
     "uploads_off",
+    "not_owned",
 ];
 
 fn s(text: &str) -> String {
@@ -143,7 +143,6 @@ fn every_variant() -> Vec<ToolError> {
         },
         ToolError::SnapshotRequired,
         ToolError::TargetGone { target_id: s("T1") },
-        ToolError::NotOwned { target_id: s("U1") },
         ToolError::DialogOpen {
             kind: s("alert"),
             message: s("Saved"),
@@ -172,6 +171,7 @@ fn every_variant() -> Vec<ToolError> {
             message: s("no objectId"),
         },
         ToolError::UploadsOff,
+        ToolError::NotOwned { target_id: s("U1") },
     ]
 }
 

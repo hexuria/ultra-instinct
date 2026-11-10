@@ -123,11 +123,6 @@ pub enum ToolError {
     TargetGone {
         target_id: String,
     },
-    /// On the user's own Chrome (attach), a tab this session did not open:
-    /// it is never read, focused or closed (CDP `NotOwned`).
-    NotOwned {
-        target_id: String,
-    },
     /// A JavaScript dialog is open on the tab: the page answers nothing
     /// else until `browser_dialog` handles it. `detail` is the failure text.
     DialogOpen {
@@ -182,6 +177,11 @@ pub enum ToolError {
     },
     /// The host turned uploads off.
     UploadsOff,
+    /// On the user's own Chrome (attach), a tab this session did not open:
+    /// it is never read, focused or closed (CDP `NotOwned`).
+    NotOwned {
+        target_id: String,
+    },
 }
 
 impl ToolError {
@@ -308,7 +308,6 @@ impl ToolError {
             Self::UnknownRef { .. } => "unknown_ref",
             Self::SnapshotRequired => "snapshot_required",
             Self::TargetGone { .. } => "target_gone",
-            Self::NotOwned { .. } => "not_owned",
             Self::DialogOpen { .. } => "dialog_open",
             Self::Timeout { .. } => "timeout",
             Self::PipeClosed { .. } => "pipe_closed",
@@ -321,11 +320,13 @@ impl ToolError {
             Self::SecretsFull { .. } => "secrets_full",
             Self::SecretOnScreen { .. } => "secret_on_screen",
             Self::UploadsOff => "uploads_off",
+            Self::NotOwned { .. } => "not_owned",
         }
     }
 
     /// The typed error for a CDP failure that has one (pipe closed, frame
-    /// too large, target gone, timeout, dialog opened); `None` for the rest.
+    /// too large, target gone, timeout, dialog opened, not owned); `None`
+    /// for the rest.
     pub fn from_cdp(err: &CdpError) -> Option<Self> {
         Some(match err {
             CdpError::PipeClosed { .. } => Self::PipeClosed {
@@ -388,9 +389,11 @@ impl ToolError {
             Self::TargetGone { target_id } => {
                 format!("CDP target {target_id} detached or was destroyed")
             }
-            Self::NotOwned { target_id } => format!(
-                "target {target_id} is not a tab this session opened; open one with browser_new_tab"
-            ),
+            // One wording, the CDP error's.
+            Self::NotOwned { target_id } => CdpError::NotOwned {
+                target_id: target_id.clone(),
+            }
+            .to_string(),
             Self::DialogOpen { detail, .. } => detail.clone(),
             Self::Timeout { method, after_ms } => {
                 let within = if after_ms % 1000 == 0 {
