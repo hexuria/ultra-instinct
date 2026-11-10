@@ -272,9 +272,9 @@ impl WaitFor {
     fn parse(arguments: &Value) -> Result<Option<Self>, ToolError> {
         let part = |key: &str| -> Result<Option<String>, ToolError> {
             match opt_str(arguments, key)? {
-                Some(v) if v.trim().is_empty() => Err(ToolError::InvalidArguments(format!(
-                    "`{key}` must not be empty"
-                ))),
+                Some(v) if ultra_instinct_core::normalize_label(v).is_empty() => Err(
+                    ToolError::InvalidArguments(format!("`{key}` must not be empty")),
+                ),
                 other => Ok(other.map(str::to_owned)),
             }
         };

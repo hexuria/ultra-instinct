@@ -1086,10 +1086,16 @@ fn wait_rejects_an_unknown_load_state() {
             .expect_err("unknown load state");
         assert!(matches!(err, ToolError::InvalidArguments(_)), "{err:?}");
     }
-    let err = server
-        .call_tool("browser_wait", &json!({"cdp": CDP, "gone": " "}))
-        .expect_err("empty gone");
-    assert!(matches!(err, ToolError::InvalidArguments(_)), "{err:?}");
+    // Blank, or only hidden characters (which every label drops): empty.
+    for gone in [" ", "\u{200B}\u{034F} "] {
+        let err = server
+            .call_tool("browser_wait", &json!({"cdp": CDP, "gone": gone}))
+            .expect_err("empty gone");
+        assert!(
+            matches!(err, ToolError::InvalidArguments(_)),
+            "{gone:?}: {err:?}"
+        );
+    }
     assert!(log.borrow().is_empty());
 }
 
