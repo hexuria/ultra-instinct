@@ -115,9 +115,11 @@ struct RunArgs {
     /// recorded instead of in the end-of-run transcript, so a run stopped
     /// from outside still leaves every step it took.
     live_steps: bool,
-    /// `--launch [--headed]`: start this run's own Chrome when `--cdp` is absent.
+    /// `--launch [--headed] [--profile <dir>]`: start this run's own Chrome
+    /// when `--cdp` is absent; `--profile` is its user-data dir, kept on disk.
     launch: bool,
     headed: bool,
+    profile: Option<String>,
     /// `--allow-domain` / `--confirm-press` / `--confirm`.
     guard_policy: Policy,
 }
@@ -155,6 +157,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     let mut second_opinion = false;
     let mut live_steps = false;
     let (mut launch, mut headed) = (false, false);
+    let mut profile = None;
     let mut guard_policy = Policy::default();
     let mut i = 0;
     while i < args.len() {
@@ -176,6 +179,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
         match name {
             "--goal" => set(&mut goal, "--goal", value("--goal")?)?,
             "--url" => set(&mut url, "--url", value("--url")?)?,
+            "--profile" => set(&mut profile, "--profile", value("--profile")?)?,
             "--fixture" => set(&mut fixture, "--fixture", value("--fixture")?)?,
             "--text-model-cmd" => set(
                 &mut text_model_cmd,
@@ -279,6 +283,11 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     if cdp.is_none() && fixture.is_none() && !launch {
         return Err(CliError::MissingSource);
     }
+    if profile.is_some() && (!launch || cdp.is_some()) {
+        return Err(CliError::UnknownFlag(
+            "--profile needs --launch (and no --cdp): it is the launched Chrome's profile".into(),
+        ));
+    }
     if url.is_some() && cdp.is_none() && !launch {
         return Err(CliError::UnknownFlag(
             "--url requires --cdp or --launch".into(),
@@ -326,6 +335,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
         live_steps,
         launch,
         headed,
+        profile,
         guard_policy,
     })
 }
@@ -359,7 +369,10 @@ pub(crate) fn run_command(args: &[String]) -> Result<String, CliError> {
     let mut args = parse(args)?;
     // Declared before the session, so the run's tab closes before Chrome is killed.
     let _chrome = match args.launch && args.cdp.is_none() {
-        true => Some(crate::doctor_cmd::launch_chrome(args.headed)?),
+        true => Some(crate::doctor_cmd::launch_chrome(
+            args.headed,
+            args.profile.as_deref().map(std::path::Path::new),
+        )?),
         false => None,
     };
     if let Some(chrome) = &_chrome {
@@ -1086,6 +1099,18 @@ mod tests {
         assert!(p.launch && p.headed && p.cdp.is_none());
         assert!(parse(&a(&["--goal", "Go", "--cdp", "--headed"])).is_err());
         assert!(parse(&a(&["--goal", "Go", "--fixture", "x", "--launch"])).is_err());
+        let kept = parse(&a(&["--goal", "Go", "--launch", "--profile", "/p/shop"])).unwrap();
+        assert_eq!(kept.profile.as_deref(), Some("/p/shop"));
+        assert!(parse(&a(&[
+            "--goal",
+            "Go",
+            "--cdp",
+            "http://x",
+            "--profile",
+            "/p"
+        ]))
+        .is_err());
+        assert!(parse(&a(&["--goal", "Go", "--fixture", "x", "--profile", "/p"])).is_err());
         assert!(parse(&a(&["--goal", "Go", "--launch=1"])).is_err());
     }
 

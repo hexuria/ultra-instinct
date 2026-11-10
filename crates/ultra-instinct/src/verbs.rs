@@ -19,7 +19,7 @@ pub const VERBS: [&str; 27] = [
 ];
 
 /// Flags that take a value (`--flag v` or `--flag=v`).
-const VALUE_FLAGS: [&str; 21] = [
+const VALUE_FLAGS: [&str; 22] = [
     "--session",
     "--cdp",
     "--max-output",
@@ -41,6 +41,7 @@ const VALUE_FLAGS: [&str; 21] = [
     "--same-site",
     "--timeout-ms",
     "--idle",
+    "--profile",
 ];
 
 /// Flags that take no value.
@@ -200,7 +201,7 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         .map(|raw| number::<usize>("--max-output", &raw))
         .transpose()?;
     let (mut allow_domains, mut confirm_press) = (Vec::new(), Vec::new());
-    let (mut launch, mut headed, mut idle_secs) = (false, false, None);
+    let (mut launch, mut headed, mut idle_secs, mut profile) = (false, false, None, None);
     if verb == "open" {
         allow_domains = flags.all("--allow-domain");
         confirm_press = flags.all("--confirm-press");
@@ -208,6 +209,16 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         headed = flags.switch("--headed");
         if headed && !launch {
             return Err(CliError::Config("--headed needs --launch".into()));
+        }
+        profile = flags
+            .one("--profile")?
+            .map(|dir| absolute_dir(&dir))
+            .transpose()?;
+        if profile.is_some() && (!launch || cdp.is_some()) {
+            return Err(CliError::Config(
+                "--profile needs --launch (and no --cdp): it is the launched Chrome's profile"
+                    .into(),
+            ));
         }
         idle_secs = flags
             .one("--idle")?
@@ -252,8 +263,26 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         confirm_press,
         launch,
         headed,
+        profile,
         idle_secs,
     })
+}
+
+/// `dir` as an absolute path (relative to this shell), since the daemon
+/// that uses it does not share the shell's working directory.
+fn absolute_dir(dir: &str) -> Result<String, CliError> {
+    let path = std::path::Path::new(dir);
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|err| CliError::Io {
+                path: dir.to_owned(),
+                message: err.to_string(),
+            })?
+            .join(path)
+    };
+    Ok(path.display().to_string())
 }
 
 /// `--script`: script click; `--mouse`: pointer (the default); not both.
@@ -277,7 +306,7 @@ fn build(verb: &'static str, flags: &mut Flags) -> Result<Request, CliError> {
     match verb {
         "open" => match p[..] {
             [url] => tool("browser_navigate", json!({"url": url})),
-            _ => usage("<url> [--launch [--headed]] [--idle <secs>] [--allow-domain <host>]... [--confirm-press <glob>]..."),
+            _ => usage("<url> [--launch [--headed] [--profile <dir>]] [--idle <secs>] [--allow-domain <host>]... [--confirm-press <glob>]..."),
         },
         "snap" => {
             let format = if flags.switch("--json") { "json" } else { "text" };
@@ -1479,6 +1508,34 @@ mod tests {
         assert_eq!(parse_verb("snap", &[]).unwrap().cdp, None);
         let launch = parse_verb("open", &a(&["https://a/", "--launch", "--headed"])).unwrap();
         assert!(launch.launch && launch.headed);
+        assert_eq!(launch.profile, None);
+        let kept = parse_verb(
+            "open",
+            &a(&["https://a/", "--launch", "--profile", "/p/shop"]),
+        )
+        .unwrap();
+        assert_eq!(kept.profile.as_deref(), Some("/p/shop"));
+        let relative =
+            parse_verb("open", &a(&["https://a/", "--launch", "--profile", "rel"])).unwrap();
+        let expect = std::env::current_dir().unwrap().join("rel");
+        assert_eq!(relative.profile.as_deref(), Some(expect.to_str().unwrap()));
+        for args in [
+            &["https://a/", "--profile", "/p"][..],
+            &[
+                "https://a/",
+                "--launch",
+                "--cdp",
+                "http://x",
+                "--profile",
+                "/p",
+            ][..],
+        ] {
+            let err = parse_verb("open", &a(args)).unwrap_err();
+            assert!(
+                err.to_string().contains("--profile needs --launch"),
+                "{err}"
+            );
+        }
         assert_eq!(launch.idle_secs, None);
         let idle = parse_verb("open", &a(&["https://a/", "--launch", "--idle", "90"])).unwrap();
         assert_eq!(idle.idle_secs, Some(90));

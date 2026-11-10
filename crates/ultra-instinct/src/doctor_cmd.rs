@@ -14,10 +14,15 @@ use ultra_instinct_browser::launch::{self, ChromeProcess, LaunchError, LaunchOpt
 
 use crate::CliError;
 
-/// Start a Chrome owned by the caller (`run --launch`): killed on drop.
-pub(crate) fn launch_chrome(headed: bool) -> Result<ChromeProcess, CliError> {
+/// Start a Chrome owned by the caller (`run --launch`): killed on drop; on
+/// `profile` (kept on disk) when given, else a temp profile.
+pub(crate) fn launch_chrome(
+    headed: bool,
+    profile: Option<&std::path::Path>,
+) -> Result<ChromeProcess, CliError> {
     launch::launch(&LaunchOptions {
         headed,
+        profile_dir: profile.map(std::path::Path::to_path_buf),
         ..LaunchOptions::default()
     })
     .map_err(|err| CliError::Browser(err.to_string()))

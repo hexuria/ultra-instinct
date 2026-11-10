@@ -20,13 +20,16 @@
 //! `aui close`, and removes its socket.
 //!
 //! A verb whose socket is missing or stale spawns the daemon (this binary,
-//! detached, null stdio) and waits up to 3 s for the socket. Without
-//! `--launch` the daemon attaches to `--cdp` (default
-//! `http://127.0.0.1:9222`); when nothing answers there the error says to run
-//! `aui open --launch` or `aui doctor`. `aui open --launch [--headed]` (and
+//! detached, null stdio) and waits up to 3 s for the socket. A verb that
+//! would spawn one must name its browser: `--cdp <url>` attaches there, and
+//! with neither `--cdp` nor `--launch` it refuses ([`NO_BROWSER`]) instead
+//! of guessing a port, which could be the user's own Chrome; when nothing
+//! answers at `--cdp` the error says to run `aui open --launch` or `aui
+//! doctor`. `aui open --launch [--headed] [--profile <dir>]` (and
 //! no `--cdp`) makes the daemon start its own Chrome once, right after it
 //! binds its socket; that Chrome lives exactly as long as the daemon
-//! (`close`, idle exit and daemon exit all end it). A failed launch answers
+//! (`close`, idle exit and daemon exit all end it); with `--profile` it
+//! runs on that profile folder, which stays on disk. A failed launch answers
 //! the waiting verb with the launch error, unchanged, and the daemon exits.
 //! `--idle`, `--allow-domain` and `--confirm-press` are start-time settings
 //! like `--launch`: a running session refuses them.
@@ -109,6 +112,9 @@ pub struct Verb {
     pub launch: bool,
     /// `--headed` (with `--launch`).
     pub headed: bool,
+    /// `--profile <dir>` (with `--launch`), absolute: the launched Chrome's
+    /// user-data dir, kept on disk.
+    pub profile: Option<String>,
     /// `--idle <secs>` (`open` only): the spawned daemon's idle exit.
     pub idle_secs: Option<u64>,
 }
@@ -126,6 +132,19 @@ impl Verb {
             || self.launch
             || self.idle_secs.is_some()
     }
+}
+
+/// The refusal of a verb that would start a session with no browser named.
+pub(crate) const NO_BROWSER: &str = "no browser named for a new session: \
+pass --launch (its own Chrome; --profile <dir> keeps a profile) or --cdp <url> \
+(a Chrome you started with --remote-debugging-port and its own --user-data-dir)";
+
+/// How the daemon starts its own Chrome (`--launch`).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Launch {
+    pub headed: bool,
+    /// `--profile <dir>`: the user-data dir, kept on disk.
+    pub profile: Option<String>,
 }
 
 /// An `--idle` value: whole seconds, 1 to [`MAX_IDLE_SECS`].
@@ -160,7 +179,8 @@ pub(crate) fn verb_command(verb: &str, args: &[String]) -> Result<String, CliErr
     imp::run_verb(&parsed)
 }
 
-/// `aui daemon --session <name> [--cdp <url>] [--launch [--headed]] [--idle <secs>]` (hidden).
+/// `aui daemon --session <name> (--cdp <url> | --launch [--headed] [--profile <dir>])
+/// [--idle <secs>]` (hidden).
 pub(crate) fn daemon_command(args: &[String]) -> Result<String, CliError> {
     let mut flags = crate::verbs::Flags::scan(args)?;
     let session = SessionName::parse(
@@ -172,6 +192,7 @@ pub(crate) fn daemon_command(args: &[String]) -> Result<String, CliError> {
     let cdp = flags.one("--cdp")?;
     let launch = flags.switch("--launch");
     let headed = flags.switch("--headed");
+    let profile = flags.one("--profile")?;
     let idle = flags
         .one("--idle")?
         .map(|raw| parse_idle(&raw))
@@ -181,11 +202,13 @@ pub(crate) fn daemon_command(args: &[String]) -> Result<String, CliError> {
     if let Some(extra) = flags.positional().first() {
         return Err(CliError::UnknownFlag(extra.clone()));
     }
+    if cdp.is_none() && !launch {
+        return Err(CliError::Config(NO_BROWSER.into()));
+    }
     imp::serve_session(
         &session,
         cdp.as_deref(),
-        launch,
-        headed,
+        launch.then_some(Launch { headed, profile }),
         std::time::Duration::from_secs(idle),
     )?;
     Ok(String::new())
@@ -462,16 +485,16 @@ mod imp {
     pub(super) fn serve_session(
         session: &SessionName,
         cdp: Option<&str>,
-        launch: bool,
-        headed: bool,
+        launch: Option<super::Launch>,
         idle: Duration,
     ) -> Result<(), CliError> {
         // Bind first: the spawning verb is already waiting on this socket,
         // and a launch can take longer than its 3 s spawn wait.
         let daemon = Daemon::bind(&socket_path(session))?;
         let chrome = match (launch, cdp) {
-            (true, None) => match launch::launch(&LaunchOptions {
-                headed,
+            (Some(own), None) => match launch::launch(&LaunchOptions {
+                headed: own.headed,
+                profile_dir: own.profile.map(std::path::PathBuf::from),
                 ..LaunchOptions::default()
             }) {
                 Ok(chrome) => Some(chrome),
@@ -486,7 +509,10 @@ mod imp {
         let endpoint = match (&chrome, cdp) {
             (Some(chrome), _) => chrome.endpoint(),
             (None, Some(cdp)) => cdp.to_owned(),
-            (None, None) => ultra_instinct_browser::DEFAULT_CDP_HTTP.to_owned(),
+            (None, None) => {
+                serve_failure(daemon, super::NO_BROWSER, FAILURE_WAIT);
+                return Err(CliError::Config(super::NO_BROWSER.into()));
+            }
         };
         let mut owned = Owned {
             server: daemon_server(&endpoint, chrome.is_none()),
@@ -585,8 +611,8 @@ mod imp {
     }
 
     /// Spawn `current_exe() daemon --session <name> [--cdp <url>] [--launch
-    /// [--headed]] [--idle <secs>]`, detached (own process group, null stdio), with the
-    /// policy env for `open`.
+    /// [--headed] [--profile <dir>]] [--idle <secs>]`, detached (own process
+    /// group, null stdio), with the policy env for `open`.
     fn spawn_daemon(verb: &Verb) -> Result<(), CliError> {
         let exe = std::env::current_exe().map_err(|err| CliError::Io {
             path: "current_exe".into(),
@@ -601,6 +627,9 @@ mod imp {
             command.arg("--launch");
             if verb.headed {
                 command.arg("--headed");
+            }
+            if let Some(profile) = &verb.profile {
+                command.args(["--profile", profile]);
             }
         }
         if let Some(secs) = verb.idle_secs {
@@ -647,7 +676,13 @@ mod imp {
                 ));
             }
         } else {
-            let spawned = connect_or_spawn(path, spawn)?;
+            // A new session must name its browser; nothing is spawned else.
+            let spawned = connect_or_spawn(path, || {
+                if verb.cdp.is_none() && !verb.launch {
+                    return Err(CliError::Config(super::NO_BROWSER.into()));
+                }
+                spawn()
+            })?;
             if verb.spawn_settings() && !spawned {
                 return Err(CliError::Config(format!(
                     "session {} is already running; --launch, --idle and its policy are set when it starts (aui close first)",
@@ -686,8 +721,7 @@ mod imp {
     pub(super) fn serve_session(
         _session: &SessionName,
         _cdp: Option<&str>,
-        _launch: bool,
-        _headed: bool,
+        _launch: Option<super::Launch>,
         _idle: std::time::Duration,
     ) -> Result<(), CliError> {
         Err(CliError::Config(UNSUPPORTED.into()))
@@ -950,7 +984,7 @@ mod tests {
             drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
             assert!(path.exists());
             let mut handle = None;
-            let snap = parse_verb("snap", &[]).unwrap();
+            let snap = parse_verb("snap", &a(&["--cdp", "http://127.0.0.1:9222"])).unwrap();
             let out = run_verb_with(&snap, &path, || {
                 handle = Some(start(&path, ScriptBuilder::new().observe_compact(&page())));
                 Ok(())
@@ -981,7 +1015,7 @@ mod tests {
         #[test]
         fn a_spawn_that_never_binds_times_out() {
             let path = path("to");
-            let snap = parse_verb("snap", &[]).unwrap();
+            let snap = parse_verb("snap", &a(&["--cdp", "http://127.0.0.1:9222"])).unwrap();
             let started = std::time::Instant::now();
             let err = run_verb_with(&snap, &path, || Ok(())).unwrap_err();
             assert!(err.to_string().contains("did not open"), "{err}");
@@ -1083,6 +1117,24 @@ mod tests {
             failing.unwrap().join().unwrap();
             assert!(!path.exists());
             let _ = std::fs::remove_dir(path.parent().unwrap());
+        }
+
+        /// A verb that would start a session with no browser named refuses
+        /// before any spawn: no default port is tried.
+        #[test]
+        fn a_new_session_with_no_browser_named_refuses_unspawned() {
+            let path = path("nb");
+            for (verb, args) in [("open", &["https://a/"][..]), ("snap", &[][..])] {
+                let parsed = parse_verb(verb, &a(args)).unwrap();
+                let err = run_verb_with(&parsed, &path, || panic!("no spawn without a browser"))
+                    .unwrap_err();
+                assert!(
+                    err.to_string().contains("no browser named")
+                        && err.to_string().contains("--launch"),
+                    "{verb}: {err}"
+                );
+            }
+            assert!(!path.exists());
         }
 
         #[test]
