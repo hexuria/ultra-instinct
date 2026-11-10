@@ -56,6 +56,19 @@ proptest! {
         prop_assert_eq!(host_of(&url), Some(h.clone()));
         let policy = Policy::from_lists(&h, "").unwrap();
         prop_assert_eq!(policy.check_url(&url), Ok(()));
+        prop_assert_eq!(policy.check_url(&format!("blob:{url}")), Ok(()));
+        // A listed host inside a URL of another scheme is not its host.
+        for wrapped in [
+            format!("data:text/html,{url}"),
+            format!("javascript:location='{url}'"),
+            format!("file:///{h}/x.html"),
+        ] {
+            prop_assert_eq!(
+                policy.check_url(&wrapped),
+                Err(GuardReason::DomainNotAllowed),
+                "{}", wrapped
+            );
+        }
         if evil != h {
             // `evil` is the host; `h` only appears after the authority ends.
             for trick in [

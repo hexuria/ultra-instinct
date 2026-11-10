@@ -68,7 +68,11 @@ Public API is 0.1 and unstable until 1.0. Toolchain pin: Rust 1.99.0
 >    after `revalidate` and the hard gate, before mark-consumed;
 >    `execute_ticketed` runs it with an empty policy. The agent also checks it
 >    after the gate; `consume_ticket_once_checked` runs it after `revalidate`,
->    before consume. An empty policy allows everything. A confirm applies to
+>    before consume. An empty policy allows everything. With an allow-list,
+>    only `http` / `https` on a listed host passes (plus `about:blank`, and
+>    a `blob:` by its origin); `data:`, `javascript:`, `file:` and other
+>    schemes refuse, and a host is read only after a real `scheme://`
+>    (`Policy::check_url`, `host_of`). A confirm applies to
 >    a press (`Policy::press_label`): the CLICK family on the target, an
 >    activating KEY (Enter / Space / NumpadEnter, any modifiers) on a
 >    button-like target (Enter on a checkbox / radio submits its form
