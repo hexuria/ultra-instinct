@@ -25,7 +25,7 @@ mod cli_execute {
             "ultra-instinct run|replay|lessons|exams|doctor|install|observe|guard|verify|mcp|skills|batch|session|open|snap|click|type|select|key|scroll|wait|shot|tabs|close|dialog|forward|reload|check|uncheck|focus|keyboard|get|is|count|state|cookies|storage|set|download|network"
         );
         assert!(
-            help.contains("open <url> [--launch [--headed]] [--idle <secs>]")
+            help.contains("open <url> [--launch [--headed] [--profile <dir>]] [--idle <secs>]")
                 && help.contains("open --idle <secs> (1 to 86400, default 3600)"),
             "{help}"
         );
