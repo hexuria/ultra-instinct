@@ -1,7 +1,7 @@
 # Plan: close the gap with agent-browser
 
 Source: a side-by-side read of this repo (main `a3e90d0`) and
-`vercel-labs/agent-browser` v0.43.0. Tracking issue: TRACKING_ISSUE.
+`vercel-labs/agent-browser` v0.43.0. Tracking issue: [#137](https://github.com/hexuria/ultra-instinct/issues/137).
 
 This plan changes as we build. Edit it in the PR that changes scope, and
 tick the matching box in the tracking issue when an item merges.
