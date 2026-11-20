@@ -478,6 +478,8 @@ impl Drop for ChromeProcess {
         if !self.temp_profile {
             ask_quit(self);
         }
+        #[cfg(windows)]
+        kill_tree(&self.child);
         let _ = self.child.kill();
         let _ = self.child.wait();
         if self.temp_profile {
@@ -517,6 +519,18 @@ fn ask_quit(chrome: &mut ChromeProcess) {
         .status()
         .is_ok_and(|status| status.success());
     wait_quit(chrome, asked);
+}
+
+/// Windows: helpers are not killed with the browser process and keep the
+/// profile open; `taskkill /T /F` ends the whole tree while its root lives.
+#[cfg(windows)]
+fn kill_tree(child: &Child) {
+    let _ = Command::new("taskkill")
+        .args(["/PID", &child.id().to_string(), "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 #[cfg(not(any(unix, windows)))]
