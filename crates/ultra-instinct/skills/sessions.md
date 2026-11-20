@@ -16,7 +16,14 @@ Chrome has open is refused. Or start Chrome first (step 2) and pass
 `--cdp http://127.0.0.1:<port>`; `--launch` with `--cdp` refuses (pick
 one). With neither, the
 verb refuses ("no browser named") rather than try port 9222, which could be
-the user's own Chrome. `open` also takes `--allow-domain`, `--confirm-press` and `--idle
+the user's own Chrome. A `--launch` session keeps its login across `aui
+close` and reopen even without `--profile`: the daemon saves
+`<state dir>/<session>.json` (0600) when it ends and restores it when the
+next daemon on that session name starts; `AUI_SESSION_STATE=0` turns it off
+and `AUI_STATE_DIR` moves the directory (default
+`~/Library/Application Support/aui` on macOS,
+`${XDG_STATE_HOME:-~/.local/state}/aui` elsewhere). `--cdp` and `--attach`
+sessions keep none. `open` also takes `--allow-domain`, `--confirm-press` and `--idle
 <secs>` (the daemon, and its Chrome, end after that long without a verb: 1 s
 to 24 h, default 60 min); these and `--launch` are fixed when the daemon
 starts, so `aui close` before you change them.

@@ -88,7 +88,7 @@ Each is a design note in this file first, then a PR. All are "ask first".
 |---|---|---|
 | P5.1 (done) | Content boundary markers around page text in tool output | Page text that imitates a tool result stays inside the markers; the marker cannot be forged from the page |
 | P5.2 (done) | `aui diff`: what changed between two snaps | Reports appeared / disappeared / changed controls on a fixture pair |
-| P5.3 | Session state auto save and restore per session name | Log in once, `aui close`, reopen: still logged in; state file is 0600 |
+| P5.3 (done) | Session state auto save and restore per session name | Log in once, `aui close`, reopen: still logged in; state file is 0600 |
 | P5.4 (done) | Proxy flag on `--launch` | Requests go through a local test proxy |
 | P5.5 | Session recording (video or frame sequence) | A run produces a playable file; secret fields are hidden in it |
 | P5.6 (done) | Action policy file: allow / deny by tool name per project | A denied tool refuses with a stable code |
@@ -122,6 +122,27 @@ one. A control is its role and label, the n-th with that pair; refs are not
 compared, because one new control shifts the refs after it. No new MCP tool:
 an MCP caller already holds both states. The comparison is
 `ultra_instinct_verbs::diff::diff_snaps`, a pure function over two snap texts.
+
+**P5.3 session state.** A `--launch` session's daemon keeps its login in
+`<state dir>/<session>.json`, in the `browser_state_*` format (cookies plus
+the last origin's storage): it loads the file when the daemon starts and
+saves it when the daemon ends, however it ends (`close`, idle, error). The
+state dir is `AUI_STATE_DIR`, else `~/Library/Application Support/aui` on
+macOS and `${XDG_STATE_HOME:-~/.local/state}/aui` elsewhere; the daemon
+makes it 0700 and the file goes through `write_state_file` (0600, atomic).
+`AUI_SESSION_STATE=0` turns the whole thing off.
+
+Cookies land before the first navigation. An origin's storage cannot be
+written until the page is on that origin, so while the state's `pending`
+list is non-empty the daemon re-runs `browser_state_load` after each
+successful `browser_navigate` / `browser_new_tab`; the first time storage is
+applied it calls `browser_reload` once so the page reads what was restored.
+A `--cdp` session keeps no auto state (its browser is the user's own, and a
+saved file could clobber its live cookies) and `--attach` cannot serve the
+state tools at all. A missing, corrupt, or policy-refused state, an
+unwritable directory, or a dead browser never stops or fails the session:
+every step is best-effort through the same `browser_state_*` tools a verb
+would call, so the tool policy still applies.
 
 **P5.4 proxy.** `--proxy scheme://host:port` on `aui open --launch` and
 `aui run --launch` becomes Chrome's `--proxy-server`
