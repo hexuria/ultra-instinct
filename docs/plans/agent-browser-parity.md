@@ -74,11 +74,11 @@ daemon is unix-socket only).
 
 | Id | Item | Done-check | Needs |
 |---|---|---|---|
-| P4.1 | README usage-first: install, the six-line quick start, safety, links. Diagrams and the crate table move to `docs/architecture.md` | README is under 150 lines and its quick start runs as written | P1.2 |
+| P4.1 (done) | README usage-first: install, the six-line quick start, safety, links. Diagrams and the crate table move to `docs/architecture.md` | README is under 150 lines and its quick start runs as written | P1.2 |
 | P4.2 (done) | AGENTS.md becomes an index; each anti-drift rule moves to `docs/boundaries/<name>.md` unchanged in meaning | Every rule number still resolves; `check_repo_rules.sh` passes | |
 | P4.3 (done) | Skill: `skills/ultra-instinct/SKILL.md` is a thin stub that says to run `aui skills get core`; add `aui skills get core --ref <name>` for commands, safety, sessions | `aui skills list` shows the references; the stub has no verb details | P2.6 |
 | P4.4 (done) | Live Chrome smoke job in CI: a small set of the `#[ignore]` tests against headless Chrome | The job is green on main and fails when a verb is broken on purpose | |
-| P4.5 | Split the verb layer out of the CLI crate (the ceilings file already names it) | Both crates are under their ceilings with no ceiling raised | P2.5 |
+| P4.5 (done) | Split the verb layer out of the CLI crate (the ceilings file already names it) | Both crates are under their ceilings with no ceiling raised | P2.5 |
 
 ## Phase 5: new features
 
@@ -86,12 +86,25 @@ Each is a design note in this file first, then a PR. All are "ask first".
 
 | Id | Item | Done-check |
 |---|---|---|
-| P5.1 | Content boundary markers around page text in tool output | Page text that imitates a tool result stays inside the markers; the marker cannot be forged from the page |
+| P5.1 (done) | Content boundary markers around page text in tool output | Page text that imitates a tool result stays inside the markers; the marker cannot be forged from the page |
 | P5.2 | `aui diff`: what changed between two snaps | Reports appeared / disappeared / changed controls on a fixture pair |
 | P5.3 | Session state auto save and restore per session name | Log in once, `aui close`, reopen: still logged in; state file is 0600 |
 | P5.4 | Proxy flag on `--launch` | Requests go through a local test proxy |
 | P5.5 | Session recording (video or frame sequence) | A run produces a playable file; secret fields are hidden in it |
 | P5.6 | Action policy file: allow / deny by tool name per project | A denied tool refuses with a stable code |
+
+### Design notes
+
+**P5.1 content boundary markers.** Opt-in (`--boundary` on a verb, or
+`AUI_CONTENT_BOUNDARIES=1`), so existing scripts that parse `aui text` keep
+working. Applied where the output is flat text an agent reads: the shell
+verbs, in `ultra_instinct_verbs::verbs::render`. MCP replies are JSON, where
+page text is already one string field, so they are unchanged. The verbs
+whose whole output is page content are wrapped (`PAGE_CONTENT_TOOLS`);
+result lines of pressing verbs are not, except the page `--snap` prints after one. The marker carries 128 random bits
+drawn after the page text was read, new for every output, so a page cannot
+print the closing line; if the content happens to contain the id, another is
+drawn.
 
 ## Not planned
 

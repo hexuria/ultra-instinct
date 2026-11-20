@@ -93,7 +93,8 @@ const VALUE_FLAGS: [&str; 24] = [
 ];
 
 /// Flags that take no value.
-const SWITCHES: [&str; 16] = [
+const SWITCHES: [&str; 17] = [
+    "--boundary",
     "--landscape",
     "--background",
     "--snap",
@@ -250,6 +251,8 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         .one("--max-output")?
         .map(|raw| number::<usize>("--max-output", &raw))
         .transpose()?;
+    let boundary = flags.switch("--boundary")
+        || std::env::var("AUI_CONTENT_BOUNDARIES").is_ok_and(|v| !v.trim().is_empty());
     let (mut allow_domains, mut confirm_press) = (Vec::new(), Vec::new());
     let (mut launch, mut headed, mut idle_secs, mut profile) = (false, false, None, None);
     let mut attach = false;
@@ -312,7 +315,63 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         profile,
         idle_secs,
         attach,
+        boundary,
     })
+}
+
+/// Tools whose reply is page content: text a page author controls.
+const PAGE_CONTENT_TOOLS: [&str; 12] = [
+    "browser_get_state",
+    "browser_get_text",
+    "browser_get_html",
+    "browser_extract_content",
+    "browser_find",
+    "browser_read_console",
+    "browser_read_network",
+    "browser_exec",
+    "browser_get",
+    "browser_get_dropdown_options",
+    "browser_list_tabs",
+    "browser_dialog",
+];
+
+/// 128 random bits as hex, from the OS-seeded keys of two `RandomState`s.
+/// Fresh for every output, so a page cannot know it when it is rendered.
+fn nonce() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let word = || {
+        std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish()
+    };
+    format!("{:016x}{:016x}", word(), word())
+}
+
+/// `content` between two marker lines carrying a fresh id that does not
+/// occur in it. Everything between them is page data, never instructions.
+fn bounded(content: &str) -> String {
+    let mut id = nonce();
+    while content.contains(&id) {
+        id = nonce();
+    }
+    let newline = if content.ends_with('\n') { "" } else { "\n" };
+    format!("<<<page-content {id}>>>\n{content}{newline}<<<end page-content {id}>>>\n")
+}
+
+/// The verb's output. With `--boundary` page content sits inside
+/// boundary markers: a reading verb's whole output, and the page an input
+/// verb prints after itself with `--snap`. A page that prints a marker of
+/// its own cannot close the block: it does not have this output's id.
+pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
+    let out = render_plain(verb, reply)?;
+    let page_content = matches!(
+        &verb.request,
+        Request::Tool { name, .. } if PAGE_CONTENT_TOOLS.contains(name)
+    );
+    match verb.boundary && page_content {
+        true => Ok(bounded(&out)),
+        false => Ok(out),
+    }
 }
 
 /// `--script`: script click; `--mouse`: pointer (the default); not both.
@@ -880,7 +939,7 @@ fn dropped(body: &Value) -> String {
     out
 }
 
-pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
+fn render_plain(verb: &Verb, reply: &str) -> Result<String, CliError> {
     let reply: Value = serde_json::from_str(reply)
         .map_err(|err| CliError::Browser(format!("bad daemon reply: {err}")))?;
     if let Some(error) = reply.get("error") {
@@ -1136,6 +1195,7 @@ pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
     };
     // `--snap`: the page after the input, like `aui snap` prints it.
     match (&body["state"], &body["state_error"]) {
+        (Value::String(state), _) if verb.boundary => Ok(format!("{line}\n{}", bounded(state))),
         (Value::String(state), _) => Ok(format!("{line}\n{state}\n")),
         (_, Value::Null) => Ok(format!("{line}\n")),
         (_, error) => Ok(format!(

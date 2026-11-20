@@ -126,6 +126,9 @@ pub struct Verb {
     /// `--attach` (`open` only): the spawned daemon drives the user's own
     /// Chrome through its remote-debugging toggle.
     pub attach: bool,
+    /// `--boundary` (or `AUI_CONTENT_BOUNDARIES`): page content in the
+    /// output sits between two marker lines the page cannot forge.
+    pub boundary: bool,
 }
 
 impl Verb {
