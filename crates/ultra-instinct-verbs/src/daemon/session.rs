@@ -729,7 +729,10 @@ pub fn send<T: Transport>(path: &Path, line: &str) -> Result<String, CliError> {
         .map_err(|err| io_err(path, err))?;
     let mut conn = Conn::new(&mut stream);
     conn.write_line(line).map_err(|err| io_err(path, err))?;
-    conn.write_line("").map_err(|err| io_err(path, err))?;
+    // Best-effort: a daemon that stops (or fails to start) answers and
+    // closes before the blank line lands, and its reply still waits to be
+    // read.
+    let _ = conn.write_line("");
     match conn.read_line().map_err(|err| io_err(path, err))? {
         Some(reply) if !reply.trim().is_empty() => Ok(reply),
         _ => Err(CliError::Browser(
