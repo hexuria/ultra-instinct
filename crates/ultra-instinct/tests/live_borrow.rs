@@ -938,3 +938,57 @@ fn text_read_html_find_and_pdf_on_a_live_page() {
         format!("✓ saved {} ({} bytes)", pdf.display(), bytes.len())
     );
 }
+
+#[test]
+#[ignore = "needs a local Chrome (aui open --launch)"]
+fn tab_eval_console_and_requests_on_a_live_page() {
+    let server = Server::start(pages);
+    let session = Session::new("tabs");
+    session.launch(&server.url("/batch2"), &[]);
+
+    assert_eq!(session.verb(&["eval", "document.title"]), "batch two\n");
+    assert_eq!(session.verb(&["eval", "({a:[1,2]})"]), "{\"a\":[1,2]}\n");
+
+    // Both readers start recording on their first call.
+    session.verb(&["console"]);
+    session.verb(&["requests"]);
+    let status = session.verb(&[
+        "eval",
+        "console.log('from the page', 2); fetch('/ping').then(function(r){return r.status})",
+    ]);
+    assert_eq!(status, "200\n");
+    let console = session.verb(&["console"]);
+    assert!(console.contains("log  \"from the page\" 2\n"), "{console}");
+    let requests = session.verb(&["requests"]);
+    assert!(
+        requests.contains(&format!("GET  200  {}\n", server.url("/ping"))),
+        "{requests}"
+    );
+
+    let first = session.verb(&["tabs"]);
+    let first = first.split_whitespace().next().unwrap().to_owned();
+    let out = session.verb(&["tab", "new", &server.url("/blank")]);
+    assert!(
+        out.starts_with("✓ new tab ") && out.contains("/blank"),
+        "{out}"
+    );
+    assert_eq!(session.verb(&["eval", "document.title"]), "blank\n");
+    let out = session.verb(&["tab", "switch", &first]);
+    assert_eq!(
+        out.trim(),
+        format!("✓ on tab {first} · {}", server.url("/batch2"))
+    );
+    assert_eq!(session.verb(&["eval", "document.title"]), "batch two\n");
+    assert_eq!(
+        session.verb(&["tab", "close", &first]).trim(),
+        format!("✓ closed tab {first}")
+    );
+    let tabs = session.verb(&["tabs"]);
+    assert!(
+        tabs.ends_with("1 tabs\n") && !tabs.contains(&first),
+        "{tabs}"
+    );
+    assert_eq!(session.verb(&["eval", "document.title"]), "blank\n");
+    let (ok, out) = session.try_verb(&["tab", "close", "zzz"]);
+    assert!(!ok && out.contains("no tab `zzz`"), "{out}");
+}

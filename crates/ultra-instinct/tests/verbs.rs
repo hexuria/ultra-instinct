@@ -885,12 +885,12 @@ const TOOL_VERBS: [(&str, VerbOrReason); 53] = [
     ("browser_get_html", Ok(("html", &[]))),
     ("browser_find", Ok(("find", &["sign"]))),
     ("browser_save_as_pdf", Ok(("pdf", &["/tmp/p.pdf"]))),
-    ("browser_new_tab", Err("plan P2.4")),
-    ("browser_switch_tab", Err("plan P2.4")),
-    ("browser_close_tab", Err("plan P2.4")),
-    ("browser_exec", Err("plan P2.4")),
-    ("browser_read_console", Err("plan P2.4")),
-    ("browser_read_network", Err("plan P2.4")),
+    ("browser_new_tab", Ok(("tab", &["new"]))),
+    ("browser_switch_tab", Ok(("tab", &["switch", "AB12CD34"]))),
+    ("browser_close_tab", Ok(("tab", &["close", "AB12CD34"]))),
+    ("browser_exec", Ok(("eval", &["1+1"]))),
+    ("browser_read_console", Ok(("console", &[]))),
+    ("browser_read_network", Ok(("requests", &[]))),
     ("browser_double_click", Err("plan P2.5")),
     ("browser_right_click", Err("plan P2.5")),
     ("browser_middle_click", Err("plan P2.5")),
@@ -1092,5 +1092,109 @@ fn text_read_html_find_pdf_print_the_tool_reply() {
             json!({"data": "JVBERg==", "path": "/tmp/p.pdf", "bytes": 4})
         ),
         "✓ saved /tmp/p.pdf (4 bytes)\n"
+    );
+}
+
+#[test]
+fn tab_eval_console_requests_parse_to_their_tools() {
+    assert_eq!(tool("tab", &["new"]), ("browser_new_tab", json!({})));
+    assert_eq!(
+        tool("tab", &["new", "https://example.com"]),
+        ("browser_new_tab", json!({"url": "https://example.com"}))
+    );
+    assert_eq!(
+        tool("tab", &["switch", "AB12CD34"]),
+        ("browser_switch_tab", json!({"tab_id": "AB12CD34"}))
+    );
+    assert_eq!(
+        tool("tab", &["close", "AB12CD34"]),
+        ("browser_close_tab", json!({"tab_id": "AB12CD34"}))
+    );
+    assert_eq!(
+        tool("eval", &["document.title"]),
+        ("browser_exec", json!({"script": "document.title"}))
+    );
+    assert_eq!(tool("console", &[]), ("browser_read_console", json!({})));
+    assert_eq!(tool("requests", &[]), ("browser_read_network", json!({})));
+    for (verb, args) in [
+        ("tab", &[][..]),
+        ("tab", &["switch"]),
+        ("tab", &["close"]),
+        ("tab", &["open", "x"]),
+        ("eval", &[]),
+        ("eval", &["a", "b"]),
+        ("console", &["x"]),
+        ("requests", &["x"]),
+    ] {
+        let err = parse_verb(verb, &a(args)).err().unwrap().to_string();
+        assert!(err.contains(&format!("usage: aui {verb}")), "{err}");
+    }
+}
+
+#[test]
+fn tab_eval_console_requests_print_short_lines() {
+    let line = |verb: &str, args: &[&str], body: Value| {
+        let verb = parse_verb(verb, &a(args)).unwrap();
+        render(&verb, &reply(&body.to_string(), false)).unwrap()
+    };
+    assert_eq!(
+        line(
+            "tab",
+            &["new", "https://example.com"],
+            json!({"tab_id": "AB12CD34EF56", "url": "https://example.com", "new_tab": true})
+        ),
+        "✓ new tab AB12CD34 · https://example.com\n"
+    );
+    assert_eq!(
+        line(
+            "tab",
+            &["switch", "AB12"],
+            json!({"active_tab": "AB12CD34EF56", "url": "https://example.com"})
+        ),
+        "✓ on tab AB12CD34 · https://example.com\n"
+    );
+    assert_eq!(
+        line(
+            "tab",
+            &["close", "AB12"],
+            json!({"closed": true, "tab_id": "AB12CD34EF56"})
+        ),
+        "✓ closed tab AB12CD34\n"
+    );
+    assert_eq!(
+        line("eval", &["document.title"], json!({"result": "Home"})),
+        "Home\n"
+    );
+    assert_eq!(
+        line("eval", &["({a:1})"], json!({"result": {"a": 1}})),
+        "{\"a\":1}\n"
+    );
+    assert_eq!(line("eval", &["void 0"], json!({"result": null})), "null\n");
+    assert_eq!(
+        line(
+            "console",
+            &[],
+            json!({"dropped": 0, "entries": [
+                {"level": "log", "text": "\"hi\" 2"},
+                {"level": "error", "text": "boom", "source": "network"}
+            ]})
+        ),
+        "log  \"hi\" 2\nerror  boom\n2 entries\n"
+    );
+    assert_eq!(
+        line(
+            "requests",
+            &[],
+            json!({"dropped": 0, "entries": [
+                {"requestId": "1", "entry": {"method": "GET", "url": "http://a/x", "status": 200}},
+                {"requestId": "2", "entry": {"method": "POST", "url": "http://a/y"}},
+                {"requestId": "3", "entry": {"method": "GET", "url": "http://a/z", "error": "net::ERR_FAILED"}}
+            ]})
+        ),
+        "GET  200  http://a/x\nPOST  -  http://a/y\nGET  net::ERR_FAILED  http://a/z\n3 requests\n"
+    );
+    assert_eq!(
+        line("requests", &[], json!({"dropped": 0, "entries": []})),
+        "0 requests\n"
     );
 }

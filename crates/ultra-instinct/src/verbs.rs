@@ -13,11 +13,11 @@ pub use crate::daemon::{Request, SessionName, Verb};
 use crate::CliError;
 
 /// Shell verbs, in usage order.
-pub const VERBS: [&str; 36] = [
+pub const VERBS: [&str; 40] = [
     "open", "snap", "click", "type", "select", "key", "scroll", "wait", "shot", "tabs", "close",
     "dialog", "forward", "reload", "check", "uncheck", "focus", "keyboard", "get", "is", "count",
     "state", "cookies", "storage", "set", "download", "network", "back", "hover", "drag", "upload",
-    "text", "read", "html", "find", "pdf",
+    "text", "read", "html", "find", "pdf", "tab", "eval", "console", "requests",
 ];
 
 /// Flags that take a value (`--flag v` or `--flag=v`).
@@ -375,6 +375,25 @@ fn build(verb: &'static str, flags: &mut Flags) -> Result<Request, CliError> {
             ),
             ["dismiss"] => tool("browser_dialog", json!({"action": "dismiss"})),
             _ => usage("[status] | accept [text] | dismiss"),
+        },
+        "tab" => match p[..] {
+            ["new"] => tool("browser_new_tab", json!({})),
+            ["new", url] => tool("browser_new_tab", json!({"url": url})),
+            ["switch", id] => tool("browser_switch_tab", json!({"tab_id": id})),
+            ["close", id] => tool("browser_close_tab", json!({"tab_id": id})),
+            _ => usage("new [url] | switch <tab> | close <tab>"),
+        },
+        "eval" => match p[..] {
+            [script] => tool("browser_exec", json!({"script": script})),
+            _ => usage("<script>"),
+        },
+        "console" => match p[..] {
+            [] => tool("browser_read_console", json!({})),
+            _ => usage(""),
+        },
+        "requests" => match p[..] {
+            [] => tool("browser_read_network", json!({})),
+            _ => usage(""),
         },
         "text" => match p[..] {
             [] => tool("browser_get_text", json!({})),
@@ -740,6 +759,12 @@ fn set(p: &[&str]) -> Result<Request, CliError> {
 
 /// Short human text for one daemon reply. A refusal or an error is `Err`
 /// (non-zero exit).
+/// The first 8 characters of a tab id: what `aui tabs` prints and
+/// `aui tab switch|close` takes.
+fn short(id: &str) -> &str {
+    id.get(..8).unwrap_or(id)
+}
+
 pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
     let reply: Value = serde_json::from_str(reply)
         .map_err(|err| CliError::Browser(format!("bad daemon reply: {err}")))?;
@@ -790,6 +815,47 @@ pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
             }
             format!("✓ seen after {secs:.1} s · {looks} looks")
         }
+        "browser_new_tab" => format!("✓ new tab {} · {}", short(&s("tab_id")), s("url")),
+        "browser_switch_tab" => {
+            format!("✓ on tab {} · {}", short(&s("active_tab")), s("url"))
+        }
+        "browser_close_tab" => format!("✓ closed tab {}", short(&s("tab_id"))),
+        "browser_exec" => match &body["result"] {
+            Value::String(text) => text.clone(),
+            other => other.to_string(),
+        },
+        "browser_read_console" => {
+            let entries = body["entries"].as_array().cloned().unwrap_or_default();
+            let mut out = String::new();
+            for entry in &entries {
+                out.push_str(&format!(
+                    "{}  {}\n",
+                    entry["level"].as_str().unwrap_or_default(),
+                    entry["text"].as_str().unwrap_or_default()
+                ));
+            }
+            out.push_str(&format!("{} entries", entries.len()));
+            out
+        }
+        "browser_read_network" => {
+            let entries = body["entries"].as_array().cloned().unwrap_or_default();
+            let mut out = String::new();
+            for row in &entries {
+                let entry = &row["entry"];
+                let outcome = match (&entry["error"], &entry["status"]) {
+                    (Value::String(error), _) => error.clone(),
+                    (_, Value::Null) => "-".to_owned(),
+                    (_, status) => status.to_string(),
+                };
+                out.push_str(&format!(
+                    "{}  {outcome}  {}\n",
+                    entry["method"].as_str().unwrap_or("-"),
+                    entry["url"].as_str().unwrap_or_default()
+                ));
+            }
+            out.push_str(&format!("{} requests", entries.len()));
+            out
+        }
         "browser_get_text" => s("text").to_owned(),
         "browser_get_html" => s("html").to_owned(),
         "browser_extract_content" => s("content").to_owned(),
@@ -814,10 +880,9 @@ pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
             let tabs = body["tabs"].as_array().cloned().unwrap_or_default();
             let mut out = String::new();
             for tab in &tabs {
-                let id = tab["tab_id"].as_str().unwrap_or_default();
                 out.push_str(&format!(
                     "{}  {}  {}\n",
-                    id.get(..8).unwrap_or(id),
+                    short(tab["tab_id"].as_str().unwrap_or_default()),
                     tab["url"].as_str().unwrap_or_default(),
                     tab["title"].as_str().unwrap_or_default()
                 ));
