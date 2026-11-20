@@ -66,8 +66,9 @@ pub const VERBS: [&str; 49] = [
 ];
 
 /// Flags that take a value (`--flag v` or `--flag=v`).
-const VALUE_FLAGS: [&str; 25] = [
+const VALUE_FLAGS: [&str; 26] = [
     "--proxy",
+    "--record",
     "--ms",
     "--scale",
     "--session",
@@ -259,6 +260,7 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
     let (mut launch, mut headed, mut idle_secs, mut profile) = (false, false, None, None);
     let mut attach = false;
     let mut proxy = None;
+    let mut record = None;
     if verb == "open" {
         allow_domains = flags.all("--allow-domain");
         confirm_press = flags.all("--confirm-press");
@@ -277,6 +279,10 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
             .one("--idle")?
             .map(|raw| crate::daemon::parse_idle(&raw))
             .transpose()?;
+        record = flags.one("--record")?;
+        if record.as_deref() == Some("") {
+            return Err(CliError::Config("--record needs a file path".into()));
+        }
     }
     for host in &allow_domains {
         ultra_instinct_guard::HostPattern::parse(host)
@@ -320,6 +326,7 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         idle_secs,
         attach,
         proxy,
+        record,
         boundary,
     })
 }
@@ -400,7 +407,7 @@ fn build(verb: &'static str, flags: &mut Flags) -> Result<Request, CliError> {
     match verb {
         "open" => match p[..] {
             [url] => tool("browser_navigate", json!({"url": url})),
-            _ => usage("<url> [--launch [--headed] [--profile <dir>] [--proxy <url>] | --attach] [--idle <secs>] [--allow-domain <host>]... [--confirm-press <glob>]..."),
+            _ => usage("<url> [--launch [--headed] [--profile <dir>] [--proxy <url>] | --attach] [--idle <secs>] [--record <file>] [--allow-domain <host>]... [--confirm-press <glob>]..."),
         },
         "snap" => {
             let format = if flags.switch("--json") { "json" } else { "text" };

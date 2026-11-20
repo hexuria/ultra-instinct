@@ -90,7 +90,7 @@ Each is a design note in this file first, then a PR. All are "ask first".
 | P5.2 (done) | `aui diff`: what changed between two snaps | Reports appeared / disappeared / changed controls on a fixture pair |
 | P5.3 (done) | Session state auto save and restore per session name | Log in once, `aui close`, reopen: still logged in; state file is 0600 |
 | P5.4 (done) | Proxy flag on `--launch` | Requests go through a local test proxy |
-| P5.5 | Session recording (video or frame sequence) | A run produces a playable file; secret fields are hidden in it |
+| P5.5 (done) | Session recording (video or frame sequence) | A run produces a playable file; secret fields are hidden in it |
 | P5.6 (done) | Action policy file: allow / deny by tool name per project | A denied tool refuses with a stable code |
 
 ### Design notes
@@ -151,6 +151,23 @@ has its own settings. The value is checked (scheme, host, port, nothing
 else) so it cannot carry another Chrome flag, and a user name or password is
 refused, because Chrome ignores one there and the request would go out
 unauthenticated. Chrome does not proxy loopback addresses.
+
+**P5.5 session recording.** `aui open --record <file>` records on any
+browser kind (`--launch`, `--cdp`, `--attach`): after each answered
+`tools/call` other than `browser_screenshot` itself, the daemon calls that
+same tool with a `path`, throttled to one frame per 400 ms, so a frame is
+the `shot` screenshot — `capture_hidden` hides sensitive field values
+around it once a secret is typed, and the tool policy still applies (a
+denied screenshot simply records nothing). Frames land in
+`<file>.frames/` as `f_000001.png` (`.jpg` when the byte cap forces the
+JPEG fallback), mode 0700. When the daemon ends, however it ends, it
+writes `index.ffconcat` (each frame held for the gap to the next) and
+`manifest.json` (paths and counts only — never page text or secrets), and
+runs `ffmpeg -f concat` into `<file>` when `ffmpeg` is on `PATH`; without
+it the frame sequence stands alone. Recording is passive: a failed frame
+is skipped, never an error, and it changes no verb's answer. The verb
+makes the frames dir and absolutizes the path before spawning, so a bad
+path fails `aui open`, not the session.
 
 ## Not planned
 

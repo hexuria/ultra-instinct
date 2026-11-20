@@ -12,6 +12,8 @@ pub mod batch;
 pub mod daemon;
 pub mod diff;
 pub mod probe;
+#[cfg(unix)]
+pub(crate) mod record;
 pub mod verbs;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

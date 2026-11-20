@@ -23,10 +23,14 @@ next daemon on that session name starts; `AUI_SESSION_STATE=0` turns it off
 and `AUI_STATE_DIR` moves the directory (default
 `~/Library/Application Support/aui` on macOS,
 `${XDG_STATE_HOME:-~/.local/state}/aui` elsewhere). `--cdp` and `--attach`
-sessions keep none. `open` also takes `--allow-domain`, `--confirm-press` and `--idle
-<secs>` (the daemon, and its Chrome, end after that long without a verb: 1 s
-to 24 h, default 60 min); these and `--launch` are fixed when the daemon
-starts, so `aui close` before you change them.
+sessions keep none. `open` also takes `--allow-domain`, `--confirm-press`,
+`--idle <secs>` (the daemon, and its Chrome, end after that long without a
+verb: 1 s to 24 h, default 60 min) and `--record <file>` (a frame of the
+page after each verb, secret fields hidden as in `aui shot`, lands in
+`<file>.frames/`; when the daemon ends, `ffmpeg` assembles them into
+`<file>` when it is on `PATH`, else the frames and `index.ffconcat` stand
+alone); these and `--launch` are fixed when the daemon starts, so
+`aui close` before you change them.
 
 `aui session` prints the session name in use; `aui session list` lists live
 sessions and removes stale sockets.
