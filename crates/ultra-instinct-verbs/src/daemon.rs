@@ -682,18 +682,15 @@ mod imp {
         }
     }
 
-    /// `ERROR_PIPE_BUSY` (a full nonblocking pipe buffer) reaches `write`
-    /// as an uncategorized OS error, not `WouldBlock`.
-    fn pipe_would_block(err: &io::Error) -> bool {
-        err.kind() == io::ErrorKind::WouldBlock || err.raw_os_error() == Some(231)
-    }
-
     impl std::io::Read for PipeStream {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             let deadline = self
                 .recv_timeout
                 .get()
                 .map(|timeout| std::time::Instant::now() + timeout);
+            // The pipe buffer is 512 bytes, so a long reply arrives in many
+            // small pieces: spin briefly before falling back to sleeps.
+            let mut spins = 0u32;
             loop {
                 match self.inner.read(buf) {
                     Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
@@ -710,23 +707,24 @@ mod imp {
                         "session pipe read timed out",
                     ));
                 }
-                std::thread::sleep(Duration::from_millis(5));
+                if spins < 1000 {
+                    spins += 1;
+                    std::thread::yield_now();
+                } else {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
             }
         }
     }
 
     impl std::io::Write for PipeStream {
+        /// A blocking write: a nonblocking pipe takes nothing (`Ok(0)`) of a
+        /// write larger than its free buffer, even once the reader drains.
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            loop {
-                match self.inner.write(buf) {
-                    Err(err) if pipe_would_block(&err) => {}
-                    // A full nonblocking pipe takes nothing and reports
-                    // success; a closed peer is an error, not Ok(0).
-                    Ok(0) if !buf.is_empty() => {}
-                    result => return result,
-                }
-                std::thread::sleep(Duration::from_millis(5));
-            }
+            IpStream::set_nonblocking(&self.inner, false)?;
+            let written = self.inner.write(buf);
+            IpStream::set_nonblocking(&self.inner, true)?;
+            written
         }
         fn flush(&mut self) -> io::Result<()> {
             self.inner.flush()
@@ -838,14 +836,17 @@ mod imp {
     /// Replace `dir`'s DACL through Windows PowerShell (always installed;
     /// the tree has no Win32 ACL binding and forbids `unsafe`).
     fn restrict_to_owner(dir: &Path) -> io::Result<()> {
+        // .NET calls only, no cmdlets: a PowerShell 7 parent's
+        // `PSModulePath` can stop Windows PowerShell loading its modules.
         const SCRIPT: &str = "$ErrorActionPreference = 'Stop'; \
             $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; \
-            $acl = New-Object System.Security.AccessControl.DirectorySecurity; \
+            $acl = [Security.AccessControl.DirectorySecurity]::new(); \
             $acl.SetSecurityDescriptorSddlForm('D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;' + $me + ')'); \
-            (Get-Item -LiteralPath $env:AUI_ACL_DIR).SetAccessControl($acl)";
+            [IO.DirectoryInfo]::new($env:AUI_ACL_DIR).SetAccessControl($acl)";
         let status = Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
             .env("AUI_ACL_DIR", dir)
+            .env_remove("PSModulePath")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -957,7 +958,7 @@ mod imp {
             std::fs::create_dir_all(&dir).unwrap();
             let path = dir.join("s.sock");
             let listener = Transport::open(&path).unwrap();
-            let size = 4 << 20;
+            let size = 1 << 20;
             let reader = {
                 let path = path.clone();
                 std::thread::spawn(move || {
@@ -1003,15 +1004,20 @@ mod imp {
                     "-NoProfile",
                     "-NonInteractive",
                     "-Command",
-                    "(Get-Acl -LiteralPath $env:AUI_ACL_DIR).Sddl",
+                    "[IO.DirectoryInfo]::new($env:AUI_ACL_DIR).GetAccessControl().Sddl",
                 ])
                 .env("AUI_ACL_DIR", &dir)
+                .env_remove("PSModulePath")
                 .output()
                 .unwrap();
             let sddl = String::from_utf8_lossy(&out.stdout);
             let _ = std::fs::remove_dir_all(&dir);
             let dacl = sddl.split("D:").nth(1).unwrap_or_default();
-            assert!(dacl.starts_with('P'), "inherited: {sddl}");
+            assert!(
+                dacl.starts_with('P'),
+                "inherited: {sddl} {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
             for other in [";WD)", ";AU)", ";BU)", ";IU)", "ID;"] {
                 assert!(!dacl.contains(other), "{other} in {sddl}");
             }
