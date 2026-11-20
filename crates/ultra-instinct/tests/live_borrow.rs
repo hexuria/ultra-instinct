@@ -1050,3 +1050,55 @@ fn clicks_hold_scrollto_zoom_and_options_on_a_live_page() {
     assert_eq!(session.verb(&["zoom", "in"]), "✓ zoom 1.25\n");
     assert_eq!(session.verb(&["zoom", "reset"]), "✓ zoom 1.0\n");
 }
+
+/// P4.1: the README quick start runs as written, in six commands or fewer.
+#[test]
+#[ignore = "needs a local Chrome (aui open --launch)"]
+fn the_readme_quick_start_runs_as_written() {
+    let readme = include_str!("../../../README.md");
+    let block = readme
+        .split_once("## Quick start\n\n```bash\n")
+        .and_then(|(_, rest)| rest.split_once("```"))
+        .map(|(block, _)| block)
+        .expect("a bash block under ## Quick start");
+    assert!(block.lines().count() <= 6, "{block}");
+    assert!(
+        block.lines().all(|line| line.starts_with("aui ")),
+        "{block}"
+    );
+    // `aui` on PATH is this build; its own TMPDIR keeps the default session
+    // apart from any other.
+    let scratch = Scratch::new("readme");
+    let bin = scratch.path("bin");
+    std::fs::create_dir_all(&bin).expect("bin dir");
+    std::os::unix::fs::symlink(aui(), bin.join("aui")).expect("link aui");
+    let tmp = scratch.path("tmp");
+    std::fs::create_dir_all(&tmp).expect("tmp dir");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = Command::new("sh")
+        .args(["-e", "-c", block])
+        .env("PATH", path)
+        .env("TMPDIR", &tmp)
+        .output()
+        .expect("run the quick start");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    println!("{text}");
+    assert!(out.status.success(), "{text}");
+    for seen in [
+        "@e1 textbox \"Name\"",
+        "@e2 button \"Greet\"",
+        "✓ ticket 2 · state-changed",
+        "Hi Ada  data:",
+        "✓ daemon stopped",
+    ] {
+        assert!(text.contains(seen), "{seen}: {text}");
+    }
+}
