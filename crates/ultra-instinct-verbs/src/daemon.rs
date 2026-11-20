@@ -718,17 +718,40 @@ mod imp {
     }
 
     impl std::io::Write for PipeStream {
-        /// A blocking write: a nonblocking pipe takes nothing (`Ok(0)`) of a
-        /// write larger than its free buffer, even once the reader drains.
+        /// Writes at most one pipe buffer at a time: a nonblocking pipe
+        /// takes nothing (`Ok(0)`) of a write larger than its free buffer,
+        /// so a larger one would never land however fast the reader drains.
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            IpStream::set_nonblocking(&self.inner, false)?;
-            let written = self.inner.write(buf);
-            IpStream::set_nonblocking(&self.inner, true)?;
-            written
+            let chunk = &buf[..buf.len().min(PIPE_CHUNK)];
+            let mut spins = 0u32;
+            loop {
+                match self.inner.write(chunk) {
+                    Err(err) if pipe_would_block(&err) => {}
+                    // A full pipe takes nothing and reports success; a
+                    // closed peer is an error, not Ok(0).
+                    Ok(0) if !chunk.is_empty() => {}
+                    result => return result,
+                }
+                if spins < 1000 {
+                    spins += 1;
+                    std::thread::yield_now();
+                } else {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
         }
         fn flush(&mut self) -> io::Result<()> {
             self.inner.flush()
         }
+    }
+
+    /// The pipe buffer size (interprocess's default buffer hint).
+    const PIPE_CHUNK: usize = 512;
+
+    /// `ERROR_PIPE_BUSY` (a full nonblocking pipe buffer) reaches `write`
+    /// as an uncategorized OS error, not `WouldBlock`.
+    fn pipe_would_block(err: &io::Error) -> bool {
+        err.kind() == io::ErrorKind::WouldBlock || err.raw_os_error() == Some(231)
     }
 
     impl session::Transport for Transport {
