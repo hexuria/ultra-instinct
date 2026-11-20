@@ -1084,7 +1084,6 @@ fn launch_proxy_sends_requests_through_the_proxy() {
         "{command}"
     );
 }
-||||||| 09d4e5e
 
 /// P4.1: the README quick start runs as written, in six commands or fewer.
 #[test]
