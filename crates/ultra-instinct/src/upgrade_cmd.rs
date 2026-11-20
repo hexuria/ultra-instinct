@@ -3,7 +3,8 @@
 //! Same steps as `scripts/install.sh`, in the directory the running binary
 //! is in: download the archive for this build's target and the release's
 //! `SHA256SUMS`, refuse on a checksum mismatch, then rename the new `aui` and
-//! `ultra-instinct` over the old ones. The tree carries no HTTP client: the
+//! `ultra-instinct` over the old ones (on Windows the running old ones are
+//! renamed aside first). The tree carries no HTTP client: the
 //! download is `curl`, the unpack is `tar`, the digest is `sha256sum`,
 //! `shasum` or Windows' `certutil`.
 
@@ -122,6 +123,41 @@ fn fetch(url: &str, target: &str, scratch: &Path) -> Result<PathBuf, CliError> {
     Ok(scratch.join(format!("aui-{target}")))
 }
 
+/// Rename `new` over `old`. Windows cannot overwrite a running image (this
+/// process's own, or a session daemon's) but can rename it, so the old file
+/// moves into `scratch` first and stays there until nothing runs it.
+fn replace(new: &Path, old: &Path, scratch: &Path) -> Result<(), CliError> {
+    let cannot = |err: std::io::Error| fail(format!("cannot replace {}: {err}", old.display()));
+    if cfg!(windows) {
+        let name = old.file_name().unwrap_or_default().to_string_lossy();
+        let aside = scratch.join(format!("{name}.old"));
+        std::fs::rename(old, &aside).map_err(cannot)?;
+        if let Err(err) = std::fs::rename(new, old) {
+            let _ = std::fs::rename(&aside, old);
+            return Err(cannot(err));
+        }
+        return Ok(());
+    }
+    std::fs::rename(new, old).map_err(cannot)
+}
+
+/// Scratch dirs an earlier Windows upgrade left behind: the old binaries a
+/// running process still held. Best-effort; a still-held one stays.
+fn remove_stale_scratch(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".aui-upgrade-")
+        {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 pub(crate) fn upgrade_command(args: &[String]) -> Result<String, CliError> {
     let version = match args {
         [] => None,
@@ -153,6 +189,9 @@ pub(crate) fn upgrade_command(args: &[String]) -> Result<String, CliError> {
             dir.display()
         )));
     }
+    if cfg!(windows) {
+        remove_stale_scratch(dir);
+    }
     // Beside the binaries, so the final rename stays on one filesystem.
     let scratch = dir.join(format!(".aui-upgrade-{}", std::process::id()));
     std::fs::create_dir(&scratch)
@@ -160,9 +199,7 @@ pub(crate) fn upgrade_command(args: &[String]) -> Result<String, CliError> {
     let done = fetch(&url, &target, &scratch).and_then(|unpacked| {
         let before = env!("CARGO_PKG_VERSION");
         for bin in &installed {
-            let old = dir.join(bin);
-            std::fs::rename(unpacked.join(bin), &old)
-                .map_err(|err| fail(format!("cannot replace {}: {err}", old.display())))?;
+            replace(&unpacked.join(bin), &dir.join(bin), &scratch)?;
         }
         let after = run(
             &dir.join(installed[0]).display().to_string(),
