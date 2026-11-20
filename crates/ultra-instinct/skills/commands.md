@@ -6,7 +6,7 @@ A reference of `aui skills get core`. Read the core guide first.
 |---|---|
 | `open <url>` | navigate the session's tab (spawns the daemon) |
 | `snap [--json]` | read the page |
-| `diff` | look again and print only what changed since your last `snap` or `diff`: `+` a new control (with its ref), `-` one that left, `~` one whose state changed, `page:` a new title or URL; the refs are the new look's |
+| `diff` | look again and print only what changed since your last `snap` or `diff`: `+` a new control (with its ref), `-` one that left, `~` one whose state changed, `page:` a new title or URL, `=` an unchanged control whose ref moved `(was @eN)`; refs now mean this look, so use the refs it prints |
 | `click <ref> [--confirm <label>] [--script]` | ticketed click: a real pointer press at the center, like a person; `--script` sends a DOM script click instead |
 | `type <ref> <text>` | set a field's text; the value is read back |
 | `select <ref> <option>` | pick one option of a `<select>` |

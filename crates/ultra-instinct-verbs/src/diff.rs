@@ -39,11 +39,14 @@ fn controls(text: &str) -> Vec<((&str, usize), &str)> {
 
 /// The changes from snap `before` to snap `after`, one line each:
 /// `+` a control that appeared (with its new ref), `-` one that went away,
-/// `~` one whose state changed, `page:` a new title or URL. The last line
-/// counts them and carries the new snapshot id.
-pub fn diff_snaps(before: &str, after: &str) -> String {
+/// `~` one whose state changed, `page:` a new title or URL, and `=` an
+/// unchanged control whose ref moved (refs now mean the new look, so an old
+/// ref would press another control). The last line counts the changes and
+/// carries the new snapshot id.
+pub fn diff_snaps<'a>(before: &'a str, after: &'a str) -> String {
     let (old, new) = (controls(before), controls(after));
     let mut out = String::new();
+    let mut moved = String::new();
     let mut count = 0usize;
     let (was, is) = (before.lines().next(), after.lines().next());
     if was != is {
@@ -59,7 +62,15 @@ pub fn diff_snaps(before: &str, after: &str) -> String {
             None => out.push_str(&format!("+ {line}\n")),
             Some((_, earlier)) => {
                 let (then, now) = (control(earlier), control(line));
+                let reference = |line: &'a str| line.split(' ').next().unwrap_or_default();
+                let was = match reference(earlier) == reference(line) {
+                    true => String::new(),
+                    false => format!("  (was {})", reference(earlier)),
+                };
                 if then == now {
+                    if !was.is_empty() {
+                        moved.push_str(&format!("= {line}{was}\n"));
+                    }
                     continue;
                 }
                 let state = |side: Option<(&str, &str)>| match side {
@@ -69,7 +80,7 @@ pub fn diff_snaps(before: &str, after: &str) -> String {
                 let head = line.split_once("\"  ").map_or(*line, |(head, _)| head);
                 let quote = if head.ends_with('"') { "" } else { "\"" };
                 out.push_str(&format!(
-                    "~ {head}{quote}  {} → {}\n",
+                    "~ {head}{quote}  {} → {}{was}\n",
                     state(then),
                     state(now)
                 ));
@@ -90,9 +101,9 @@ pub fn diff_snaps(before: &str, after: &str) -> String {
         .and_then(|last| last.split_once("· ").map(|(_, id)| id))
         .unwrap_or("snapshot ?");
     match count {
-        0 => format!("no changes · {snapshot}\n"),
-        1 => format!("{out}1 change · {snapshot}\n"),
-        n => format!("{out}{n} changes · {snapshot}\n"),
+        0 => format!("{moved}no changes · {snapshot}\n"),
+        1 => format!("{out}{moved}1 change · {snapshot}\n"),
+        n => format!("{out}{moved}{n} changes · {snapshot}\n"),
     }
 }
 
@@ -121,9 +132,10 @@ mod tests {
             diff_snaps(BEFORE, after),
             "page: Cart  https://shop.example/cart → Cart (1)  https://shop.example/cart\n\
              + @e2 button \"Undo\"\n\
-             ~ @e3 checkbox \"Gift wrap\"  unchecked → checked\n\
+             ~ @e3 checkbox \"Gift wrap\"  unchecked → checked  (was @e2)\n\
              ~ @e5 textbox \"Coupon\"  value=\"\" → value=\"SAVE\"\n\
              - button \"Remove\"\n\
+             = @e4 button \"Remove\"  (was @e3)\n\
              5 changes · snapshot 4\n"
         );
     }
@@ -142,7 +154,13 @@ mod tests {
             6 controls · snapshot 4";
         assert_eq!(
             diff_snaps(BEFORE, shifted),
-            "+ @e1 button \"New\"\n1 change · snapshot 4\n"
+            "+ @e1 button \"New\"\n\
+             = @e2 link \"Home\"  (was @e1)\n\
+             = @e3 checkbox \"Gift wrap\"  unchecked  (was @e2)\n\
+             = @e4 button \"Remove\"  (was @e3)\n\
+             = @e5 button \"Remove\"  (was @e4)\n\
+             = @e6 textbox \"Coupon\"  value=\"\"  (was @e5)\n\
+             1 change · snapshot 4\n"
         );
     }
 
