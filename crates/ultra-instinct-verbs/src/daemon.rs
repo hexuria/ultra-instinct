@@ -488,6 +488,8 @@ mod imp {
         idle: Duration,
     ) -> Result<(), CliError> {
         let mut last = Instant::now();
+        // The text of the session's latest `aui snap`, for `aui diff`.
+        let mut snap = None;
         loop {
             let stream = match daemon.listener.accept() {
                 Ok((stream, _)) => stream,
@@ -501,7 +503,7 @@ mod imp {
                 Err(err) => return Err(io_err(&daemon.path, err)),
             };
             // A misbehaving client gets dropped; the daemon keeps serving.
-            if let Ok(true) = serve_connection(stream, server, cdp) {
+            if let Ok(true) = serve_connection(stream, server, cdp, &mut snap) {
                 return Ok(());
             }
             last = Instant::now();
@@ -513,6 +515,7 @@ mod imp {
         stream: UnixStream,
         server: &mut ultra_instinct_mcp::Server,
         cdp: &str,
+        snap: &mut Option<String>,
     ) -> io::Result<bool> {
         stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_secs(10)))?;
@@ -532,11 +535,82 @@ mod imp {
                 writeln!(writer, "{reply}")?;
                 return Ok(true);
             }
+            let (value, diff, cut) = take_diff(value);
             if let Some(reply) = server.handle_line(&value.to_string()) {
-                writeln!(writer, "{reply}")?;
+                writeln!(writer, "{}", note_snap(&value, reply, diff, cut, snap))?;
             }
         }
         Ok(false)
+    }
+
+    /// `aui diff` is a text `browser_get_state` with `diff: true`: the
+    /// request without that flag, whether it was set, and its `max_chars`
+    /// (`--max-output`), taken off so the look that is compared is whole.
+    fn take_diff(mut request: Value) -> (Value, bool, Option<usize>) {
+        let Some(arguments) = request["params"]["arguments"].as_object_mut() else {
+            return (request, false, None);
+        };
+        if arguments.remove("diff") != Some(Value::Bool(true)) {
+            return (request, false, None);
+        }
+        let cut = arguments.remove("max_chars").and_then(|max| max.as_u64());
+        (request, true, cut.map(|max| max as usize))
+    }
+
+    /// Remember the text of a `browser_get_state` reply as the session's
+    /// latest snap. For `aui diff`, the reply's text becomes the changes
+    /// since the snap before it (an error when there was none).
+    fn note_snap(
+        request: &Value,
+        reply: String,
+        diff: bool,
+        cut: Option<usize>,
+        snap: &mut Option<String>,
+    ) -> String {
+        let params = &request["params"];
+        if params["name"] != "browser_get_state" || params["arguments"]["format"] != "text" {
+            return reply;
+        }
+        let Ok(mut body) = serde_json::from_str::<Value>(&reply) else {
+            return reply;
+        };
+        let result = &mut body["result"];
+        let Some(text) = result["content"][0]["text"].as_str().map(str::to_owned) else {
+            return reply;
+        };
+        if result["isError"] == true {
+            return reply;
+        }
+        // A snap cut by `--max-output` is no baseline: its missing controls
+        // would read as gone.
+        if params["arguments"].get("max_chars").is_some() {
+            *snap = None;
+            return reply;
+        }
+        let before = snap.replace(text.clone());
+        if !diff {
+            return reply;
+        }
+        match before {
+            Some(before) => {
+                let changes = crate::diff::diff_snaps(&before, &text);
+                let mut shown = changes.trim_end().to_owned();
+                if let Some((at, _)) = cut.and_then(|max| shown.char_indices().nth(max)) {
+                    shown.truncate(at);
+                    shown.push_str("\n… cut by --max-output; run aui snap for the refs");
+                }
+                result["content"][0]["text"] = json!(shown);
+            }
+            None => {
+                result["content"][0]["text"] = json!(json!({
+                    "code": "snapshot_required",
+                    "message": "no earlier aui snap to compare with",
+                })
+                .to_string());
+                result["isError"] = json!(true);
+            }
+        }
+        body.to_string()
     }
 
     /// A daemon that could not start: answer the first request that arrives

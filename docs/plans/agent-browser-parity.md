@@ -87,7 +87,7 @@ Each is a design note in this file first, then a PR. All are "ask first".
 | Id | Item | Done-check |
 |---|---|---|
 | P5.1 (done) | Content boundary markers around page text in tool output | Page text that imitates a tool result stays inside the markers; the marker cannot be forged from the page |
-| P5.2 | `aui diff`: what changed between two snaps | Reports appeared / disappeared / changed controls on a fixture pair |
+| P5.2 (done) | `aui diff`: what changed between two snaps | Reports appeared / disappeared / changed controls on a fixture pair |
 | P5.3 | Session state auto save and restore per session name | Log in once, `aui close`, reopen: still logged in; state file is 0600 |
 | P5.4 | Proxy flag on `--launch` | Requests go through a local test proxy |
 | P5.5 | Session recording (video or frame sequence) | A run produces a playable file; secret fields are hidden in it |
@@ -114,6 +114,14 @@ keeps its own limits) and its existing `tool_not_allowed` code. Unknown
 names and keys are errors. Only the CLI looks in the working directory
 (`aui mcp`, and `aui open`, which checks the file and hands its path to the
 daemon); an embedding host calls `with_tool_policy` itself.
+
+**P5.2 `aui diff`.** The session daemon keeps the text of the last
+`aui snap`. `aui diff` takes a new look (a normal `browser_get_state`, so
+refs bind to it), prints the changes against the kept text and keeps the new
+one. A control is its role and label, the n-th with that pair; refs are not
+compared, because one new control shifts the refs after it. No new MCP tool:
+an MCP caller already holds both states. The comparison is
+`ultra_instinct_verbs::diff::diff_snaps`, a pure function over two snap texts.
 
 ## Not planned
 

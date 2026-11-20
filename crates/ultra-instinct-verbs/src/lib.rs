@@ -10,6 +10,7 @@
 
 pub mod batch;
 pub mod daemon;
+pub mod diff;
 pub mod probe;
 pub mod verbs;
 

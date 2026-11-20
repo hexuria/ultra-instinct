@@ -13,7 +13,8 @@ pub use crate::daemon::{Request, SessionName, Verb};
 use crate::CliError;
 
 /// Shell verbs, in usage order.
-pub const VERBS: [&str; 48] = [
+pub const VERBS: [&str; 49] = [
+    "diff",
     "open",
     "snap",
     "click",
@@ -404,6 +405,10 @@ fn build(verb: &'static str, flags: &mut Flags) -> Result<Request, CliError> {
                 _ => usage("[--json]"),
             }
         }
+        "diff" => match p[..] {
+            [] => tool("browser_get_state", json!({"format": "text", "diff": true})),
+            _ => usage(""),
+        },
         "click" => {
             let confirm = flags.one("--confirm")?;
             let mouse = click_kind(flags)?;
