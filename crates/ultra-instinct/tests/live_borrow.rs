@@ -1050,3 +1050,37 @@ fn clicks_hold_scrollto_zoom_and_options_on_a_live_page() {
     assert_eq!(session.verb(&["zoom", "in"]), "✓ zoom 1.25\n");
     assert_eq!(session.verb(&["zoom", "reset"]), "✓ zoom 1.0\n");
 }
+
+/// What the test proxy answers: Chrome asks a proxy for the absolute URL.
+fn proxied(path: &str) -> Option<(&'static str, Vec<u8>)> {
+    match path {
+        "http://proxied.test/via-proxy" => html("<title>through the proxy</title><h1>Proxied</h1>"),
+        _ => None,
+    }
+}
+
+/// P5.4: with `--launch --proxy`, the page request goes to the proxy (the
+/// host `proxied.test` does not resolve, so nothing else could answer).
+#[test]
+#[ignore = "needs a local Chrome (aui open --launch)"]
+fn launch_proxy_sends_requests_through_the_proxy() {
+    let proxy = Server::start(proxied);
+    let session = Session::new("proxy");
+    session.launch("http://proxied.test/via-proxy", &["--proxy", &proxy.base]);
+    let snap = session.verb(&["snap"]);
+    assert!(
+        snap.starts_with("through the proxy  http://proxied.test/via-proxy"),
+        "{snap}"
+    );
+    let seen = proxy.requests("http://proxied.test/via-proxy");
+    assert!(!seen.is_empty(), "the proxy saw no request");
+    assert_eq!(
+        seen[0].headers.get("host").map(String::as_str),
+        Some("proxied.test")
+    );
+    let (_, command, _) = chrome_of(&session);
+    assert!(
+        command.contains(&format!("--proxy-server={}", proxy.base)),
+        "{command}"
+    );
+}

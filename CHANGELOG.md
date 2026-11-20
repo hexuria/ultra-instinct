@@ -26,6 +26,8 @@ First release with prebuilt binaries.
 
 ### Shell verbs
 
+- `--proxy scheme://host:port` on `aui open --launch` and `aui run --launch`: the launched Chrome sends its requests through that proxy.
+
 - `aui diff`: what changed on the page since the last `aui snap`.
 
 - `--boundary` / `AUI_CONTENT_BOUNDARIES=1`: the reading verbs print page content between marker lines that carry a random id, so page text that imitates a tool result or an instruction stays visibly inside the page.

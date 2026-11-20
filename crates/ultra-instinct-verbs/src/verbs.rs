@@ -66,7 +66,8 @@ pub const VERBS: [&str; 49] = [
 ];
 
 /// Flags that take a value (`--flag v` or `--flag=v`).
-const VALUE_FLAGS: [&str; 24] = [
+const VALUE_FLAGS: [&str; 25] = [
+    "--proxy",
     "--ms",
     "--scale",
     "--session",
@@ -257,6 +258,7 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
     let (mut allow_domains, mut confirm_press) = (Vec::new(), Vec::new());
     let (mut launch, mut headed, mut idle_secs, mut profile) = (false, false, None, None);
     let mut attach = false;
+    let mut proxy = None;
     if verb == "open" {
         allow_domains = flags.all("--allow-domain");
         confirm_press = flags.all("--confirm-press");
@@ -270,6 +272,7 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
             return Err(CliError::Config("--headed needs --launch".into()));
         }
         profile = crate::daemon::launch_profile(launch, cdp.is_some(), dir.as_deref())?;
+        proxy = crate::daemon::launch_proxy(launch, flags.one("--proxy")?.as_deref())?;
         idle_secs = flags
             .one("--idle")?
             .map(|raw| crate::daemon::parse_idle(&raw))
@@ -316,6 +319,7 @@ pub fn parse_verb(verb: &str, args: &[String]) -> Result<Verb, CliError> {
         profile,
         idle_secs,
         attach,
+        proxy,
         boundary,
     })
 }
@@ -396,7 +400,7 @@ fn build(verb: &'static str, flags: &mut Flags) -> Result<Request, CliError> {
     match verb {
         "open" => match p[..] {
             [url] => tool("browser_navigate", json!({"url": url})),
-            _ => usage("<url> [--launch [--headed] [--profile <dir>] | --attach] [--idle <secs>] [--allow-domain <host>]... [--confirm-press <glob>]..."),
+            _ => usage("<url> [--launch [--headed] [--profile <dir>] [--proxy <url>] | --attach] [--idle <secs>] [--allow-domain <host>]... [--confirm-press <glob>]..."),
         },
         "snap" => {
             let format = if flags.switch("--json") { "json" } else { "text" };

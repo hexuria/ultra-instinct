@@ -122,6 +122,8 @@ struct RunArgs {
     launch: bool,
     headed: bool,
     profile: Option<String>,
+    /// `--proxy <url>` (with `--launch`): the launched Chrome's proxy.
+    proxy: Option<String>,
     /// `--allow-domain` / `--confirm-press` / `--confirm`.
     guard_policy: Policy,
 }
@@ -169,6 +171,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     let mut live_steps = false;
     let (mut launch, mut headed) = (false, false);
     let mut profile = None;
+    let mut proxy = None;
     let mut guard_policy = Policy::default();
     let mut i = 0;
     while i < args.len() {
@@ -191,6 +194,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
             "--goal" => set(&mut goal, "--goal", value("--goal")?)?,
             "--url" => set(&mut url, "--url", value("--url")?)?,
             "--profile" => set(&mut profile, "--profile", value("--profile")?)?,
+            "--proxy" => set(&mut proxy, "--proxy", value("--proxy")?)?,
             "--fixture" => set(&mut fixture, "--fixture", value("--fixture")?)?,
             "--text-model-cmd" => set(
                 &mut text_model_cmd,
@@ -300,6 +304,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     }
     let profile =
         ultra_instinct_verbs::daemon::launch_profile(launch, cdp.is_some(), profile.as_deref())?;
+    let proxy = ultra_instinct_verbs::daemon::launch_proxy(launch, proxy.as_deref())?;
     if url.is_some() && cdp.is_none() && !launch {
         return Err(CliError::UnknownFlag(
             "--url requires --cdp or --launch".into(),
@@ -358,6 +363,7 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
         launch,
         headed,
         profile,
+        proxy,
         guard_policy,
     })
 }
@@ -394,6 +400,7 @@ pub(crate) fn run_command(args: &[String]) -> Result<String, CliError> {
         true => Some(crate::doctor_cmd::launch_chrome(
             args.headed,
             args.profile.as_deref().map(std::path::Path::new),
+            args.proxy.clone(),
         )?),
         false => None,
     };
