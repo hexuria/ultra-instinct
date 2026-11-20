@@ -113,10 +113,9 @@ const SWITCHES: [&str; 16] = [
 ];
 
 /// Tools `--max-output N` gives `max_chars: N`.
-const OUTPUT_TOOLS: [&str; 7] = [
+const OUTPUT_TOOLS: [&str; 6] = [
     "browser_get_state",
     "browser_get_text",
-    "browser_get_page_text",
     "browser_get_html",
     "browser_extract_content",
     "browser_read_console",

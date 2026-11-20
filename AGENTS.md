@@ -385,7 +385,7 @@ indexes come from `browser_get_state` in reading order; `browser_click` /
 stale page refuses instead of clicking the wrong element. Page-level calls
 (navigate, scroll, screenshot, tabs) are plain CDP like browser-use's. Over MCP, `browser_screenshot` answers with an `image` content item (`image/png`) the client can show, then the metadata as text; `Server::call_tool` keeps returning the base64 in its body. `browser_screenshot` and `browser_save_as_pdf` take an optional `path` that writes the decoded file.
 Coordinate clicks are deliberately not offered. Diagnostics:
-`browser_exec`/`browser_javascript_exec` (Runtime.evaluate),
+`browser_exec` (Runtime.evaluate),
 `browser_extract_content` (deterministic DOM→markdown, no model call),
 `browser_read_console`/`browser_read_network` (CDP events buffered by the
 transport, domains enabled lazily, drained per read). The `CdpTransport`
@@ -395,8 +395,7 @@ unsolicited frames. Advanced input: `browser_right_click` /
 `browser_file_upload` go gate → ticket → `consume_ticket_once` before the
 press runs; `browser_hover`, `browser_drag` (index→index), `browser_zoom`,
 `browser_send_key`/`browser_hold_key`, `browser_save_as_pdf`,
-`browser_get_dropdown_options`/`browser_select_dropdown`,
-`browser_search`, `browser_form_input` (type alias). Every tool and `aui` verb, one line
+`browser_get_dropdown_options`/`browser_select_dropdown`. Every tool and `aui` verb, one line
 each: [`docs/tools.md`](docs/tools.md).
 
 `browser_get_state` defaults to text: a title / url line, then one line per

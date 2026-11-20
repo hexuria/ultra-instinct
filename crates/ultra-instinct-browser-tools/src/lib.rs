@@ -75,7 +75,7 @@ pub fn call(
 }
 
 /// Input tools that take `state: true`: the reply adds the page after the input and its `snapshot`.
-pub const STATE_AFTER: [&str; 21] = [
+pub const STATE_AFTER: [&str; 20] = [
     "browser_navigate",
     "browser_go_back",
     "browser_go_forward",
@@ -89,7 +89,6 @@ pub const STATE_AFTER: [&str; 21] = [
     "browser_hover",
     "browser_drag",
     "browser_type",
-    "browser_form_input",
     "browser_select_dropdown",
     "browser_send_key",
     "browser_file_upload",
