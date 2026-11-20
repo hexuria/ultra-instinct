@@ -246,8 +246,7 @@ pub trait BrowserHost {
     fn policy(&self) -> Result<&Policy, ToolError>;
 
     /// Whether the host's tool allow-list lets `tool` run. A tool that runs
-    /// another inside it (`browser_download`'s press is `browser_click`,
-    /// `browser_search` is `browser_navigate`) needs that one allowed too,
+    /// another inside it (`browser_download`'s press is `browser_click`) needs that one allowed too,
     /// checked before any CDP call ([`RUNS_INSIDE`]). Default: all.
     fn allows(&self, _tool: &str) -> bool {
         true
@@ -324,12 +323,8 @@ pub(crate) fn best_effort<R>(
 }
 
 /// Tools that run another tool inside them, and that tool: the press of
-/// `browser_download` is `browser_click`, `browser_search` is a
-/// `browser_navigate`. Each needs the inner one allowed too.
-pub const RUNS_INSIDE: [(&str, &str); 2] = [
-    ("browser_download", "browser_click"),
-    ("browser_search", "browser_navigate"),
-];
+/// `browser_download` is `browser_click`. It needs the inner one allowed too.
+pub const RUNS_INSIDE: [(&str, &str); 1] = [("browser_download", "browser_click")];
 
 /// The tool `name` runs inside it is allowed here (when it runs one), else
 /// `tool_not_allowed` naming that tool.

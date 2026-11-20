@@ -84,14 +84,15 @@ aui wait --text "Welcome" --timeout 10
 aui close                                     # stops the daemon and its Chrome
 ```
 
-MCP: run `aui mcp` as a stdio server (56 tools: `observe`, `guard`, `verify`
+MCP: run `aui mcp` as a stdio server (52 tools: `observe`, `guard`, `verify`
 and the `browser_*` tools). Index presses take the `@eN` refs
 `browser_get_state` returns.
 
 One goal, one command. `--decision` picks who chooses each step:
 `instinct` (no model), `model` (your `TEXT_MODEL_*` endpoint), `jev`, or
-`clef` / `clef-flash`; an `aui` built with the `jev` feature (as
-`install-aui.sh` builds it) defaults to `jev`. `--launch` starts a headless
+`clef` / `clef-flash`; with no flag it is `jev` when
+`TYPESAFE_API_KEY` is set and `instinct` otherwise, so a first run needs no
+key. `--launch` starts a headless
 Chrome for the run and kills it at exit; `--cdp <url>` attaches to yours
 instead.
 

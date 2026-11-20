@@ -243,8 +243,7 @@ impl Server {
     ///
     /// A tool that runs another inside it needs that one on the list too,
     /// else `tool_not_allowed` naming it, before any CDP call:
-    /// `browser_download` presses through `browser_click`, `browser_search`
-    /// navigates through `browser_navigate`.
+    /// `browser_download` presses through `browser_click`.
     pub fn with_tool_allowlist<I, S>(mut self, names: I) -> Self
     where
         I: IntoIterator<Item = S>,

@@ -161,8 +161,7 @@ Allow the reading and pressing tools a task needs (the example above).
 
 A tool that runs another inside it needs that one on the list too
 (`RUNS_INSIDE`): `browser_download`'s press is a click, so it needs
-`browser_click`; `browser_search` is a navigation, so it needs
-`browser_navigate`. Without it the call refuses ``tool_not_allowed`` naming
+`browser_click`. Without it the call refuses ``tool_not_allowed`` naming
 the inner tool (`tool: "browser_click"`) before any CDP call.
 `Server::allows(name)` answers whether a tool may run (no list set:
 everything is allowed), and `tools/list` shows only the allowed tools.
@@ -177,7 +176,7 @@ press tools the list names. `tools/list` never shows it.
 
 Leave out, unless you need them and trust the caller:
 
-- `browser_exec` / `browser_javascript_exec`: arbitrary script in the page
+- `browser_exec`: arbitrary script in the page
   (it can read any field the page holds).
 - `browser_get_html`: the whole DOM (text inputs' `value` attributes are
   dropped, but everything else is there).

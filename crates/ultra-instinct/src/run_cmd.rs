@@ -5,7 +5,7 @@
 //! ultra-instinct run --goal <text> --fixture <replay.cdp.json>   # full loop over a CDP replay
 //! ultra-instinct run --goal <text> --fixture <page.manifold>     # predict only (dry run)
 //! ultra-instinct run ... --text-model-cmd <program>   # feature `model-text`: model TYPE/SELECT payloads
-//! ultra-instinct run ... --decision jev                 # feature `jev`: JEV decides every step (default)
+//! ultra-instinct run ... --decision jev                 # feature `jev`: JEV decides every step (default when TYPESAFE_API_KEY is set)
 //! ultra-instinct run ... --decision jev --no-screenshot # JEV without the viewport screenshot
 //! ultra-instinct run ... --decision jev --no-page-text  # JEV / Clef without the page's text
 //! ultra-instinct run ... --no-derived-text            # feature `model-text`: never type values read off the page
@@ -31,7 +31,8 @@
 //! ends, after the output records the page's `final_url`. Without `--url`, it drives the first existing Chrome page. The loop is
 //! observe → policy → gate → ticket → executor (revalidate + consume) → input →
 //! observe → verify, until DONE, BLOCKED, abstain, or a bound. With the `jev`
-//! feature the default policy is JEV (System One). `--decision instinct` is the
+//! feature and `TYPESAFE_API_KEY` set the default policy is JEV (System One);
+//! with no key it is Instinct, so a first run works offline. `--decision instinct` is the
 //! offline policy: no LLM and no MCP are involved; Instinct abstains rather than
 //! guessing. `--decision pua` remains a deprecated alias for `--decision instinct`.
 //!
@@ -135,6 +136,15 @@ enum PolicyKind {
     /// Instinct first; learned-move replay next; remote last. Writes
     /// verified remote wins back into the --lessons store.
     Dojo,
+}
+
+/// The policy when `--decision` is absent: JEV when it is compiled in and
+/// its key is set, else Instinct, so a first run needs no key and no flag.
+fn default_policy(jev_key: Option<&str>) -> PolicyKind {
+    match jev_key {
+        Some(key) if cfg!(feature = "jev") && !key.trim().is_empty() => PolicyKind::Jev,
+        _ => PolicyKind::Instinct,
+    }
 }
 
 fn parse(args: &[String]) -> Result<RunArgs, CliError> {
@@ -331,10 +341,8 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
         max_steps: max_steps.unwrap_or(20),
         wait_secs,
         text_model_cmd,
-        #[cfg(feature = "jev")]
-        policy: policy.unwrap_or(PolicyKind::Jev),
-        #[cfg(not(feature = "jev"))]
-        policy: policy.unwrap_or(PolicyKind::Instinct),
+        policy: policy
+            .unwrap_or_else(|| default_policy(std::env::var("TYPESAFE_API_KEY").ok().as_deref())),
         diary,
         lessons,
         load_state,
@@ -1143,9 +1151,18 @@ mod tests {
 
     #[test]
     #[cfg(feature = "jev")]
-    fn jev_policy_is_default_and_pua_is_an_alias() {
-        let default = parse(&a(&["--goal", "Go", "--fixture", "x"])).unwrap();
-        assert_eq!(default.policy, PolicyKind::Jev);
+    fn the_default_is_jev_with_a_key_and_instinct_without() {
+        assert_eq!(default_policy(Some("key")), PolicyKind::Jev);
+        for no_key in [None, Some(""), Some("  ")] {
+            assert_eq!(default_policy(no_key), PolicyKind::Instinct);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "jev")]
+    fn an_explicit_decision_wins_and_pua_is_an_alias() {
+        let jev = parse(&a(&["--goal", "Go", "--fixture", "x", "--decision", "jev"])).unwrap();
+        assert_eq!(jev.policy, PolicyKind::Jev);
         for alias in ["instinct", "pua"] {
             let parsed = parse(&a(&["--goal", "Go", "--fixture", "x", "--policy", alias])).unwrap();
             assert_eq!(parsed.policy, PolicyKind::Instinct);

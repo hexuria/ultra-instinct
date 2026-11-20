@@ -36,7 +36,7 @@ use crate::press::{consume_error, exec_error, press_policy, refused};
 use ultra_instinct_cdp::PageTab;
 
 /// All `browser_*` tool names this module serves.
-pub const BROWSER_TOOLS: [&str; 37] = [
+pub const BROWSER_TOOLS: [&str; 33] = [
     "browser_navigate",
     "browser_new_tab",
     "browser_go_back",
@@ -44,7 +44,6 @@ pub const BROWSER_TOOLS: [&str; 37] = [
     "browser_get_state",
     "browser_get_html",
     "browser_get_text",
-    "browser_get_page_text",
     "browser_screenshot",
     "browser_scroll",
     "browser_scroll_to",
@@ -56,21 +55,18 @@ pub const BROWSER_TOOLS: [&str; 37] = [
     "browser_hover",
     "browser_drag",
     "browser_type",
-    "browser_form_input",
     "browser_send_key",
     "browser_hold_key",
     "browser_file_upload",
     "browser_save_as_pdf",
     "browser_get_dropdown_options",
     "browser_select_dropdown",
-    "browser_search",
     "browser_zoom",
     "browser_find",
     "browser_list_tabs",
     "browser_switch_tab",
     "browser_close_tab",
     "browser_exec",
-    "browser_javascript_exec",
     "browser_extract_content",
     "browser_read_console",
     "browser_read_network",
@@ -93,7 +89,7 @@ pub(crate) fn call(
         "browser_wait" => wait(server, arguments),
         "browser_get_state" => get_state(server, arguments),
         "browser_get_html" => get_html(server, arguments),
-        "browser_get_text" | "browser_get_page_text" => get_text(server, arguments),
+        "browser_get_text" => get_text(server, arguments),
         "browser_screenshot" => screenshot(server, arguments),
         "browser_scroll" => scroll(server, arguments),
         "browser_scroll_to" => scroll_to(server, arguments),
@@ -104,20 +100,19 @@ pub(crate) fn call(
         "browser_triple_click" => gated_press(server, arguments, "left", 3),
         "browser_hover" => hover(server, arguments),
         "browser_drag" => drag(server, arguments),
-        "browser_type" | "browser_form_input" => type_text(server, arguments),
+        "browser_type" => type_text(server, arguments),
         "browser_send_key" => send_key(server, arguments, 0),
         "browser_hold_key" => hold_key(server, arguments),
         "browser_file_upload" => file_upload(server, arguments),
         "browser_save_as_pdf" => save_as_pdf(server, arguments),
         "browser_get_dropdown_options" => get_dropdown_options(server, arguments),
         "browser_select_dropdown" => gated_input(server, arguments, "select"),
-        "browser_search" => search(server, arguments),
         "browser_zoom" => zoom(server, arguments),
         "browser_find" => find(server, arguments),
         "browser_list_tabs" => list_tabs(server, arguments),
         "browser_switch_tab" => switch_tab(server, arguments),
         "browser_close_tab" => close_tab(server, arguments),
-        "browser_exec" | "browser_javascript_exec" => exec(server, arguments),
+        "browser_exec" => exec(server, arguments),
         "browser_extract_content" => extract_content(server, arguments),
         "browser_read_console" => read_console(server, arguments),
         "browser_read_network" => read_network(server, arguments),
@@ -1141,23 +1136,6 @@ fn get_dropdown_options(
     outcome
 }
 
-fn search(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
-    let query = req_str(arguments, "query")?;
-    let encoded: String = query
-        .bytes()
-        .flat_map(|b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                vec![b as char]
-            }
-            b' ' => vec!['+'],
-            other => format!("%{other:02X}").chars().collect(),
-        })
-        .collect();
-    let url = format!("https://www.google.com/search?q={encoded}");
-    let args = json!({"url": url, "cdp": opt_str(arguments, "cdp")?});
-    navigate(server, &args)
-}
-
 fn zoom(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
     let factor = match opt_f64(arguments, "factor")? {
@@ -1265,7 +1243,7 @@ fn close_tab(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, T
     Ok(json!({"closed": closed, "tab_id": target.target_id}))
 }
 
-/// `browser_exec` / `browser_javascript_exec`: Runtime.evaluate, awaitPromise,
+/// `browser_exec`: Runtime.evaluate, awaitPromise,
 /// returnByValue — the raw CDP escape hatch browser-use exposes.
 fn exec(server: &mut dyn BrowserHost, arguments: &Value) -> Result<Value, ToolError> {
     let endpoint = endpoint_of(arguments)?;
@@ -1620,7 +1598,6 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             "Page title, url, and interactive elements as 1-based indexes in reading order (@e1, @e2, …) — the refs browser_click/browser_type take. Default format text: one short line per control with its value / checked / expanded / selected state (a selected tab: `selected`; aria-current: `current=page`); format json returns elements[]."
         }
         "browser_get_html" => "document.documentElement.outerHTML of the current tab.",
-        "browser_get_page_text" => "Visible text of the current tab (alias of browser_get_text).",
         "browser_get_text" => "document.body.innerText — visible page text.",
         "browser_screenshot" => {
             props.insert("path".into(), json!({"type": "string"}));
@@ -1667,7 +1644,7 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             props.insert("role".into(), json!({"type": "string"}));
             "Filter the interactive index by label text and/or role; returns matching elements with their indexes."
         }
-        "browser_exec" | "browser_javascript_exec" => {
+        "browser_exec" => {
             // `script` and `expression` are aliases; either satisfies the call.
             props.insert("script".into(), json!({"type": "string"}));
             props.insert("expression".into(), json!({"type": "string"}));
@@ -1700,12 +1677,6 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             props.insert("confirm".into(), confirm_prop());
             required.extend(["from_index", "to_index"]);
             "Press at one element's center, drag to another's, release — both by index."
-        }
-        "browser_form_input" => {
-            props.insert("index".into(), index_prop());
-            props.insert("text".into(), json!({"type": "string"}));
-            required.extend(["index", "text"]);
-            "Alias of browser_type (browser-use form_input name)."
         }
         "browser_send_key" => {
             props.insert("key".into(), json!({"type": "string"}));
@@ -1749,11 +1720,6 @@ pub(crate) fn spec(name: &str) -> (String, serde_json::Map<String, Value>, Vec<&
             props.insert("verify".into(), verify_prop());
             required.extend(["index", "text"]);
             "Select exactly one option of the <select> at an index by label/value, through the ticketed executor."
-        }
-        "browser_search" => {
-            props.insert("query".into(), json!({"type": "string"}));
-            required.push("query");
-            "Navigate the current tab to a Google results URL for query."
         }
         "browser_zoom" => {
             props.insert("factor".into(), json!({"type": "number"}));

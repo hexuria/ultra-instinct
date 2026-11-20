@@ -44,7 +44,7 @@ pub const TOOL_OBSERVE: &str = "observe";
 pub const TOOL_GUARD: &str = "guard";
 pub const TOOL_VERIFY: &str = "verify";
 
-pub const TOOLS: [&str; 56] = [
+pub const TOOLS: [&str; 52] = [
     TOOL_OBSERVE,
     TOOL_GUARD,
     TOOL_VERIFY,
@@ -55,7 +55,6 @@ pub const TOOLS: [&str; 56] = [
     "browser_get_state",
     "browser_get_html",
     "browser_get_text",
-    "browser_get_page_text",
     "browser_screenshot",
     "browser_scroll",
     "browser_scroll_to",
@@ -67,21 +66,18 @@ pub const TOOLS: [&str; 56] = [
     "browser_hover",
     "browser_drag",
     "browser_type",
-    "browser_form_input",
     "browser_send_key",
     "browser_hold_key",
     "browser_file_upload",
     "browser_save_as_pdf",
     "browser_get_dropdown_options",
     "browser_select_dropdown",
-    "browser_search",
     "browser_zoom",
     "browser_find",
     "browser_list_tabs",
     "browser_switch_tab",
     "browser_close_tab",
     "browser_exec",
-    "browser_javascript_exec",
     "browser_extract_content",
     "browser_read_console",
     "browser_read_network",
