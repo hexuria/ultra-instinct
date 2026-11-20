@@ -1,8 +1,8 @@
 //! Host and label matching of the user policy (`ultra_instinct_guard::policy`).
 
 use proptest::prelude::*;
+use ultra_instinct_core::protocol::GuardReason;
 use ultra_instinct_guard::{host_of, HostPattern, LabelGlob, Policy};
-use ultra_instinct_protocol::GuardReason;
 
 fn label() -> impl Strategy<Value = String> {
     "[A-Za-z0-9$]{1,8}( [A-Za-z0-9$]{1,8}){0,2}"

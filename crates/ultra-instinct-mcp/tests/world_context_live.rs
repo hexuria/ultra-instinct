@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use serde_json::json;
 use ultra_instinct_browser::{BrowserSession, CdpTransport, WebSocketTransport};
+use ultra_instinct_core::geometry::RegionState;
 use ultra_instinct_core::{LocateQuery, Role};
-use ultra_instinct_geometry::RegionState;
 use ultra_instinct_guard::{
     blocker, guard, with_front_layer, FrontLayer, GuardDecision, GuardReason, GuardRequest,
 };

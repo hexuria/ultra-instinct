@@ -228,7 +228,7 @@ fn covered_button_over_cdp_is_not_offered_or_pressed() {
             None,
             0
         ),
-        Err(ultra_instinct_protocol::GuardReason::Occluded)
+        Err(ultra_instinct_core::protocol::GuardReason::Occluded)
     );
 }
 

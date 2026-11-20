@@ -25,7 +25,7 @@ pub enum AgentError {
     /// The user's policy refused the press (`domain-not-allowed`,
     /// `needs-confirm`). Not stale; the run ends BLOCKED.
     PolicyRefused {
-        reason: ultra_instinct_protocol::GuardReason,
+        reason: ultra_instinct_core::protocol::GuardReason,
         label: String,
         /// What a domain refusal checked: the page, or a form's target.
         url: Option<String>,

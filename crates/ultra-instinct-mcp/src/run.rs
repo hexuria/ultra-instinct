@@ -27,11 +27,11 @@ use ultra_instinct_browser::{
     BrowserSession, CdpError, CdpTransport, PageDelta, PageState, ScrollDirection,
 };
 use ultra_instinct_cdp::CdpEvent;
+use ultra_instinct_core::protocol::GuardReason;
 use ultra_instinct_core::{InteractionManifold, RegionId};
 use ultra_instinct_guard::Policy;
 use ultra_instinct_policy::InstinctPolicy;
 use ultra_instinct_policy::{PageView, Screenshot};
-use ultra_instinct_protocol::GuardReason;
 
 /// Bounds for one [`run_goal`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

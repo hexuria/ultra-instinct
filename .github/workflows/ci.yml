@@ -108,6 +108,23 @@ jobs:
           path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
 
+  live-smoke:
+    name: live Chrome smoke (aui verbs against headless Chrome)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # The runner image ships Chrome; Ubuntu 24.04 blocks its sandbox's
+      # user namespaces unless this is off.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: google-chrome --version
+      # Every shell verb family once against a real page. The headed test
+      # needs a display, so it stays a local check.
+      - run: cargo test -p ultra-instinct --locked --test live_borrow -- --ignored --skip headed_launch
+
   test-macos:
     name: tests on macOS (build + nextest)
     runs-on: macos-15
@@ -162,7 +179,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [repo-rules, fmt, clippy, check-crates, test, test-macos, docs, deny, zizmor]
+    needs: [repo-rules, fmt, clippy, check-crates, test, live-smoke, test-macos, docs, deny, zizmor]
     runs-on: ubuntu-24.04
     env:
       NEEDS: ${{ toJSON(needs) }}

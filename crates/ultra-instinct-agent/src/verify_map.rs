@@ -1,6 +1,6 @@
 use ultra_instinct_browser::PageDelta;
+use ultra_instinct_core::observe::diff;
 use ultra_instinct_core::InteractionManifold;
-use ultra_instinct_observe::diff;
 
 use crate::outcome::VerificationKind;
 use crate::runtime::FieldValue;

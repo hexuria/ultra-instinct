@@ -67,7 +67,7 @@ daemon is unix-socket only).
 | P3.1 (done) | Drop the alias tools `browser_form_input`, `browser_get_page_text`, `browser_javascript_exec`, and `browser_search` (ask first: breaks MCP callers that use those names) | Tool count and docs agree; calling a dropped name returns the unknown-tool code | |
 | P3.2 (done) | Move `aui observe / guard / verify` and `replay / lessons / exams` out of the top-level help into one group each | `aui --help` fits one screen; old spellings still work or print where they went | |
 | P3.3 (done) | Delete `fixtures/*.browser-use.json` and `*.cua.json` if no test or bench reads them | `cargo nextest run --workspace` and the bench smoke pass without them | |
-| P3.4 | Fold `ultra-instinct-geometry`, `-protocol` and `-observe` into their one natural owner (ask first: they are published on crates.io and `scripts/architecture.txt` names them) | Architecture check passes; public paths re-exported or the break is in the changelog | |
+| P3.4 (done) | Fold `ultra-instinct-geometry`, `-protocol` and `-observe` into their one natural owner (ask first: they are published on crates.io and `scripts/architecture.txt` names them) | Architecture check passes; public paths re-exported or the break is in the changelog | |
 | P3.5 (done) | Replace the README hero image with one this repo owns, or drop it | README renders with no third-party link | |
 
 ## Phase 4: improve
@@ -77,7 +77,7 @@ daemon is unix-socket only).
 | P4.1 | README usage-first: install, the six-line quick start, safety, links. Diagrams and the crate table move to `docs/architecture.md` | README is under 150 lines and its quick start runs as written | P1.2 |
 | P4.2 | AGENTS.md becomes an index; each anti-drift rule moves to `docs/boundaries/<name>.md` unchanged in meaning | Every rule number still resolves; `check_repo_rules.sh` passes | |
 | P4.3 (done) | Skill: `skills/ultra-instinct/SKILL.md` is a thin stub that says to run `aui skills get core`; add `aui skills get core --ref <name>` for commands, safety, sessions | `aui skills list` shows the references; the stub has no verb details | P2.6 |
-| P4.4 | Live Chrome smoke job in CI: a small set of the `#[ignore]` tests against headless Chrome | The job is green on main and fails when a verb is broken on purpose | |
+| P4.4 (done) | Live Chrome smoke job in CI: a small set of the `#[ignore]` tests against headless Chrome | The job is green on main and fails when a verb is broken on purpose | |
 | P4.5 | Split the verb layer out of the CLI crate (the ceilings file already names it) | Both crates are under their ceilings with no ceiling raised | P2.5 |
 
 ## Phase 5: new features

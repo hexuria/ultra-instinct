@@ -4,10 +4,10 @@ use proptest::prelude::*;
 use ultra_instinct_agent::{
     execute_ticketed, AgentBuilder, AgentOutcome, ExecError, Input, MockBrowser,
 };
+use ultra_instinct_core::protocol::{GuardReason, TicketInvalid};
 use ultra_instinct_core::{parse_fixture, Action, InteractionManifold, RegionId};
 use ultra_instinct_guard::{gate, TicketLedger};
 use ultra_instinct_policy::InstinctPolicy;
-use ultra_instinct_protocol::{GuardReason, TicketInvalid};
 
 const TICKET_INVALID: [TicketInvalid; 5] = [
     TicketInvalid::WorldChanged,
@@ -201,8 +201,8 @@ proptest! {
 #[test]
 fn a_drag_ticket_releases_only_at_its_own_destination() {
     use ultra_instinct_agent::{execute_ticketed, ExecError, Input, MockBrowser};
+    use ultra_instinct_core::protocol::TicketInvalid;
     use ultra_instinct_guard::TicketLedger;
-    use ultra_instinct_protocol::TicketInvalid;
     let m = ultra_instinct_core::parse_fixture(
         "viewport w=1200 h=900\n\
          region id=card role=generic label=\"Card\" x=10 y=10 w=60 h=40 actions=drag sources=dom\n\
@@ -248,8 +248,8 @@ fn a_drag_ticket_releases_only_at_its_own_destination() {
 #[test]
 fn a_key_ticket_presses_only_its_own_key() {
     use ultra_instinct_agent::{execute_ticketed, ExecError, Input, MockBrowser};
+    use ultra_instinct_core::protocol::TicketInvalid;
     use ultra_instinct_guard::TicketLedger;
-    use ultra_instinct_protocol::TicketInvalid;
     let m = ultra_instinct_core::parse_fixture(
         "viewport w=800 h=600\n\
          region id=handle role=generic label=\"\" x=10 y=10 w=12 h=12 actions=click,drag,key sources=dom\n",
@@ -289,8 +289,8 @@ fn a_key_ticket_presses_only_its_own_key() {
 #[test]
 fn a_drag_to_a_cell_releases_only_on_its_own_cell() {
     use ultra_instinct_agent::{execute_ticketed, ExecError, Input, MockBrowser};
+    use ultra_instinct_core::protocol::TicketInvalid;
     use ultra_instinct_guard::TicketLedger;
-    use ultra_instinct_protocol::TicketInvalid;
     let m = ultra_instinct_core::parse_fixture(
         "viewport w=800 h=600\n\
          region id=svg role=image label=\"drawing\" x=0 y=50 w=160 h=160 actions=click,point sources=dom\n\
@@ -342,8 +342,8 @@ fn a_drag_to_a_cell_releases_only_on_its_own_cell() {
 #[test]
 fn a_cell_ticket_clicks_only_its_own_cell() {
     use ultra_instinct_agent::{execute_ticketed, ExecError, Input, MockBrowser};
+    use ultra_instinct_core::protocol::TicketInvalid;
     use ultra_instinct_guard::TicketLedger;
-    use ultra_instinct_protocol::TicketInvalid;
     let m = ultra_instinct_core::parse_fixture(
         "viewport w=800 h=600\n\
          region id=pad role=image label=\"canvas\" x=0 y=0 w=160 h=160 actions=point,click sources=dom\n",

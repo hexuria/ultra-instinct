@@ -9,3 +9,6 @@ rust-version.workspace = true
 description = "Domain types for the ultra-instinct interaction manifold"
 
 [dependencies]
+
+[dev-dependencies]
+proptest = "1.7"

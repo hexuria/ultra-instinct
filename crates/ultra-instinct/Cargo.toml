@@ -14,9 +14,7 @@ include = ["Cargo.toml", "src/**/*.rs", "skills/*.md", "examples/**/*.rs", "test
 ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.0"}
 ultra-instinct-browser = { path = "../ultra-instinct-browser", version = "0.1.0"}
 ultra-instinct-guard = { path = "../ultra-instinct-guard", version = "0.1.0"}
-ultra-instinct-observe = { path = "../ultra-instinct-observe", version = "0.1.0"}
 ultra-instinct-mcp = { path = "../ultra-instinct-mcp", version = "0.1.0"}
-ultra-instinct-protocol = { path = "../ultra-instinct-protocol", version = "0.1.0"}
 ultra-instinct-agent = { path = "../ultra-instinct-agent", version = "0.1.0"}
 ultra-instinct-policy = { path = "../ultra-instinct-policy", version = "0.1.0"}
 ultra-instinct-dojo = { path = "../ultra-instinct-dojo", version = "0.1.0"}

@@ -19,8 +19,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use ultra_instinct_core::observe::{
+    match_regions, structural_similarity, STRUCTURAL_MATCH_THRESHOLD,
+};
 use ultra_instinct_core::{InteractionManifold, InteractionRegion, RegionId};
-use ultra_instinct_observe::{match_regions, structural_similarity, STRUCTURAL_MATCH_THRESHOLD};
 
 use crate::error::BrowserError;
 use crate::fusion::NodeBinding;

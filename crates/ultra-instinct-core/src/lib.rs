@@ -19,6 +19,10 @@ mod region;
 mod text;
 mod vocab;
 
+pub mod geometry;
+pub mod observe;
+pub mod protocol;
+
 pub use action_space::{
     cell_center_fraction, ActionId, ActionKind, ActionSpace, DragDest, ObservedAction, KEY_NAMES,
     SURFACE_GRID,

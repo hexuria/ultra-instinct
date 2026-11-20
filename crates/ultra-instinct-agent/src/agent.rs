@@ -249,7 +249,7 @@ pub enum AgentState {
 /// A policy choice waiting for ticketed execution.
 ///
 /// There is exactly **one** staleness barrier between this prediction and page
-/// input: the [`ultra_instinct_protocol::ActionTicket`] issued by
+/// input: the [`ultra_instinct_core::protocol::ActionTicket`] issued by
 /// [`gate()`](fn@ultra_instinct_guard::gate) on [`Self::manifold`] and revalidated by
 /// [`crate::execute_ticketed`] against a fresh observation (target-scoped world
 /// fingerprint + target role / label / fingerprint). A prediction carries no
