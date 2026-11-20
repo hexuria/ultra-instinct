@@ -53,6 +53,18 @@ mod cli_execute {
         );
         assert_eq!(execute(&args(&["help", "verbs"])).unwrap(), verbs);
         assert!(execute(&args(&["help", "nope"])).is_err());
+        assert_eq!(execute(&args(&["help", "--help"])).unwrap(), short);
+        assert_eq!(
+            execute(&args(&["help", "run", "-h"])).unwrap(),
+            execute(&args(&["help", "run"])).unwrap()
+        );
+        // A misspelt group command is an error, not help with exit 0.
+        for bad in [
+            &["diary", "replayy", "--diary", "x"][..],
+            &["page", "--json"],
+        ] {
+            assert!(execute(&args(bad)).is_err(), "{bad:?}");
+        }
         // Old and grouped spellings reach the same command.
         let fixture = concat!(
             env!("CARGO_MANIFEST_DIR"),

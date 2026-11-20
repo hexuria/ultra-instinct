@@ -220,7 +220,9 @@ pub fn execute(args: &[String]) -> Result<String, CliError> {
         return Ok(usage().to_owned());
     }
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        let topic = args.iter().find(|arg| !arg.starts_with('-'));
+        let topic = args
+            .iter()
+            .find(|arg| !arg.starts_with('-') && *arg != "help");
         return help(topic.map(String::as_str));
     }
     match args[0].as_str() {
@@ -240,7 +242,8 @@ pub fn execute(args: &[String]) -> Result<String, CliError> {
             {
                 execute(&args[1..])
             }
-            _ => help(Some(&args[0])),
+            None => help(Some(&args[0])),
+            Some(other) => Err(CliError::UnknownCommand(format!("{} {other}", args[0]))),
         },
         "--version" | "-V" => {
             Ok(concat!("ultra-instinct ", env!("CARGO_PKG_VERSION"), "\n").to_owned())
