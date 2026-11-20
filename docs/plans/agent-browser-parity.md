@@ -53,7 +53,7 @@ daemon is unix-socket only).
 
 | Id | Item | Done-check | Needs |
 |---|---|---|---|
-| P2.1 | Parity test: every `browser_*` tool has an `aui` verb or an entry in a "no verb, because" list | The test fails when a tool is added with neither | |
+| P2.1 (done) | Parity test: every `browser_*` tool has an `aui` verb or an entry in a "no verb, because" list | The test fails when a tool is added with neither | |
 | P2.2 | Verbs `back`, `hover <ref>`, `drag <ref> <ref>`, `upload <ref> <path>...` | Each runs against a live page; `drag` and `upload` refuse on a stale snap | P2.1 |
 | P2.3 | Verbs `text`, `read` (extract content), `html`, `find`, `pdf <path>` | Output matches the MCP tool for the same page | P2.1 |
 | P2.4 | Verbs `tab new\|switch\|close`, `eval <script>`, `console`, `requests` | Same | P2.1 |

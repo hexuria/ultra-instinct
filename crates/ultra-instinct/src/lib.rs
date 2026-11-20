@@ -209,7 +209,7 @@ pub(crate) mod run_cmd;
 pub(crate) mod session_cmd;
 pub(crate) mod skills_cmd;
 pub(crate) mod state_cmd;
-pub(crate) mod verbs;
+pub mod verbs;
 
 // Remote transports live in `ultra-instinct-remote`; re-exported here.
 #[cfg(feature = "clef")]
