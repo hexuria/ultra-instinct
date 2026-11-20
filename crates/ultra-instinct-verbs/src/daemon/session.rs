@@ -52,6 +52,9 @@ pub trait Transport {
     /// Make `dir` usable only by this user (0700 on unix; the per-user
     /// temp/profile ACLs already do it on Windows).
     fn private_dir(dir: &Path) -> Result<(), CliError>;
+    /// Make the state directory (which may be `AUI_STATE_DIR`, anywhere)
+    /// usable only by this user: saved logins live there.
+    fn private_state_dir(dir: &Path) -> Result<(), CliError>;
     /// The per-user directory session state files live in, if any.
     fn state_dir() -> Option<PathBuf>;
     /// Bind the endpoint at `path` (the directory is already private): a
@@ -609,7 +612,7 @@ pub fn serve_session<T: Transport>(
     // Saved login back into the fresh browser before the first request;
     // the file is rewritten with the session's end state on the way out.
     let mut auto = AutoState::new(session, &endpoint, auto_enabled, || {
-        T::state_dir().filter(|dir| T::private_dir(dir).is_ok())
+        T::state_dir().filter(|dir| T::private_state_dir(dir).is_ok())
     });
     if let Some(state) = auto.as_mut() {
         state.restore(&mut owned.server);

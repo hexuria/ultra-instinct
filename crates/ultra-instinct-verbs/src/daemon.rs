@@ -523,6 +523,10 @@ mod imp {
                 .map_err(|err| session::io_err(dir, err))
         }
 
+        fn private_state_dir(dir: &Path) -> Result<(), CliError> {
+            Self::private_dir(dir)
+        }
+
         /// `$TMPDIR/aui` state files: `~/Library/Application Support/aui`
         /// on macOS, `${XDG_STATE_HOME:-~/.local/state}/aui` elsewhere.
         fn state_dir() -> Option<PathBuf> {
@@ -738,6 +742,15 @@ mod imp {
             std::fs::create_dir_all(dir).map_err(|err| session::io_err(dir, err))
         }
 
+        /// A protected DACL (nothing inherited) granting owner, SYSTEM and
+        /// administrators only, inherited by every state file: the 0700
+        /// analog, and the session pipe's SDDL. `AUI_STATE_DIR` may name a
+        /// shared directory whose inherited ACL lets other users read.
+        fn private_state_dir(dir: &Path) -> Result<(), CliError> {
+            Self::private_dir(dir)?;
+            restrict_to_owner(dir).map_err(|err| session::io_err(dir, err))
+        }
+
         /// `%LOCALAPPDATA%\aui`, the Windows `~/.local/state` analog; the
         /// per-user temp dir when `LOCALAPPDATA` is unset.
         fn state_dir() -> Option<PathBuf> {
@@ -822,6 +835,31 @@ mod imp {
         }
     }
 
+    /// Replace `dir`'s DACL through Windows PowerShell (always installed;
+    /// the tree has no Win32 ACL binding and forbids `unsafe`).
+    fn restrict_to_owner(dir: &Path) -> io::Result<()> {
+        const SCRIPT: &str = "$ErrorActionPreference = 'Stop'; \
+            $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; \
+            $acl = New-Object System.Security.AccessControl.DirectorySecurity; \
+            $acl.SetSecurityDescriptorSddlForm('D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;' + $me + ')'); \
+            (Get-Item -LiteralPath $env:AUI_ACL_DIR).SetAccessControl($acl)";
+        let status = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+            .env("AUI_ACL_DIR", dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "could not restrict its access ({status})"
+            )))
+        }
+    }
+
     /// `aui-<fnv-1a of the marker path>`: hashing the path (which lives in
     /// the per-user temp dir) keeps sessions apart across users.
     fn pipe_name(path: &Path) -> String {
@@ -902,6 +940,83 @@ mod imp {
     pub use session::socket_dir;
     #[cfg(test)]
     pub use session::{reply_ok, serve_failure, serve_on, socket_path, state_value_off};
+
+    #[cfg(test)]
+    mod tests {
+        use super::session::{SessionListener, SessionStream, Transport as _};
+        use super::*;
+        use std::io::Read;
+
+        fn dir(tag: &str) -> PathBuf {
+            std::env::temp_dir().join(format!("aui-w-{}-{tag}", std::process::id()))
+        }
+
+        #[test]
+        fn a_reply_larger_than_the_pipe_buffer_arrives_whole() {
+            let dir = dir("big");
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("s.sock");
+            let listener = Transport::open(&path).unwrap();
+            let size = 4 << 20;
+            let reader = {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let mut stream = Transport::connect(&path).unwrap();
+                    // Let the writer fill the pipe before anything drains it.
+                    std::thread::sleep(Duration::from_millis(300));
+                    stream
+                        .set_recv_timeout(Some(Duration::from_secs(10)))
+                        .unwrap();
+                    let mut got = 0;
+                    let mut chunk = vec![0u8; 64 << 10];
+                    while got < size {
+                        match stream.read(&mut chunk).unwrap() {
+                            0 => break,
+                            n => got += n,
+                        }
+                    }
+                    got
+                })
+            };
+            let mut stream = loop {
+                match SessionListener::accept(&listener) {
+                    Ok(stream) => break stream,
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(err) => panic!("{err}"),
+                }
+            };
+            stream.write_all(&vec![b'x'; size]).unwrap();
+            assert_eq!(reader.join().unwrap(), size);
+            drop(stream);
+            drop(listener);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn the_state_dir_grants_nobody_but_the_owner_system_and_admins() {
+            let dir = dir("acl");
+            Transport::private_state_dir(&dir).unwrap();
+            let out = Command::new("powershell")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "(Get-Acl -LiteralPath $env:AUI_ACL_DIR).Sddl",
+                ])
+                .env("AUI_ACL_DIR", &dir)
+                .output()
+                .unwrap();
+            let sddl = String::from_utf8_lossy(&out.stdout);
+            let _ = std::fs::remove_dir_all(&dir);
+            let dacl = sddl.split("D:").nth(1).unwrap_or_default();
+            assert!(dacl.starts_with('P'), "inherited: {sddl}");
+            for other in [";WD)", ";AU)", ";BU)", ";IU)", "ID;"] {
+                assert!(!dacl.contains(other), "{other} in {sddl}");
+            }
+        }
+    }
 }
 
 #[cfg(not(any(unix, windows)))]

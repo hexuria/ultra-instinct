@@ -149,7 +149,8 @@ Each verb talks to the session daemon on its per-session endpoint
 file plus a named pipe), which
 owns one MCP `Server`. A `--launch` session also keeps its login across
 `aui close` and reopen: the daemon restores `<state dir>/<session>.json`
-(0600 on unix, the `browser_state_*` format) when it starts and saves it when it
+(0600 in a 0700 dir on unix, an owner/SYSTEM/administrators-only dir ACL on
+Windows; the `browser_state_*` format) when it starts and saves it when it
 ends. The state dir is `AUI_STATE_DIR`, else
 `~/Library/Application Support/aui` on macOS,
 `${XDG_STATE_HOME:-~/.local/state}/aui` on Linux,
