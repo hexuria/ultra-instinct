@@ -104,3 +104,73 @@ fn a_missing_release_without_cargo_fails_and_installs_nothing() {
     assert!(!root.join("bin").exists());
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// P1.3: a copy of the built `aui` in a scratch bin directory.
+fn installed(root: &Path) -> PathBuf {
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    for name in ["aui", "ultra-instinct"] {
+        std::fs::copy(env!("CARGO_BIN_EXE_aui"), bin.join(name)).unwrap();
+    }
+    bin
+}
+
+fn upgrade(root: &Path, bin: &Path) -> Output {
+    Command::new(bin.join("aui"))
+        .args(["upgrade", "--version", "v9.9.9"])
+        .env("AUI_BASE_URL", format!("file://{}", root.display()))
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn upgrade_replaces_the_installed_binaries_in_place() {
+    let root = release("upgrade");
+    let bin = installed(&root);
+    let out = upgrade(&root, &bin);
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.starts_with("upgraded aui + ultra-instinct in "),
+        "{stdout}"
+    );
+    assert!(
+        stdout.ends_with(&format!(": {} -> 9.9.9\n", env!("CARGO_PKG_VERSION"))),
+        "{stdout}"
+    );
+    for name in ["aui", "ultra-instinct"] {
+        let ran = Command::new(bin.join(name)).output().unwrap();
+        assert_eq!(
+            String::from_utf8(ran.stdout).unwrap(),
+            format!("{name} 9.9.9\n")
+        );
+    }
+    // Nothing but the two binaries is left behind.
+    assert_eq!(std::fs::read_dir(&bin).unwrap().count(), 2);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn upgrade_refuses_a_tampered_archive_and_keeps_the_old_binary() {
+    let root = release("upgrade-tampered");
+    sh(
+        "for a in ./*.tar.gz; do printf x >> \"$a\"; done",
+        &root.join("download/v9.9.9"),
+    );
+    let bin = installed(&root);
+    let out = upgrade(&root, &bin);
+    assert!(!out.status.success(), "{out:?}");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("checksum mismatch"), "{stderr}");
+    assert!(stderr.contains("nothing was replaced"), "{stderr}");
+    let ran = Command::new(bin.join("aui"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(ran.stdout).unwrap().trim(),
+        format!("ultra-instinct {}", env!("CARGO_PKG_VERSION"))
+    );
+    assert_eq!(std::fs::read_dir(&bin).unwrap().count(), 2);
+    std::fs::remove_dir_all(root).unwrap();
+}
