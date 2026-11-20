@@ -477,6 +477,12 @@ impl Drop for ChromeProcess {
         if self.keep_alive {
             return;
         }
+        #[cfg(windows)]
+        let helpers = if self.temp_profile {
+            String::new()
+        } else {
+            helper_snapshot(self.child.id())
+        };
         if !self.temp_profile {
             ask_quit(self);
         }
@@ -484,7 +490,7 @@ impl Drop for ChromeProcess {
         if matches!(self.child.try_wait(), Ok(None)) {
             kill_tree(&self.child);
         } else {
-            kill_profile_helpers(&self.binary, &self.profile);
+            kill_helpers(&helpers);
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -539,20 +545,63 @@ fn kill_tree(child: &Child) {
         .status();
 }
 
-/// Once the root exits there is no tree to walk. Chrome cannot share a
-/// user-data-dir, so matching processes of this binary belong to this profile.
+/// Snapshot the root's descendants as pid:creation-ticks pairs while it is
+/// alive, so cleanup after exit cannot mistake a reused pid for its child.
 #[cfg(windows)]
-fn kill_profile_helpers(binary: &Path, profile: &Path) {
+fn helper_snapshot(root: u32) -> String {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    const SCRIPT: &str = r#"$ErrorActionPreference = 'Stop'; $p = $env:AUI_CHROME_PROFILE; $flag = '--user-data-dir=' + $p; Get-CimInstance Win32_Process -Filter ("Name='" + $env:AUI_CHROME_NAME.Replace("'", "''") + "'") | Where-Object { $c = [string]$_.CommandLine; $c.EndsWith($flag) -or $c.Contains($flag + ' ') -or $c.Contains($flag + '"') -or $c.Contains($p + '\') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"#;
-    let name = binary
-        .file_name()
-        .unwrap_or(binary.as_os_str())
-        .to_string_lossy();
+    const SCRIPT: &str = "$ErrorActionPreference = 'Stop'; \
+        $all = @(Get-CimInstance Win32_Process); \
+        $root = $all | Where-Object { $_.ProcessId -eq [uint32]$env:AUI_CHROME_ROOT } | Select-Object -First 1; \
+        if (-not $root) { return }; \
+        $queue = [Collections.Generic.Queue[object]]::new(); \
+        $queue.Enqueue($root); \
+        $seen = @{}; \
+        $out = @(); \
+        while ($queue.Count) { \
+            $parent = $queue.Dequeue(); \
+            foreach ($p in $all) { \
+                if ($p.ParentProcessId -eq $parent.ProcessId -and $p.CreationDate -ge $parent.CreationDate -and -not $seen.ContainsKey($p.ProcessId)) { \
+                    $seen[$p.ProcessId] = $true; \
+                    $out += \"$($p.ProcessId):$($p.CreationDate.Ticks)\"; \
+                    $queue.Enqueue($p) \
+                } \
+            } \
+        }; \
+        $out -join ' '";
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+        .env("AUI_CHROME_ROOT", root.to_string())
+        .env_remove("PSModulePath")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+    match output {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        }
+        _ => String::new(),
+    }
+}
+
+#[cfg(windows)]
+fn kill_helpers(snapshot: &str) {
+    if snapshot.is_empty() {
+        return;
+    }
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const SCRIPT: &str = "$ErrorActionPreference = 'Stop'; \
+        foreach ($entry in ($env:AUI_CHROME_HELPERS -split ' ')) { \
+            $id, $ticks = $entry -split ':'; \
+            $p = Get-CimInstance Win32_Process -Filter \"ProcessId=$id\"; \
+            if ($p -and $p.CreationDate.Ticks -eq [long]$ticks) { \
+                Stop-Process -Id $id -Force -ErrorAction SilentlyContinue \
+            } \
+        }";
     let _ = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
-        .env("AUI_CHROME_NAME", name.as_ref())
-        .env("AUI_CHROME_PROFILE", profile)
+        .env("AUI_CHROME_HELPERS", snapshot)
         .env_remove("PSModulePath")
         .stdin(Stdio::null())
         .stdout(Stdio::null())

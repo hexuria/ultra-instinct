@@ -968,22 +968,56 @@ fn close_ends_chrome_and_removes_its_temp_profile() {
 #[test]
 #[ignore = "needs a local Chrome (aui open --launch)"]
 fn close_quits_a_kept_profile_chrome_and_its_helpers() {
-    let profile = std::env::temp_dir().join(format!("aui-kept-profile-{}", std::process::id()));
+    let name = format!("aui-kept-profile-{}", std::process::id());
+    let profile = std::env::temp_dir().join(&name);
+    let sibling_profile = profile.with_file_name(format!("{name} personal"));
     let _ = std::fs::remove_dir_all(&profile);
+    let _ = std::fs::remove_dir_all(&sibling_profile);
     std::fs::create_dir_all(&profile).unwrap();
+    std::fs::create_dir_all(&sibling_profile).unwrap();
     let profile_arg = profile.to_string_lossy().into_owned();
+    let sibling_profile_arg = sibling_profile.to_string_lossy().into_owned();
     let session = Session::new("kept");
+    let session2 = Session::new("kept2");
     session.launch(
         "data:text/html,<title>kept</title>",
         &["--profile", &profile_arg],
     );
-    assert!(!using_profile(&profile).is_empty());
+    session2.launch(
+        "data:text/html,<title>kept2</title>",
+        &["--profile", &sibling_profile_arg],
+    );
+    let profile_marker = profile.to_string_lossy().into_owned();
+    let sibling_marker = sibling_profile.to_string_lossy().into_owned();
+    assert!(
+        processes().iter().any(|(_, command)| {
+            command.contains(&profile_marker) && !command.contains(&sibling_marker)
+        }),
+        "first Chrome was not started",
+    );
+    assert!(
+        !using_profile(&sibling_profile).is_empty(),
+        "second Chrome was not started",
+    );
     assert_eq!(session.verb(&["close"]).trim(), "✓ daemon stopped");
-    eventually(Duration::from_secs(15), "Chrome exits", || {
-        using_profile(&profile).is_empty()
+    eventually(Duration::from_secs(15), "first Chrome exits", || {
+        !processes().into_iter().any(|(_, command)| {
+            command.contains(&profile_marker) && !command.contains(&sibling_marker)
+        })
+    });
+    assert!(
+        !using_profile(&sibling_profile).is_empty(),
+        "closing the first session stopped the second Chrome",
+    );
+    session2.verb(&["snap"]);
+    assert_eq!(session2.verb(&["close"]).trim(), "✓ daemon stopped");
+    eventually(Duration::from_secs(15), "second Chrome exits", || {
+        using_profile(&sibling_profile).is_empty()
     });
     assert!(profile.is_dir(), "kept profile removed");
+    assert!(sibling_profile.is_dir(), "sibling kept profile removed");
     let _ = std::fs::remove_dir_all(&profile);
+    let _ = std::fs::remove_dir_all(&sibling_profile);
 }
 
 #[test]
