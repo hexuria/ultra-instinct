@@ -122,8 +122,9 @@ jobs:
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: google-chrome --version
       # Every shell verb family once against a real page. The headed test
-      # needs a display, so it stays a local check.
-      - run: cargo test -p ultra-instinct --locked --test live_borrow -- --ignored --skip headed_launch
+      # needs a display, so it stays a local check. One Chrome at a time:
+      # the tests time Chrome's exit, which a dozen in parallel slows down.
+      - run: cargo test -p ultra-instinct --locked --test live_borrow -- --ignored --skip headed_launch --test-threads=1
 
   test-macos:
     name: tests on macOS (build + nextest)
