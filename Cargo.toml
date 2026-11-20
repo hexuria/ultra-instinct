@@ -12,6 +12,7 @@ members = [
     "crates/ultra-instinct-mcp",
     "crates/ultra-instinct-remote",
     "crates/ultra-instinct",
+    "crates/ultra-instinct-verbs",
     "crates/ultra-instinct-dojo",
 ]
 # Deleted from the product graph (product pivot):

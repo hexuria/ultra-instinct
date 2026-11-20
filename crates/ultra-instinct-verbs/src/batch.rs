@@ -78,7 +78,7 @@ struct Shared {
 }
 
 /// `aui batch …`.
-pub(crate) fn batch_command(args: &[String]) -> Result<String, CliError> {
+pub fn batch_command(args: &[String]) -> Result<String, CliError> {
     let (shared, commands) = parse(args)?;
     let commands = if commands.is_empty() {
         let mut input = String::new();

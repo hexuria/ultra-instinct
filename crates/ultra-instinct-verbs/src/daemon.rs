@@ -218,7 +218,7 @@ pub(crate) fn check_attach(
 /// a folder name, and not one of Chrome's own profiles. Returns the
 /// profile as an absolute path (the daemon does not share this shell's
 /// working directory).
-pub(crate) fn launch_profile(
+pub fn launch_profile(
     launch: bool,
     cdp: bool,
     profile: Option<&str>,
@@ -281,14 +281,14 @@ pub fn request_line(request: &Request) -> String {
 }
 
 /// `aui <verb> …`.
-pub(crate) fn verb_command(verb: &str, args: &[String]) -> Result<String, CliError> {
+pub fn verb_command(verb: &str, args: &[String]) -> Result<String, CliError> {
     let parsed = parse_verb(verb, args)?;
     imp::run_verb(&parsed)
 }
 
 /// `aui daemon --session <name> (--cdp <url> | --launch [--headed] [--profile <dir>])
 /// [--idle <secs>]` (hidden).
-pub(crate) fn daemon_command(args: &[String]) -> Result<String, CliError> {
+pub fn daemon_command(args: &[String]) -> Result<String, CliError> {
     let mut flags = crate::verbs::Flags::scan(args)?;
     let session = SessionName::parse(
         flags
@@ -327,7 +327,7 @@ pub(crate) fn daemon_command(args: &[String]) -> Result<String, CliError> {
 
 /// `aui session [--session <name>]` prints the session name;
 /// `aui session list` lists the live ones and removes stale sockets.
-pub(crate) fn session_command(args: &[String]) -> Result<String, CliError> {
+pub fn session_command(args: &[String]) -> Result<String, CliError> {
     let mut flags = crate::verbs::Flags::scan(args)?;
     let session = flags.one("--session")?;
     flags.finish()?;
@@ -363,7 +363,7 @@ pub fn connect_hint(
     err: ultra_instinct_browser::CdpError,
     cdp: &str,
 ) -> ultra_instinct_browser::CdpError {
-    if crate::doctor_cmd::probe_version(cdp).is_ok() {
+    if crate::probe::probe_version(cdp).is_ok() {
         return err;
     }
     let detail = match err {

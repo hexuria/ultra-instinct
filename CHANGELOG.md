@@ -18,6 +18,8 @@ First release with prebuilt binaries.
 
 - The crates `ultra-instinct-geometry`, `ultra-instinct-observe` and `ultra-instinct-protocol` are now modules of `ultra-instinct-core`. Replace `ultra_instinct_geometry::X` with `ultra_instinct_core::geometry::X`, and the same for `observe` and `protocol`; the item names are unchanged.
 
+- The shell verbs, the session daemon and `batch` are now the crate `ultra-instinct-verbs`. `ultra_instinct::verbs` and `ultra_instinct::CliError` are re-exported from it, so those paths still work.
+
 ### Shell verbs
 
 - Every `browser_*` MCP tool now has an `aui` verb or a recorded reason for having none, checked by a test.

@@ -34,7 +34,9 @@ ultra-instinct-mcp: ultra-instinct-core ultra-instinct-browser ultra-instinct-gu
     | tokio axum sqlx reqwest hyper typesafe-sdk
 ultra-instinct-remote: ultra-instinct-policy
     | axum sqlx
-ultra-instinct: ultra-instinct-core ultra-instinct-browser ultra-instinct-guard ultra-instinct-mcp ultra-instinct-agent ultra-instinct-policy ultra-instinct-dojo ultra-instinct-remote
+ultra-instinct-verbs: ultra-instinct-browser ultra-instinct-guard ultra-instinct-mcp
+    | tokio axum sqlx reqwest hyper typesafe-sdk
+ultra-instinct: ultra-instinct-verbs ultra-instinct-core ultra-instinct-browser ultra-instinct-guard ultra-instinct-mcp ultra-instinct-agent ultra-instinct-policy ultra-instinct-dojo ultra-instinct-remote
     | axum sqlx
 ultra-instinct-dojo: ultra-instinct-core
     | tokio axum sqlx reqwest hyper typesafe-sdk
