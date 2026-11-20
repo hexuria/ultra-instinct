@@ -50,6 +50,13 @@
 //! `AUI_STATE_DIR` moves the directory. `--cdp` and `--attach` sessions keep
 //! no auto state: their browsers are the user's own.
 //!
+//! `aui open --record <file>` records the session on any browser kind: a
+//! `browser_screenshot` frame (secret fields hidden, as `aui shot`) after
+//! each answered tool call, throttled to one per 400 ms, into
+//! `<file>.frames/`; when the daemon ends, `ffmpeg` assembles them into
+//! `<file>` when it is on `PATH`, else the frames and an `index.ffconcat`
+//! list stand on their own.
+//!
 //! Unix only (std `UnixListener` / `UnixStream`); elsewhere every verb is a
 //! clear error.
 #![cfg_attr(not(unix), allow(dead_code))]
@@ -135,6 +142,9 @@ pub struct Verb {
     pub attach: bool,
     /// `--proxy <url>` (with `--launch`): the launched Chrome's proxy.
     pub proxy: Option<String>,
+    /// `--record <file>` (`open` only): the spawned daemon records the
+    /// session's page into `<file>` (frames in `<file>.frames/`).
+    pub record: Option<String>,
     /// `--boundary` (or `AUI_CONTENT_BOUNDARIES`): page content in the
     /// output sits between two marker lines the page cannot forge.
     pub boundary: bool,
@@ -161,6 +171,7 @@ impl Verb {
             || self.launch
             || self.attach
             || self.idle_secs.is_some()
+            || self.record.is_some()
     }
 }
 
@@ -332,7 +343,7 @@ pub fn verb_command(verb: &str, args: &[String]) -> Result<String, CliError> {
 }
 
 /// `aui daemon --session <name> (--cdp <url> | --launch [--headed] [--profile <dir>])
-/// [--idle <secs>]` (hidden).
+/// [--idle <secs>] [--record <file>]` (hidden).
 pub fn daemon_command(args: &[String]) -> Result<String, CliError> {
     let mut flags = crate::verbs::Flags::scan(args)?;
     let session = SessionName::parse(
@@ -356,6 +367,10 @@ pub fn daemon_command(args: &[String]) -> Result<String, CliError> {
         .map(|raw| parse_idle(&raw))
         .transpose()?
         .unwrap_or(DEFAULT_IDLE_SECS);
+    let record = flags.one("--record")?;
+    if record.as_deref() == Some("") {
+        return Err(CliError::Config("--record needs a file path".into()));
+    }
     flags.finish()?;
     if let Some(extra) = flags.positional().first() {
         return Err(CliError::UnknownFlag(extra.clone()));
@@ -374,7 +389,12 @@ pub fn daemon_command(args: &[String]) -> Result<String, CliError> {
             }),
         )?,
     };
-    imp::serve_session(&session, browser, std::time::Duration::from_secs(idle))?;
+    imp::serve_session(
+        &session,
+        browser,
+        std::time::Duration::from_secs(idle),
+        record.map(std::path::PathBuf::from),
+    )?;
     Ok(String::new())
 }
 
@@ -677,6 +697,7 @@ mod imp {
         cdp: &str,
         idle: Duration,
         auto: &mut Option<AutoState>,
+        recorder: &mut Option<crate::record::Recorder>,
     ) -> Result<(), CliError> {
         let mut last = Instant::now();
         // The text of the session's latest `aui snap`, for `aui diff`.
@@ -694,7 +715,7 @@ mod imp {
                 Err(err) => return Err(io_err(&daemon.path, err)),
             };
             // A misbehaving client gets dropped; the daemon keeps serving.
-            if let Ok(true) = serve_connection(stream, server, cdp, &mut snap, auto) {
+            if let Ok(true) = serve_connection(stream, server, cdp, &mut snap, auto, recorder) {
                 return Ok(());
             }
             last = Instant::now();
@@ -708,6 +729,7 @@ mod imp {
         cdp: &str,
         snap: &mut Option<String>,
         auto: &mut Option<AutoState>,
+        recorder: &mut Option<crate::record::Recorder>,
     ) -> io::Result<bool> {
         stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_secs(10)))?;
@@ -733,6 +755,11 @@ mod imp {
                 writeln!(writer, "{out}")?;
                 if let Some(state) = auto.as_mut() {
                     state.after_reply(server, &value, reply_ok(&out));
+                }
+                // After the auto-state reload, so a frame shows the page as
+                // the session left it.
+                if let Some(rec) = recorder.as_mut() {
+                    rec.after_reply(server, &value, reply_ok(&out));
                 }
             }
         }
@@ -908,10 +935,17 @@ mod imp {
         session: &SessionName,
         browser: Browser,
         idle: Duration,
+        record: Option<PathBuf>,
     ) -> Result<(), CliError> {
         // Bind first: the spawning verb is already waiting on this socket,
         // and a launch can take longer than its 3 s spawn wait.
         let daemon = Daemon::bind(&socket_path(session))?;
+        // `--record` works on every browser kind: it only watches the page.
+        // The verb already made the frames dir; a failure here just records
+        // nothing rather than stopping the session.
+        let mut recorder = record
+            .as_deref()
+            .and_then(|file| crate::record::Recorder::open(file).ok());
         // Only a `--launch` session keeps auto state: a `--cdp` browser is the
         // user's own and an `--attach` one cannot serve state tools at all.
         let auto_enabled = matches!(&browser, Browser::Launch(_));
@@ -919,16 +953,20 @@ mod imp {
             // The server drops after the socket: it closes only its own tabs.
             Browser::Attach => match attached_server() {
                 Ok(mut server) => {
-                    return serve_on(
+                    let result = serve_on(
                         daemon,
                         &mut server,
                         ultra_instinct_mcp::ATTACH_ENDPOINT,
                         idle,
                         &mut None,
-                    )
+                        &mut recorder,
+                    );
+                    finish_recording(&mut recorder);
+                    return result;
                 }
                 Err(message) => {
                     serve_failure(daemon, &message, FAILURE_WAIT);
+                    finish_recording(&mut recorder);
                     return Err(CliError::Browser(message));
                 }
             },
@@ -946,6 +984,7 @@ mod imp {
                 Err(err) => {
                     let message = err.to_string();
                     serve_failure(daemon, &message, FAILURE_WAIT);
+                    finish_recording(&mut recorder);
                     return Err(CliError::Browser(message));
                 }
             },
@@ -961,11 +1000,26 @@ mod imp {
             state.restore(&mut owned.server);
         }
         // `daemon` (the socket) is dropped inside; `owned` after, in order.
-        let result = serve_on(daemon, &mut owned.server, &endpoint, idle, &mut auto);
+        let result = serve_on(
+            daemon,
+            &mut owned.server,
+            &endpoint,
+            idle,
+            &mut auto,
+            &mut recorder,
+        );
+        finish_recording(&mut recorder);
         if let Some(state) = &auto {
             state.save(&mut owned.server);
         }
         result
+    }
+
+    /// Assemble the recording however the session ends; never fails.
+    fn finish_recording(recorder: &mut Option<crate::record::Recorder>) {
+        if let Some(recorder) = recorder.take() {
+            recorder.finish();
+        }
     }
 
     /// `aui session list` over `dir`: each `*.sock` that answers is a live
@@ -1089,6 +1143,28 @@ mod imp {
         if let Some(secs) = verb.idle_secs {
             command.args(["--idle", &secs.to_string()]);
         }
+        if let Some(file) = &verb.record {
+            // Absolute, like `--profile`: the daemon outlives this shell's
+            // cwd. The frames dir is made now so a bad path fails this verb,
+            // not the daemon halfway through a session.
+            let file = match std::path::Path::new(file).is_absolute() {
+                true => std::path::PathBuf::from(file),
+                false => std::env::current_dir()
+                    .map_err(|err| CliError::Io {
+                        path: file.clone(),
+                        message: err.to_string(),
+                    })?
+                    .join(file),
+            };
+            let file = file.display().to_string();
+            crate::record::Recorder::prepare(std::path::Path::new(&file)).map_err(|err| {
+                CliError::Io {
+                    path: file.clone(),
+                    message: err.to_string(),
+                }
+            })?;
+            command.args(["--record", &file]);
+        }
         command
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -1181,6 +1257,7 @@ mod imp {
         _session: &SessionName,
         _browser: Browser,
         _idle: std::time::Duration,
+        _record: Option<std::path::PathBuf>,
     ) -> Result<(), CliError> {
         Err(CliError::Config(UNSUPPORTED.into()))
     }
@@ -1379,8 +1456,45 @@ mod tests {
                     "http://127.0.0.1:9222",
                     Duration::from_secs(20),
                     &mut None,
+                    &mut None,
                 )
                 .unwrap();
+            })
+        }
+
+        /// Run a daemon on `path` in a thread over a replay of `script`,
+        /// recording into `file` the way `serve_session` does.
+        fn start_rec(
+            path: &std::path::Path,
+            script: ScriptBuilder,
+            file: &std::path::Path,
+        ) -> std::thread::JoinHandle<()> {
+            let path = path.to_owned();
+            let file = file.to_owned();
+            let json = script.to_json();
+            let daemon = Daemon::bind(&path).unwrap();
+            crate::record::Recorder::prepare(&file).unwrap();
+            std::thread::spawn(move || {
+                let mut once = Some(json);
+                let mut server = ultra_instinct_mcp::Server::with_connector(move |_url| {
+                    let json = once.take().expect("one connect");
+                    Ok(Box::new(ReplayTransport::parse(&json)?) as Box<dyn CdpTransport>)
+                })
+                .require_snapshot(true)
+                .bind_to_latest_look(true);
+                let mut recorder = crate::record::Recorder::open(&file).ok();
+                serve_on(
+                    daemon,
+                    &mut server,
+                    "http://127.0.0.1:9222",
+                    Duration::from_secs(20),
+                    &mut None,
+                    &mut recorder,
+                )
+                .unwrap();
+                if let Some(recorder) = recorder {
+                    recorder.finish();
+                }
             })
         }
 
@@ -1573,6 +1687,7 @@ mod tests {
                 "http://x",
                 Duration::from_millis(50),
                 &mut None,
+                &mut None,
             )
             .unwrap();
             assert!(!path.exists());
@@ -1704,6 +1819,66 @@ mod tests {
             );
             let _ = std::fs::remove_file(dir.join("notes.txt"));
             let _ = std::fs::remove_dir(&dir);
+        }
+
+        /// `--record`: each answered call leaves a frame (the screenshot
+        /// tool's own secret hiding applies), throttled; `finish` writes
+        /// the concat list and manifest, and `ffmpeg` the file when on PATH.
+        #[test]
+        fn a_recording_keeps_a_frame_per_answered_call() {
+            let path = path("rec");
+            let file = path.parent().unwrap().join("demo.mp4");
+            // A real 1×1 PNG, so `ffmpeg` can encode it when it is on PATH.
+            let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+            // snap → observe + frame; a snap inside the 400 ms gap → observe
+            // only; a snap after it → observe + frame.
+            let script = ScriptBuilder::new()
+                .observe_compact(&page())
+                .call("Page.captureScreenshot", json!({"data": png}))
+                .observe_compact(&page())
+                .observe_compact(&page())
+                .call("Page.captureScreenshot", json!({"data": png}));
+            let handle = start_rec(&path, script, &file);
+            let no_spawn = || panic!("the daemon is running");
+            let snap = || parse_verb("snap", &[]).unwrap();
+            run_verb_with(&snap(), &path, no_spawn).unwrap();
+            run_verb_with(&snap(), &path, no_spawn).unwrap();
+            std::thread::sleep(Duration::from_millis(500));
+            run_verb_with(&snap(), &path, no_spawn).unwrap();
+            run_verb_with(&parse_verb("close", &[]).unwrap(), &path, no_spawn).unwrap();
+            handle.join().unwrap();
+
+            let frames = file.with_file_name(format!(
+                "{}.frames",
+                file.file_name().unwrap().to_string_lossy()
+            ));
+            for name in ["f_000001.png", "f_000002.png"] {
+                let bytes = std::fs::read(frames.join(name)).unwrap();
+                assert!(bytes.starts_with(b"\x89PNG"), "{name}");
+            }
+            assert!(!frames.join("f_000003.png").exists(), "throttled");
+            let list = std::fs::read_to_string(frames.join("index.ffconcat")).unwrap();
+            assert!(list.contains("f_000001.png") && list.contains("f_000002.png"));
+            let manifest: Value = serde_json::from_str(
+                &std::fs::read_to_string(frames.join("manifest.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(manifest["frames"], 2);
+            assert_eq!(manifest["frames_dir"], frames.display().to_string());
+            assert!(
+                matches!(
+                    manifest["video"].as_str(),
+                    Some("ok" | "ffmpeg-failed" | "no-ffmpeg")
+                ),
+                "{}",
+                manifest["video"]
+            );
+            if manifest["video"] == "ok" {
+                assert!(file.exists(), "ffmpeg wrote {}", file.display());
+            }
+            let mode = std::fs::metadata(&frames).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
+            let _ = std::fs::remove_dir_all(path.parent().unwrap());
         }
     }
 }

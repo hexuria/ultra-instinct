@@ -366,6 +366,19 @@ fn pages(path: &str) -> Option<(&'static str, Vec<u8>)> {
             "<!doctype html><title>batch two</title>\
              <button onclick=\"document.title='clicked in batch'\">Mark</button>",
         ),
+        // A sensitive field whose value shows on screen: `capture_hidden`
+        // writes the field's inline style around a capture and puts it
+        // back, and the observer counts those writes (`pinHides`).
+        "/pin" => html(
+            "<!doctype html><title>pin</title>\
+             <label>PIN <input id=pin></label>\
+             <script>\
+             window.pinHides=0;\
+             new MutationObserver(function(){window.pinHides++}).observe(\
+               document.getElementById('pin'),\
+               {attributes:true,attributeFilter:['style']});\
+             </script>",
+        ),
         _ => None,
     }
 }
@@ -537,6 +550,84 @@ fn session_state_survives_close_and_reopen() {
     second.launch(&server.url("/blank"), &[]);
     second.verb(&["open", &server.url("/state")]);
     assert_eq!(second.title(), "cookie=borrow_sid=abc123|ls=kept-value");
+}
+
+/// P5.5: `open --launch --record <file>` keeps a frame of the page after
+/// each answered call and, on `close`, assembles `<file>` with `ffmpeg`
+/// (the `<file>.frames/` sequence + manifest stands alone without it).
+/// Once a secret is typed every frame goes through the screenshot tool's
+/// `capture_hidden`: the /pin page's observer counts the hide and restore
+/// style writes, so `pinHides > 0` proves the recorded frames masked the
+/// field. The secret itself is in no recording file.
+#[test]
+#[ignore = "needs a local Chrome (aui open --launch)"]
+fn session_recording_produces_a_masked_playable_file() {
+    let server = Server::start(pages);
+    let scratch = Scratch::new("record");
+    let file = scratch.path("demo.mp4");
+    let session = Session::new("rec1");
+    session.launch(
+        &server.url("/pin"),
+        &["--record", file.to_str().expect("utf-8 path")],
+    );
+    let pin = session.reference("PIN");
+    session.verb(&["type", &pin, "424242"]);
+    // Past the 400 ms frame gap so each snap leaves a masked frame.
+    for _ in 0..2 {
+        std::thread::sleep(Duration::from_millis(500));
+        session.verb(&["snap"]);
+    }
+    // Each masked capture writes the PIN field's style twice (hide, restore).
+    let hides = session
+        .verb(&["eval", "window.pinHides|0"])
+        .trim()
+        .parse::<u32>()
+        .expect("pinHides count");
+    assert!(
+        hides >= 2,
+        "recorded frames never hid the PIN field ({hides})"
+    );
+    session.verb(&["close"]);
+
+    // `close` answers on the stop reply; `finish` (ffmpeg) lands after, so poll.
+    let frames = scratch.path("demo.mp4.frames");
+    let manifest = frames.join("manifest.json");
+    let started = Instant::now();
+    while !manifest.exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "recording manifest was never written"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let text = std::fs::read_to_string(&manifest).expect("manifest");
+    assert!(!text.contains("424242"), "secret in manifest: {text}");
+    let manifest: Value = serde_json::from_str(&text).expect("manifest json");
+    let count = manifest["frames"].as_u64().expect("frames count");
+    assert!(count >= 3, "expected open + masked frames, got {count}");
+    let video = manifest["video"].as_str().unwrap_or_default();
+    assert!(
+        matches!(video, "ok" | "ffmpeg-failed" | "no-ffmpeg"),
+        "{video}"
+    );
+    if video == "ok" {
+        let bytes = std::fs::metadata(&file).expect("video file");
+        assert!(bytes.len() > 0, "empty {}", file.display());
+    }
+    let list = std::fs::read_to_string(frames.join("index.ffconcat")).expect("concat list");
+    assert!(!list.contains("424242"), "secret in concat list");
+    for entry in std::fs::read_dir(&frames).expect("frames dir") {
+        let path = entry.expect("entry").path();
+        if path.extension().is_some_and(|ext| ext == "png") {
+            let bytes = std::fs::read(&path).expect("frame");
+            assert!(bytes.starts_with(b"\x89PNG"), "{}", path.display());
+            assert!(
+                !bytes.windows(6).any(|w| w == b"424242"),
+                "secret bytes in {}",
+                path.display()
+            );
+        }
+    }
 }
 
 #[test]
