@@ -76,8 +76,8 @@ aui run --goal "<the user's words, unchanged>" --cdp
 
 - `TYPESAFE_API_KEY` set → no flag needed; `jev` is the default.
 - `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN` set → `--decision clef-flash`.
-- None → `--decision instinct` (fully offline, deterministic, abstains
-  rather than guessing).
+- None → no flag needed; `instinct` is the default without a key (fully
+  offline, deterministic, abstains rather than guessing).
 - `--decision model` only when the user asks for their own model to choose
   the steps: the `TEXT_MODEL_*` model (any OpenAI-compatible, Anthropic, or
   Gemini endpoint, for example a gateway via `TEXT_MODEL_BASE_URL`,

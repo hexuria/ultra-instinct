@@ -44,7 +44,7 @@ marked "ask first". Repeat until the acceptance run passes.
 | P1.3 | `aui upgrade`: replace the binary with the latest release, refuse on a checksum mismatch | Old binary upgrades in place; a tampered archive refuses | P1.1 |
 | P1.4 (done) | CI on `macos-15` for build + tests (Linux only today) | The macOS job is green and required | |
 | P1.5 | `CHANGELOG.md` with a release-notes section the release workflow reads | The release body equals the changelog entry | P1.1 |
-| P1.6 | Default decider is `instinct` when no model key is set, so a first run works offline (ask first: changes the `jev` default) | `aui run --launch --url ... --goal ...` runs with no key and no flag | |
+| P1.6 (done) | Default decider is `instinct` when no model key is set, so a first run works offline (ask first: changes the `jev` default) | `aui run --launch --url ... --goal ...` runs with no key and no flag | |
 
 Out of scope here, ask first: npm / Homebrew packages, Windows (the session
 daemon is unix-socket only).
