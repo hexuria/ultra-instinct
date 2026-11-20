@@ -491,10 +491,14 @@ impl Drop for ChromeProcess {
         let _ = self.child.kill();
         let _ = self.child.wait();
         if self.temp_profile {
-            // Chrome helpers may still be flushing; a second try usually lands.
-            if std::fs::remove_dir_all(&self.profile).is_err() {
-                std::thread::sleep(Duration::from_millis(200));
-                let _ = std::fs::remove_dir_all(&self.profile);
+            // Chrome helpers may still be flushing; retry removal briefly.
+            for attempt in 0..10 {
+                if std::fs::remove_dir_all(&self.profile).is_ok() || !self.profile.exists() {
+                    break;
+                }
+                if attempt < 9 {
+                    std::thread::sleep(Duration::from_millis(200));
+                }
             }
         }
     }
