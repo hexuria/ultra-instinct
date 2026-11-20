@@ -42,10 +42,16 @@ alias. Every crate is `#![forbid(unsafe_code)]`.
 ## Install
 
 ```bash
-scripts/install-aui.sh   # idempotent; installs aui + ultra-instinct to ~/.cargo/bin
+curl -fsSL https://raw.githubusercontent.com/hexuria/ultra-instinct/main/scripts/install.sh | sh
 aui doctor               # checks Chrome, the --cdp endpoint, a test launch, $TMPDIR/aui
 aui install              # prints the Chrome for Testing install command (--run runs it)
 ```
+
+The first line downloads the release binary for this machine (macOS or
+Linux, x64 or arm64), checks it against the release's `SHA256SUMS` and puts
+`aui` + `ultra-instinct` in `~/.local/bin` (`AUI_INSTALL_DIR` changes that,
+`AUI_VERSION=<tag>` pins a release). No Rust toolchain is needed. To build
+from source instead, run `scripts/install-aui.sh` in a checkout.
 
 `ULTRA_INSTINCT_CHROME=<path>` picks the Chrome binary. Agents: read
 [`skills/ultra-instinct/SKILL.md`](skills/ultra-instinct/SKILL.md), or

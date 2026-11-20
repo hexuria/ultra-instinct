@@ -8,8 +8,7 @@ description: Browser automation with the `aui` CLI. Use when the user wants a go
 ## 1. Get `aui`
 
 ```bash
-command -v aui || bash scripts/install-aui.sh   # in a checkout of hexuria/ultra-instinct
-command -v aui || curl -fsSL https://raw.githubusercontent.com/hexuria/ultra-instinct/main/scripts/install-aui.sh | bash
+command -v aui || curl -fsSL https://raw.githubusercontent.com/hexuria/ultra-instinct/main/scripts/install.sh | sh
 ```
 
 ## 2. Read the guide
