@@ -162,6 +162,27 @@ impl Server {
             &var(ENV_CONFIRM_PRESS),
             &var(ENV_REFUSE_BLOB),
         );
+        // The action policy file, when the environment names one. A file
+        // that does not read lets nothing run.
+        match var(crate::ENV_POLICY_FILE).trim() {
+            "" => self,
+            file => match crate::ToolPolicy::read(std::path::Path::new(file)) {
+                Ok(policy) => self.with_tool_policy(&policy),
+                Err(_) => self.with_tool_allowlist(Vec::<String>::new()),
+            },
+        }
+    }
+
+    /// Only the tools `policy` lets run, of those already allowed here
+    /// (it narrows an allow-list, never widens one). A tool it refuses
+    /// gives `tool_not_allowed` before any CDP call.
+    pub fn with_tool_policy(mut self, policy: &crate::ToolPolicy) -> Self {
+        let allowed = policy
+            .allowed()
+            .filter(|name| self.allows(name))
+            .map(str::to_owned)
+            .collect();
+        self.allowlist = Some(allowed);
         self
     }
 

@@ -20,6 +20,12 @@ pub fn serve_stdio() -> io::Result<()> {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let mut server = Server::new();
+    // The project's action policy file, found from the working directory.
+    let dir = std::env::current_dir()?;
+    if let Some(file) = crate::find_policy_file(&dir) {
+        let policy = crate::ToolPolicy::read(&file).map_err(io::Error::other)?;
+        server = server.with_tool_policy(&policy);
+    }
     for line in stdin.lock().lines() {
         let line = line?;
         if let Some(response) = server.handle_line(&line) {

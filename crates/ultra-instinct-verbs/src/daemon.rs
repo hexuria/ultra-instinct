@@ -798,6 +798,16 @@ mod imp {
                 verb.confirm_press.join(","),
             );
         }
+        // The project's action policy file, checked here so a bad file is
+        // an error now, not a daemon that refuses everything.
+        let dir = std::env::current_dir().map_err(|err| CliError::Io {
+            path: ".".into(),
+            message: err.to_string(),
+        })?;
+        if let Some(file) = ultra_instinct_mcp::find_policy_file(&dir) {
+            ultra_instinct_mcp::ToolPolicy::read(&file).map_err(CliError::Config)?;
+            command.env(ultra_instinct_mcp::ENV_POLICY_FILE, file);
+        }
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
         command.spawn().map(|_| ()).map_err(|err| CliError::Io {
             path: exe.display().to_string(),

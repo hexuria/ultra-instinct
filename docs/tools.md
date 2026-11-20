@@ -135,6 +135,15 @@ no reader thread), so events between calls show up at the next read.
 
 ## `aui` shell verbs
 
+**Action policy file.** `aui-policy.json` in the working directory (or the
+file `AUI_POLICY_FILE` names) limits which tools run, for `aui mcp` and for a
+session started there with `aui open`: `{"deny": ["browser_exec"]}` takes
+tools off, `{"allow": [...]}` is the whole list, both together allow the
+list minus the denied names (`run_goal` names the `aui run`-style loop of a
+host). A refused tool answers the stable code `tool_not_allowed` and is left
+out of `tools/list`. A name that is not a tool, or any other key, is an
+error at start, so a typo cannot leave a tool open.
+
 Each verb talks to the session daemon on `$TMPDIR/aui/<session>.sock`, which
 owns one MCP `Server`. Every verb takes `--session <name>` (default
 `default`), `--cdp <url>`, `--max-output N` and `--boundary` (the reading
