@@ -203,3 +203,14 @@ mod cli_execute {
         assert_eq!(err, CliError::DuplicateFlag("--within"));
     }
 }
+
+#[test]
+fn version_flag_prints_the_crate_version() {
+    for flag in ["--version", "-V"] {
+        let out = ultra_instinct::execute(&[flag.to_owned()]).unwrap();
+        assert_eq!(
+            out,
+            format!("ultra-instinct {}\n", env!("CARGO_PKG_VERSION"))
+        );
+    }
+}
