@@ -5,135 +5,8 @@
 
 #![forbid(unsafe_code)]
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum CliError {
-    UnknownCommand(String),
-    MissingValue(&'static str),
-    UnknownFlag(String),
-    DuplicateFlag(&'static str),
-    UnknownRole(String),
-    UnknownAction(String),
-    EmptyText,
-    Io {
-        path: String,
-        message: String,
-    },
-    Fixture(String),
-    /// `guard` rejected the request (for example an unsupported `near` field).
-    Guard(String),
-    ExpectedTextMissing {
-        expected: String,
-    },
-    RegionStillPresent {
-        id: String,
-    },
-    RunnerUpNeedsConfidence,
-    NonFiniteConfidence,
-    MissingSource,
-    Browser(String),
-    /// Missing or invalid environment configuration (e.g. `TYPESAFE_API_KEY`).
-    Config(String),
-    BadConfidence(String),
-    MissingExpect,
-    UnknownRegion(String),
-    UnknownExecutor(String),
-    UnsupportedAction(String),
-    NotImplemented {
-        executor: String,
-    },
-    BrowserUseIsReplay,
-    BrowserUseRejected {
-        message: String,
-    },
-    BrowserUseScript {
-        message: String,
-    },
-    CuaIsReplay,
-    CuaRejected {
-        message: String,
-    },
-    CuaScript {
-        message: String,
-    },
-    /// `mcp` is served by the binary, which owns stdin. This library call does not.
-    McpIsStdio,
-    /// `run` ended in a failed agent outcome; the transcript is attached.
-    Agent(String),
-    BadNumber {
-        flag: &'static str,
-        value: String,
-    },
-    /// The guard or the user's policy refused (shell verbs, `run --url`).
-    /// The message is the whole line to show.
-    Refused(String),
-    /// `aui batch` with a failed command. The body is the whole stdout
-    /// (every command's output); the exit is non-zero.
-    BatchFailed(String),
-}
-
-impl std::fmt::Display for CliError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UnknownCommand(name) => write!(f, "unknown command `{name}`"),
-            Self::MissingValue(flag) => write!(f, "missing value for {flag}"),
-            Self::UnknownFlag(flag) => write!(f, "unknown flag `{flag}`"),
-            Self::DuplicateFlag(flag) => write!(f, "duplicate flag {flag}"),
-            Self::UnknownRole(role) => write!(f, "unknown role `{role}`"),
-            Self::UnknownAction(action) => write!(f, "unknown action `{action}`"),
-            Self::EmptyText => f.write_str("text must contain at least one alphanumeric token"),
-            Self::Io { path, message } => write!(f, "cannot read {path}: {message}"),
-            Self::Fixture(message) => write!(f, "fixture: {message}"),
-            Self::Guard(message) => write!(f, "guard: {message}"),
-            Self::ExpectedTextMissing { expected } => {
-                write!(f, "expected text `{expected}` did not appear")
-            }
-            Self::RegionStillPresent { id } => write!(f, "region `{id}` is still present"),
-            Self::RunnerUpNeedsConfidence => f.write_str("--runner-up requires --confidence"),
-            Self::NonFiniteConfidence => f.write_str("confidence must be finite"),
-            Self::MissingSource => f.write_str("command requires --fixture <path> or --cdp [url]"),
-            Self::Browser(message) => write!(f, "browser: {message}"),
-            Self::Config(message) => write!(f, "config: {message}"),
-            Self::BadConfidence(value) => write!(f, "bad confidence `{value}`"),
-            Self::MissingExpect => f.write_str("verify requires --expect-text or --expect-absent"),
-            Self::UnknownRegion(id) => write!(f, "unknown region `{id}`"),
-            Self::UnknownExecutor(name) => write!(f, "unknown executor `{name}`"),
-            Self::UnsupportedAction(action) => {
-                write!(f, "browser-use executor cannot perform `{action}`")
-            }
-            Self::NotImplemented { executor } => {
-                write!(f, "{executor} executor is not implemented")
-            }
-            Self::BrowserUseIsReplay => {
-                f.write_str("browser-use act uses a replay fixture, not a live CDP endpoint")
-            }
-            Self::BrowserUseRejected { message } => {
-                write!(f, "browser-use rejected the semantic act: {message}")
-            }
-            Self::BrowserUseScript { message } => {
-                write!(f, "invalid browser-use script: {message}")
-            }
-            Self::CuaIsReplay => {
-                f.write_str("cua act uses a replay fixture, not a live CDP endpoint")
-            }
-            Self::CuaRejected { message } => {
-                write!(f, "cua rejected the semantic act: {message}")
-            }
-            Self::CuaScript { message } => {
-                write!(f, "invalid cua script: {message}")
-            }
-            Self::McpIsStdio => {
-                f.write_str("mcp serves JSON-RPC on stdio; run the ultra-instinct binary")
-            }
-            Self::Agent(transcript) => write!(f, "agent run failed\n{transcript}"),
-            Self::BadNumber { flag, value } => write!(f, "{flag} expects a number, got `{value}`"),
-            Self::Refused(message) => f.write_str(message),
-            Self::BatchFailed(body) => f.write_str(body),
-        }
-    }
-}
-
-impl std::error::Error for CliError {}
+use ultra_instinct_verbs::{batch, daemon};
+pub use ultra_instinct_verbs::{verbs, CliError};
 
 /// `aui --help`: one screen. Every command, one line each; the details are
 /// a topic away (`aui help <command>`, `aui <command> --help`).
@@ -190,7 +63,7 @@ fn help(topic: Option<&str>) -> Result<String, CliError> {
     if let Some((_, subs)) = GROUPS.iter().find(|(group, _)| *group == topic) {
         return subs.iter().map(|sub| help(Some(sub))).collect();
     }
-    let head = if topic == "verbs" || crate::verbs::VERBS.contains(&topic) {
+    let head = if topic == "verbs" || verbs::VERBS.contains(&topic) {
         "shell"
     } else {
         topic
@@ -259,13 +132,11 @@ pub fn execute(args: &[String]) -> Result<String, CliError> {
         "install" => crate::install_cmd::install_command(&args[1..]),
         "upgrade" => crate::upgrade_cmd::upgrade_command(&args[1..]),
         "mcp" => Err(CliError::McpIsStdio),
-        "daemon" => crate::daemon::daemon_command(&args[1..]),
+        "daemon" => daemon::daemon_command(&args[1..]),
         "skills" => crate::skills_cmd::skills_command(&args[1..]),
-        "batch" => crate::batch::batch_command(&args[1..]),
-        "session" => crate::daemon::session_command(&args[1..]),
-        verb if crate::verbs::VERBS.contains(&verb) => {
-            crate::daemon::verb_command(verb, &args[1..])
-        }
+        "batch" => batch::batch_command(&args[1..]),
+        "session" => daemon::session_command(&args[1..]),
+        verb if verbs::VERBS.contains(&verb) => daemon::verb_command(verb, &args[1..]),
         other => Err(CliError::UnknownCommand(other.to_owned())),
     }
 }
@@ -298,8 +169,6 @@ pub(crate) fn flag_name(name: &str) -> &'static str {
     }
 }
 
-pub(crate) mod batch;
-pub(crate) mod daemon;
 pub mod diary;
 pub(crate) mod doctor_cmd;
 pub mod dojo_policy;
@@ -312,7 +181,6 @@ pub(crate) mod session_cmd;
 pub(crate) mod skills_cmd;
 pub(crate) mod state_cmd;
 pub(crate) mod upgrade_cmd;
-pub mod verbs;
 
 // Remote transports live in `ultra-instinct-remote`; re-exported here.
 #[cfg(feature = "clef")]

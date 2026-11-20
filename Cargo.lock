@@ -1686,6 +1686,7 @@ dependencies = [
  "ultra-instinct-mcp",
  "ultra-instinct-policy",
  "ultra-instinct-remote",
+ "ultra-instinct-verbs",
 ]
 
 [[package]]
@@ -1804,6 +1805,16 @@ dependencies = [
  "typesafe-sdk",
  "ultra-instinct-core",
  "ultra-instinct-policy",
+]
+
+[[package]]
+name = "ultra-instinct-verbs"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "ultra-instinct-browser",
+ "ultra-instinct-guard",
+ "ultra-instinct-mcp",
 ]
 
 [[package]]

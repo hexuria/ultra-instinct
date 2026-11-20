@@ -1326,7 +1326,7 @@ fn render_error(text: &str) -> String {
             let label: String = serde_json::from_str(label).unwrap_or_else(|_| label.to_owned());
             format!(
                 "✗ refused: NeedsConfirm {label:?} · rerun with --confirm {}",
-                crate::run_cmd::shell_quote(&label)
+                crate::shell_quote(&label)
             )
         }
         ("domain-not-allowed", Some(host)) => {

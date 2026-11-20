@@ -75,6 +75,7 @@ use ultra_instinct_guard::{HostPattern, LabelGlob, Policy};
 use ultra_instinct_policy::{BrowserPolicy, InstinctPolicy, TextResolver};
 
 use crate::CliError;
+use ultra_instinct_verbs::shell_quote;
 
 struct RunArgs {
     goal: String,
@@ -297,7 +298,8 @@ fn parse(args: &[String]) -> Result<RunArgs, CliError> {
     if cdp.is_none() && fixture.is_none() && !launch {
         return Err(CliError::MissingSource);
     }
-    let profile = crate::daemon::launch_profile(launch, cdp.is_some(), profile.as_deref())?;
+    let profile =
+        ultra_instinct_verbs::daemon::launch_profile(launch, cdp.is_some(), profile.as_deref())?;
     if url.is_some() && cdp.is_none() && !launch {
         return Err(CliError::UnknownFlag(
             "--url requires --cdp or --launch".into(),
@@ -1022,19 +1024,6 @@ where
         return Err(CliError::Agent(out));
     }
     Ok(out)
-}
-
-/// `label` in double quotes a POSIX shell reads back verbatim.
-pub(crate) fn shell_quote(label: &str) -> String {
-    let mut out = String::from("\"");
-    for c in label.chars() {
-        if matches!(c, '"' | '\\' | '$' | '`') {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out.push('"');
-    out
 }
 
 #[cfg(test)]

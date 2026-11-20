@@ -1,0 +1,17 @@
+[package]
+name = "ultra-instinct-verbs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "ultra-instinct shell verbs and the session daemon"
+
+[dependencies]
+ultra-instinct-browser = { path = "../ultra-instinct-browser", version = "0.1.0"}
+ultra-instinct-guard = { path = "../ultra-instinct-guard", version = "0.1.0"}
+ultra-instinct-mcp = { path = "../ultra-instinct-mcp", version = "0.1.0"}
+
+[dependencies.serde_json]
+version = "1"
