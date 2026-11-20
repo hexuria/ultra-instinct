@@ -41,6 +41,9 @@ source first so the repo's pinned toolchain applies regardless of your cwd.
 If the installed `aui` predates a policy you need (`run` errors that the
 policy is unavailable), install again.
 
+`aui upgrade` replaces an installed release binary with the latest release
+(`--version <tag>` for another one) after the same checksum check.
+
 ## 2. Make sure Chrome answers CDP
 
 ```bash
