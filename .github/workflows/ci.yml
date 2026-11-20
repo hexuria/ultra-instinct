@@ -141,6 +141,41 @@ jobs:
       - run: cargo build --workspace --all-targets --locked
       - run: cargo nextest run --workspace --locked --profile ci --no-tests=pass
 
+  # The daemon socket suite runs here over real named pipes; live Chrome
+  # stays a unix job (`--attach`'s session-multiplexing browser is unix-only).
+  test-windows:
+    name: tests on Windows (build + nextest)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        with:
+          tool: cargo-nextest
+      - run: cargo build --workspace --all-targets --locked
+      - run: cargo nextest run --workspace --locked --profile ci --no-tests=pass
+
+  # Live Chrome on Windows: the runner image ships Chrome; the suite drives
+  # `aui open --launch` over real named pipes. Process checks read Win32
+  # command lines through CIM, file-mode asserts stay unix-only.
+  live-smoke-windows:
+    name: live Chrome smoke on Windows
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Chrome is on the runner
+        run: |
+          $chrome = "${env:ProgramFiles}\Google\Chrome\Application\chrome.exe"
+          if (Test-Path $chrome) { & $chrome --version } else { throw "no Chrome at $chrome" }
+      - run: cargo test -p ultra-instinct --locked --test live_borrow -- --ignored --skip headed_launch --test-threads=1
+
   docs:
     name: rustdoc (-D warnings)
     runs-on: ubuntu-24.04
@@ -180,7 +215,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [repo-rules, fmt, clippy, check-crates, test, live-smoke, test-macos, docs, deny, zizmor]
+    needs: [repo-rules, fmt, clippy, check-crates, test, live-smoke, test-macos, test-windows, live-smoke-windows, docs, deny, zizmor]
     runs-on: ubuntu-24.04
     env:
       NEEDS: ${{ toJSON(needs) }}

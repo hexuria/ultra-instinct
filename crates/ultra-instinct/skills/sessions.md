@@ -22,7 +22,8 @@ close` and reopen even without `--profile`: the daemon saves
 next daemon on that session name starts; `AUI_SESSION_STATE=0` turns it off
 and `AUI_STATE_DIR` moves the directory (default
 `~/Library/Application Support/aui` on macOS,
-`${XDG_STATE_HOME:-~/.local/state}/aui` elsewhere). `--cdp` and `--attach`
+`${XDG_STATE_HOME:-~/.local/state}/aui` on Linux,
+`%LOCALAPPDATA%\aui` on Windows). `--cdp` and `--attach`
 sessions keep none. `open` also takes `--allow-domain`, `--confirm-press`,
 `--idle <secs>` (the daemon, and its Chrome, end after that long without a
 verb: 1 s to 24 h, default 60 min) and `--record <file>` (a frame of the
@@ -33,9 +34,9 @@ alone); these and `--launch` are fixed when the daemon starts, so
 `aui close` before you change them.
 
 `aui session` prints the session name in use; `aui session list` lists live
-sessions and removes stale sockets.
+sessions and removes stale endpoints.
 
-## Use the user's own Chrome
+## Use the user's own Chrome (macOS and Linux; not on Windows yet)
 
 When the user wants their own logged-in Chrome driven (not a fresh one):
 

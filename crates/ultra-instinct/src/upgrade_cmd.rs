@@ -4,8 +4,8 @@
 //! is in: download the archive for this build's target and the release's
 //! `SHA256SUMS`, refuse on a checksum mismatch, then rename the new `aui` and
 //! `ultra-instinct` over the old ones. The tree carries no HTTP client: the
-//! download is `curl`, the unpack is `tar`, the digest is `sha256sum` or
-//! `shasum`.
+//! download is `curl`, the unpack is `tar`, the digest is `sha256sum`,
+//! `shasum` or Windows' `certutil`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -15,6 +15,10 @@ use crate::CliError;
 const RELEASES: &str = "https://github.com/hexuria/ultra-instinct/releases";
 /// Overrides [`RELEASES`]; the tests point it at a release on disk.
 const BASE_ENV: &str = "AUI_BASE_URL";
+/// The archive's (and install dir's) binary names; `.exe` on Windows.
+#[cfg(windows)]
+const BINARIES: [&str; 2] = ["aui.exe", "ultra-instinct.exe"];
+#[cfg(not(windows))]
 const BINARIES: [&str; 2] = ["aui", "ultra-instinct"];
 
 /// The release target this binary was built for, when a release has one.
@@ -27,6 +31,8 @@ fn target() -> Option<String> {
         "macos" => "apple-darwin",
         "linux" if cfg!(target_env = "musl") => "unknown-linux-musl",
         "linux" => "unknown-linux-gnu",
+        // Only the x86_64 MSVC build ships for Windows.
+        "windows" if arch == "x86_64" => "pc-windows-msvc",
         _ => return None,
     };
     Some(format!("{arch}-{os}"))
@@ -50,8 +56,22 @@ fn run(program: &str, args: &[&str]) -> Result<String, CliError> {
 }
 
 fn sha256(file: &str) -> Result<String, CliError> {
-    let out = run("sha256sum", &[file]).or_else(|_| run("shasum", &["-a", "256", file]))?;
-    Ok(out.split_whitespace().next().unwrap_or_default().to_owned())
+    if let Ok(out) = run("sha256sum", &[file]).or_else(|_| run("shasum", &["-a", "256", file])) {
+        return Ok(out.split_whitespace().next().unwrap_or_default().to_owned());
+    }
+    // Windows' built-in digest tool; the hex digest is its own output line,
+    // spaced or not depending on the OS version.
+    let out = run("certutil", &["-hashfile", file, "SHA256"])?;
+    Ok(out
+        .lines()
+        .map(|line| {
+            line.chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>()
+        })
+        .find(|line| line.len() == 64 && line.bytes().all(|b| b.is_ascii_hexdigit()))
+        .unwrap_or_default()
+        .to_owned())
 }
 
 /// The digest `SHA256SUMS` lists for `archive` (`<hex>  <name>` lines).
@@ -174,6 +194,7 @@ mod tests {
                     "aarch64-unknown-linux-gnu",
                     "x86_64-unknown-linux-musl",
                     "aarch64-unknown-linux-musl",
+                    "x86_64-pc-windows-msvc",
                 ]
                 .contains(&target.as_str()),
                 "{target}"

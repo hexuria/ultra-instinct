@@ -13,11 +13,12 @@
 //! 127.0.0.1 inside this file (or `data:` URLs); no other site is visited.
 //! Every check reads what the page or the server saw, not only the verb's
 //! own reply: page facts go into `document.title`, which `aui snap` prints.
-#![cfg(unix)]
+#![cfg(any(unix, windows))]
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -386,13 +387,33 @@ fn pages(path: &str) -> Option<(&'static str, Vec<u8>)> {
 // ---- process checks ---------------------------------------------------------
 
 /// `ps` command lines, one per process.
+#[cfg(unix)]
 fn processes() -> Vec<(u32, String)> {
     let out = Command::new("ps")
         .args(["-axww", "-o", "pid=,command="])
         .output()
         .expect("ps");
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
+    parse_processes(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// `Get-CimInstance` command lines, one per process (Windows has no `ps`;
+/// `tasklist` carries no command line).
+#[cfg(windows)]
+fn processes() -> Vec<(u32, String)> {
+    let out = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }",
+        ])
+        .output()
+        .expect("powershell");
+    parse_processes(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_processes(text: &str) -> Vec<(u32, String)> {
+    text.lines()
         .filter_map(|line| {
             let line = line.trim_start();
             let (pid, command) = line.split_once(' ')?;
@@ -446,6 +467,7 @@ fn eventually(limit: Duration, what: &str, done: impl Fn() -> bool) {
     }
 }
 
+#[cfg(unix)]
 fn mode(path: &Path) -> u32 {
     std::fs::metadata(path)
         .unwrap_or_else(|err| panic!("{}: {err}", path.display()))
@@ -481,6 +503,7 @@ fn state_save_then_load_into_a_fresh_chrome() {
             out.contains("1 cookies") || out.contains("cookies"),
             "{out}"
         );
+        #[cfg(unix)]
         assert_eq!(mode(&file), 0o600, "state file is private");
         let text = std::fs::read_to_string(&file).expect("state file");
         assert!(
@@ -537,6 +560,7 @@ fn session_state_survives_close_and_reopen() {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+    #[cfg(unix)]
     assert_eq!(mode(&file), 0o600, "auto state file is private");
     let text = std::fs::read_to_string(&file).expect("auto state file");
     assert!(
@@ -807,6 +831,7 @@ fn network_block_unblock_and_a_redacted_har() {
     let har = scratch.path("run.har");
     let out = session.verb(&["network", "har", "stop", &har.display().to_string()]);
     println!("{}", out.trim());
+    #[cfg(unix)]
     assert_eq!(mode(&har), 0o600, "HAR file is private");
     let text = std::fs::read_to_string(&har).expect("har");
     assert!(
@@ -1252,6 +1277,9 @@ fn launch_proxy_sends_requests_through_the_proxy() {
 }
 
 /// P4.1: the README quick start runs as written, in six commands or fewer.
+/// The bash block, the `aui` symlink and `TMPDIR` are unix; the PowerShell
+/// block is exercised by hand on Windows.
+#[cfg(unix)]
 #[test]
 #[ignore = "needs a local Chrome (aui open --launch)"]
 fn the_readme_quick_start_runs_as_written() {

@@ -69,6 +69,8 @@ fn a_policy_narrows_an_allow_list_and_never_widens_it() {
     assert!(!server.allows("browser_click") && !server.allows("browser_exec"));
 }
 
+// Windows symlinks need a privilege a CI runner does not grant.
+#[cfg(unix)]
 #[test]
 fn a_policy_link_to_a_missing_file_is_found_and_fails_to_read() {
     let dir = std::env::temp_dir().join(format!("aui-policy-link-{}", std::process::id()));

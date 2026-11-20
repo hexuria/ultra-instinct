@@ -9,14 +9,23 @@ and no key.
 
 ## Install
 
+macOS or Linux:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hexuria/ultra-instinct/main/scripts/install.sh | sh
 ```
 
+Windows (x64):
+
+```powershell
+irm https://raw.githubusercontent.com/hexuria/ultra-instinct/main/scripts/install.ps1 | iex
+```
+
 This downloads the release binary for this machine (macOS or Linux, x64 or
-arm64), checks it against the release's `SHA256SUMS` and puts `aui` and
-`ultra-instinct` (the same program) in `~/.local/bin`. No Rust toolchain is
-needed. `AUI_INSTALL_DIR` changes the folder, `AUI_VERSION=<tag>` pins a
+arm64; Windows x64 only for now), checks it against the release's
+`SHA256SUMS` and puts `aui` and `ultra-instinct` (the same program) in
+`~/.local/bin` (`%LOCALAPPDATA%\Programs\aui` on Windows). No Rust toolchain
+is needed. `AUI_INSTALL_DIR` changes the folder, `AUI_VERSION=<tag>` pins a
 release, and `aui upgrade` replaces the binary with the latest release later.
 
 `aui` needs a Chrome or Chromium on the machine. `aui doctor` says whether it
@@ -96,7 +105,8 @@ Every verb and MCP tool, one line each: [`docs/tools.md`](docs/tools.md).
   error and HAR file; screenshots hide those fields or refuse.
 - **Files and tools.** File paths must be absolute; a host can keep
   downloads and uploads to one folder and serve only an allow-list of tools.
-- **Your own Chrome, by name only.** `aui open <url> --attach --allow-domain
+- **Your own Chrome, by name only** (macOS and Linux; `--attach` is not on
+  Windows yet). `aui open <url> --attach --allow-domain
   <host>` drives your running Chrome once you turn on
   chrome://inspect/#remote-debugging; it refuses without `--allow-domain`,
   works in a tab of its own (a new window; your tabs are never read or
