@@ -29,7 +29,7 @@ use crate::host::BrowserHost;
 
 /// `browser_tools` index presses whose schema takes `snapshot` (the
 /// `browser_extra` / `browser_env` ones add it in their own specs).
-pub(crate) const SNAPSHOT_TOOLS: [&str; 12] = [
+pub(crate) const SNAPSHOT_TOOLS: [&str; 11] = [
     "browser_select_dropdown",
     "browser_click",
     "browser_right_click",
@@ -39,7 +39,6 @@ pub(crate) const SNAPSHOT_TOOLS: [&str; 12] = [
     "browser_hover",
     "browser_drag",
     "browser_type",
-    "browser_form_input",
     "browser_send_key",
     "browser_file_upload",
 ];

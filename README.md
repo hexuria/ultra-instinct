@@ -78,7 +78,7 @@ aui wait --text "Welcome" --timeout 10
 aui close                                     # stops the daemon and its Chrome
 ```
 
-MCP: run `aui mcp` as a stdio server (56 tools: `observe`, `guard`, `verify`
+MCP: run `aui mcp` as a stdio server (52 tools: `observe`, `guard`, `verify`
 and the `browser_*` tools). Index presses take the `@eN` refs
 `browser_get_state` returns.
 
