@@ -187,7 +187,23 @@ Verbs:
 | `shot [--annotate] [path]` | save a PNG screenshot; `--annotate` draws the `@eN` boxes on it |
 | `tabs` | list tabs |
 | `dialog [status]` / `dialog accept ["text"]` / `dialog dismiss` | see or answer an alert / confirm / prompt |
-| `forward`, `reload [--ignore-cache]` | history forward, reload |
+| `back`, `forward`, `reload [--ignore-cache]` | history back / forward, reload |
+| `hover <ref>` | move the pointer over a control (opens hover menus; presses nothing) |
+| `drag <ref> <ref> [--confirm <label>]` | ticketed drag from the first control onto the second |
+| `upload <ref> <path>… [--confirm <label>]` | ticketed: set a file input's files |
+| `dblclick <ref>`, `rightclick <ref>`, `midclick <ref>`, `tripleclick <ref>` `[--confirm <label>]` | ticketed click with that button / count (`tripleclick` selects a line of text) |
+| `hold <key> [--ms N] [--confirm <label>]` | hold a key on whatever has focus (default 500 ms): `focus` or `click` the control first |
+| `scrollto <ref>` | scroll a control into view |
+| `zoom in\|out\|reset\|<factor>` | page zoom |
+| `options <ref>` | a `<select>`'s options, one per line, `*` on the selected ones |
+| `text` | the page's visible text |
+| `read` | the page as markdown (headings, paragraphs, list items, links) |
+| `html` | the page's HTML, field values removed |
+| `find [text] [--role R]` | controls whose label contains the text, as `@eN role "label"` lines |
+| `pdf <path> [--landscape] [--background] [--scale N]` | save the page as a PDF |
+| `tab new [url]`, `tab switch <tab>`, `tab close <tab>` | open, switch to or close a tab; `<tab>` is the id `tabs` prints; later verbs act on the tab you are on |
+| `eval <script>` | evaluate JavaScript in the tab and print the result |
+| `console`, `requests` | console entries / requests since your last read; the first call starts recording, so call it before the step you want to see |
 | `check <ref>`, `uncheck <ref>` | set a checkbox (a pointer press; `--script` for a DOM script click) |
 | `focus <ref>` | focus a control (ticketed) |
 | `keyboard type\|insert <text> [--confirm <label>]` | keys into whatever has focus (`insert` sends the text in one go); refused off `--allow-domain`; with `--confirm-press` set, an Enter / space on a focused matching button, Enter in a field whose form submits through one, or Enter / space when no control is seen focused (`(unobserved focus)`) needs `--confirm`; an Enter after a Tab in the same text, or a space right after one, is refused: send it in its own call |
@@ -203,11 +219,13 @@ Verbs:
 | `network block <pattern>…`, `network unblock [<pattern>…]`, `network har start`, `network har stop <path>` | block URLs; record a HAR (no bodies, secrets masked) |
 | `close` | stop the daemon (and the Chrome it launched) |
 
-Only `click` and `keyboard` take `--confirm`. If `key`, `check`, `focus` or
+`click`, the other click verbs, `drag`, `upload`, `hold` and `keyboard` take
+`--confirm`. If `key`, `check`, `focus` or
 `download` refuses `NeedsConfirm "<label>"`, ask the user, then press that
 control with `aui click <ref> --confirm "<label>"`.
 
-`--max-output N` on any verb cuts long text output (`snap`) to N chars.
+`--max-output N` on any verb cuts long text output (`snap`, `text`, `read`,
+`html`, `console`, `requests`) to N chars.
 Relative paths are yours: they resolve against your cwd.
 
 Several steps at once: `aui batch "snap" "click @e5" "wait --text Done" --bail`

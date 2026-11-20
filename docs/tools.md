@@ -164,7 +164,21 @@ the full guide.
 | `shot [--annotate] [path]` | `browser_screenshot` | Save a PNG |
 | `tabs` | `browser_list_tabs` | List tabs |
 | `dialog [status]`, `dialog accept [text]`, `dialog dismiss` | `browser_dialog` | See or answer a dialog |
-| `forward`, `reload [--ignore-cache]` | `browser_go_forward`, `browser_reload` | History forward, reload |
+| `back`, `forward`, `reload [--ignore-cache]` | `browser_go_back`, `browser_go_forward`, `browser_reload` | History back / forward, reload |
+| `hover <ref>` | `browser_hover` | Move the pointer over a control (no press) |
+| `drag <ref> <ref> [--confirm <label>]` | `browser_drag` | Ticketed drag from the first control to the second |
+| `upload <ref> <path>... [--confirm <label>]` | `browser_file_upload` | Ticketed: set a file input's files |
+| `dblclick <ref>`, `rightclick <ref>`, `midclick <ref>`, `tripleclick <ref>` `[--confirm <label>]` | `browser_double_click`, `browser_right_click`, `browser_middle_click`, `browser_triple_click` | Ticketed click with that button / count |
+| `hold <key> [--ms N] [--confirm <label>]` | `browser_hold_key` | Hold a key on whatever has focus (default 500 ms) |
+| `scrollto <ref>` | `browser_scroll_to` | Scroll a control into view |
+| `zoom in\|out\|reset\|<factor>` | `browser_zoom` | Page zoom |
+| `options <ref>` | `browser_get_dropdown_options` | A `<select>`'s options, `*` on the selected ones |
+| `text`, `read`, `html` | `browser_get_text`, `browser_extract_content`, `browser_get_html` | The page's visible text, the page as markdown, its HTML (field values removed) |
+| `find [text] [--role R]` | `browser_find` | Controls whose label contains the text, with their refs |
+| `pdf <path> [--landscape] [--background] [--scale N]` | `browser_save_as_pdf` | Save the page as a PDF |
+| `tab new [url]`, `tab switch <tab>`, `tab close <tab>` | `browser_new_tab`, `browser_switch_tab`, `browser_close_tab` | Open, switch to or close a tab; `<tab>` is the id `tabs` prints |
+| `eval <script>` | `browser_exec` | Evaluate JavaScript in the tab and print the result |
+| `console`, `requests` | `browser_read_console`, `browser_read_network` | Console entries / requests since the last read (the first call starts recording) |
 | `get value\|label\|role\|box <ref>`, `get attr <ref> <name>` | `browser_get` | Read one fact |
 | `is visible\|enabled\|checked\|editable <ref>` | `browser_is` | Prints `true` or `false` |
 | `count [--label L] [--role R]` | `browser_count` | Count matching controls |
