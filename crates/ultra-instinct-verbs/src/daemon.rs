@@ -584,11 +584,28 @@ mod imp {
     /// daemon did not launch Chrome, a connect failure carries the hint.
     fn daemon_server(cdp: &str, hint: bool) -> ultra_instinct_mcp::Server {
         let cdp = cdp.to_owned();
-        hardened(ultra_instinct_mcp::Server::with_connector(move |url| {
-            WebSocketTransport::connect(url)
-                .map(|transport| Box::new(transport) as Box<dyn CdpTransport>)
-                .map_err(|err| if hint { connect_hint(err, &cdp) } else { err })
-        }))
+        file_policy(hardened(ultra_instinct_mcp::Server::with_connector(
+            move |url| {
+                WebSocketTransport::connect(url)
+                    .map(|transport| Box::new(transport) as Box<dyn CdpTransport>)
+                    .map_err(|err| if hint { connect_hint(err, &cdp) } else { err })
+            },
+        )))
+    }
+
+    /// `server` under the action policy file the spawning verb named
+    /// (`ENV_POLICY_FILE`), when it named one. The verb already read it; if
+    /// it no longer reads, nothing runs.
+    fn file_policy(server: ultra_instinct_mcp::Server) -> ultra_instinct_mcp::Server {
+        match std::env::var_os(ultra_instinct_mcp::ENV_POLICY_FILE) {
+            Some(file) if !file.is_empty() => {
+                match ultra_instinct_mcp::ToolPolicy::read(Path::new(&file)) {
+                    Ok(policy) => server.with_tool_policy(&policy),
+                    Err(_) => server.with_tool_allowlist(Vec::<String>::new()),
+                }
+            }
+            _ => server,
+        }
     }
 
     /// The daemon's settings on any server: the env policy, and a ref press
@@ -611,7 +628,9 @@ mod imp {
         server
             .call_tool("browser_new_tab", &json!({"url": "about:blank"}))
             .map_err(|err| err.to_string())?;
-        Ok(server)
+        // After the daemon's own blank tab: a policy file that takes
+        // `browser_new_tab` off limits the caller, not this.
+        Ok(file_policy(server))
     }
 
     /// The hidden `aui daemon` body.
@@ -797,6 +816,16 @@ mod imp {
                 ultra_instinct_mcp::ENV_CONFIRM_PRESS,
                 verb.confirm_press.join(","),
             );
+        }
+        // The project's action policy file, checked here so a bad file is
+        // an error now, not a daemon that refuses everything.
+        let dir = std::env::current_dir().map_err(|err| CliError::Io {
+            path: ".".into(),
+            message: err.to_string(),
+        })?;
+        if let Some(file) = ultra_instinct_mcp::find_policy_file(&dir) {
+            ultra_instinct_mcp::ToolPolicy::read(&file).map_err(CliError::Config)?;
+            command.env(ultra_instinct_mcp::ENV_POLICY_FILE, file);
         }
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
         command.spawn().map(|_| ()).map_err(|err| CliError::Io {

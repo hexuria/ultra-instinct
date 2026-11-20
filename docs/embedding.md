@@ -163,6 +163,9 @@ A tool that runs another inside it needs that one on the list too
 (`RUNS_INSIDE`): `browser_download`'s press is a click, so it needs
 `browser_click`. Without it the call refuses ``tool_not_allowed`` naming
 the inner tool (`tool: "browser_click"`) before any CDP call.
+`Server::with_tool_policy(&ToolPolicy)` narrows the list from an action policy
+file (`ToolPolicy::read(path)`: `{"allow": [...], "deny": [...]}`); the `aui`
+CLI finds `aui-policy.json` itself, a host passes its own.
 `Server::allows(name)` answers whether a tool may run (no list set:
 everything is allowed), and `tools/list` shows only the allowed tools.
 

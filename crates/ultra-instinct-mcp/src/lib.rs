@@ -20,6 +20,7 @@
 mod rpc;
 mod run;
 mod server;
+mod tool_policy;
 mod tools;
 
 pub use rpc::{handle_line, serve_stdio};
@@ -30,6 +31,7 @@ pub use server::{
     parse_refuse_blob, policy_from_vars, CdpConnector, Server, ENV_ALLOW_DOMAINS,
     ENV_CONFIRM_PRESS, ENV_REFUSE_BLOB, MAX_LIVE_SESSIONS,
 };
+pub use tool_policy::{find_policy_file, ToolPolicy, ENV_POLICY_FILE, POLICY_FILE};
 pub use tools::call_tool;
 pub use ultra_instinct_browser_tools::{
     sensitive, Downloads, HttpBackend, PageTab, TargetBackend, ToolError, ToolLimits, Uploads, MASK,

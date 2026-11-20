@@ -91,7 +91,7 @@ Each is a design note in this file first, then a PR. All are "ask first".
 | P5.3 | Session state auto save and restore per session name | Log in once, `aui close`, reopen: still logged in; state file is 0600 |
 | P5.4 | Proxy flag on `--launch` | Requests go through a local test proxy |
 | P5.5 | Session recording (video or frame sequence) | A run produces a playable file; secret fields are hidden in it |
-| P5.6 | Action policy file: allow / deny by tool name per project | A denied tool refuses with a stable code |
+| P5.6 (done) | Action policy file: allow / deny by tool name per project | A denied tool refuses with a stable code |
 
 ### Design notes
 
@@ -105,6 +105,15 @@ result lines of pressing verbs are not, except the page `--snap` prints after on
 drawn after the page text was read, new for every output, so a page cannot
 print the closing line; if the content happens to contain the id, another is
 drawn.
+
+**P5.6 action policy file.** `aui-policy.json` in the working directory, or
+the file `AUI_POLICY_FILE` names: `{"allow": [...], "deny": [...]}` over MCP
+tool names. It reuses the server's existing tool allow-list
+(`Server::with_tool_policy` narrows it and never widens it, so `--attach`
+keeps its own limits) and its existing `tool_not_allowed` code. Unknown
+names and keys are errors. Only the CLI looks in the working directory
+(`aui mcp`, and `aui open`, which checks the file and hands its path to the
+daemon); an embedding host calls `with_tool_policy` itself.
 
 ## Not planned
 

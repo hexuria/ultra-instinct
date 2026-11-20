@@ -165,6 +165,19 @@ impl Server {
         self
     }
 
+    /// Only the tools `policy` lets run, of those already allowed here
+    /// (it narrows an allow-list, never widens one). A tool it refuses
+    /// gives `tool_not_allowed` before any CDP call.
+    pub fn with_tool_policy(mut self, policy: &crate::ToolPolicy) -> Self {
+        let allowed = policy
+            .allowed()
+            .filter(|name| self.allows(name))
+            .map(str::to_owned)
+            .collect();
+        self.allowlist = Some(allowed);
+        self
+    }
+
     /// This server under `policy` instead of the environment's.
     pub fn with_policy(mut self, policy: Policy) -> Self {
         self.policy = Ok(policy);

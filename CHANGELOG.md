@@ -20,6 +20,10 @@ First release with prebuilt binaries.
 
 - The shell verbs, the session daemon and `batch` are now the crate `ultra-instinct-verbs`. `ultra_instinct::verbs` and `ultra_instinct::CliError` are re-exported from it, so those paths still work.
 
+### Policy
+
+- `aui-policy.json` (or `AUI_POLICY_FILE`): allow or deny tools by name for a project; a denied tool answers `tool_not_allowed`.
+
 ### Shell verbs
 
 - `--boundary` / `AUI_CONTENT_BOUNDARIES=1`: the reading verbs print page content between marker lines that carry a random id, so page text that imitates a tool result or an instruction stays visibly inside the page.
