@@ -1197,4 +1197,17 @@ fn tab_eval_console_requests_print_short_lines() {
         line("requests", &[], json!({"dropped": 0, "entries": []})),
         "0 requests\n"
     );
+    // Events the buffer lost are named: the list is not the whole story.
+    assert_eq!(
+        line("requests", &[], json!({"dropped": 7, "entries": []})),
+        "0 requests · 7 dropped\n"
+    );
+    assert_eq!(
+        line(
+            "console",
+            &[],
+            json!({"dropped": 3, "entries": [{"level": "log", "text": "hi"}]})
+        ),
+        "log  hi\n1 entries · 3 dropped\n"
+    );
 }

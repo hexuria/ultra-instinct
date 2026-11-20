@@ -765,6 +765,15 @@ fn short(id: &str) -> &str {
     id.get(..8).unwrap_or(id)
 }
 
+/// ` · N dropped` when the daemon's event buffer overflowed since the last
+/// read: those entries are gone, so the count must not read as complete.
+fn dropped(body: &Value) -> String {
+    match body["dropped"].as_u64() {
+        Some(lost) if lost > 0 => format!(" · {lost} dropped"),
+        _ => String::new(),
+    }
+}
+
 pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
     let reply: Value = serde_json::from_str(reply)
         .map_err(|err| CliError::Browser(format!("bad daemon reply: {err}")))?;
@@ -835,6 +844,7 @@ pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
                 ));
             }
             out.push_str(&format!("{} entries", entries.len()));
+            out.push_str(&dropped(&body));
             out
         }
         "browser_read_network" => {
@@ -854,6 +864,7 @@ pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
                 ));
             }
             out.push_str(&format!("{} requests", entries.len()));
+            out.push_str(&dropped(&body));
             out
         }
         "browser_get_text" => s("text").to_owned(),
