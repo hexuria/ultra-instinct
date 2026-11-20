@@ -11,7 +11,7 @@ use serde_json::Value;
 pub const ENV_POLICY_FILE: &str = "AUI_POLICY_FILE";
 /// The file `aui` looks for in the working directory.
 pub const POLICY_FILE: &str = "aui-policy.json";
-/// The agent loop's name on an allow-list (not a tool, see `Server::run_goal`).
+/// The agent loop's name on an allow-list.
 const RUN_GOAL: &str = "run_goal";
 
 /// A parsed policy file.
@@ -78,8 +78,7 @@ impl ToolPolicy {
 }
 
 /// The policy file in force: [`ENV_POLICY_FILE`] when set, else
-/// [`POLICY_FILE`] in `dir` when anything has that name (a link to a
-/// missing file is found, and fails to read). Absolute when `dir` is.
+/// [`POLICY_FILE`] in `dir` when anything has that name.
 pub fn find_policy_file(dir: &Path) -> Option<PathBuf> {
     match std::env::var_os(ENV_POLICY_FILE) {
         Some(named) if !named.is_empty() => Some(dir.join(named)),

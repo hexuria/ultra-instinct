@@ -162,16 +162,7 @@ impl Server {
             &var(ENV_CONFIRM_PRESS),
             &var(ENV_REFUSE_BLOB),
         );
-        // The action policy file: one that does not read lets nothing run.
-        match std::env::var_os(crate::ENV_POLICY_FILE) {
-            Some(file) if !file.is_empty() => {
-                match crate::ToolPolicy::read(std::path::Path::new(&file)) {
-                    Ok(policy) => self.with_tool_policy(&policy),
-                    Err(_) => self.with_tool_allowlist(Vec::<String>::new()),
-                }
-            }
-            _ => self,
-        }
+        self
     }
 
     /// Only the tools `policy` lets run, of those already allowed here
