@@ -115,5 +115,6 @@ agent loop on its tab. The example, host options, limits, threading and the
 | `ultra-instinct-browser-tools` | The `browser_*` tools over a `BrowserHost` trait, error codes, secret masking |
 | `ultra-instinct-mcp` | JSON-RPC adapter and the embeddable `Server` |
 | `ultra-instinct-remote` | Remote decision transports and the HTTP text model (the only model / HTTP client crate) |
-| `ultra-instinct` | The `ultra-instinct` / `aui` CLI and session daemon |
+| `ultra-instinct-verbs` | The `aui` shell verbs, the session daemon and `batch` |
+| `ultra-instinct` | The `ultra-instinct` / `aui` CLI |
 | `ultra-instinct-dojo` | Battle diary, replay arena, lesson store |
