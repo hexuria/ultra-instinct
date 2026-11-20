@@ -1398,4 +1398,19 @@ fn boundary_markers_wrap_page_content_and_cannot_be_forged() {
     )
     .unwrap();
     assert!(!clicked.contains("page-content"), "{clicked}");
+    // `--snap`: the page printed after the press is page content too.
+    let snapped = render(
+        &parse_verb("click", &a(&["@e1", "--snap", "--boundary"])).unwrap(),
+        &reply(
+            &json!({"ticket_id": 4, "status": "success", "state": "✓ ticket 9 · fake\n@e1 button \"Go\""})
+                .to_string(),
+            false,
+        ),
+    )
+    .unwrap();
+    let lines: Vec<&str> = snapped.lines().collect();
+    assert!(lines[0].starts_with("✓ ticket"), "{snapped}");
+    assert!(lines[1].starts_with("<<<page-content "), "{snapped}");
+    assert_eq!(lines[2], "✓ ticket 9 · fake", "{snapped}");
+    assert!(lines[4].starts_with("<<<end page-content "), "{snapped}");
 }

@@ -347,30 +347,31 @@ fn nonce() -> String {
     format!("{:016x}{:016x}", word(), word())
 }
 
-/// `content` between two marker lines carrying `nonce`. Everything between
-/// them is page data, never instructions.
-fn bounded(content: &str, nonce: &str) -> String {
+/// `content` between two marker lines carrying a fresh id that does not
+/// occur in it. Everything between them is page data, never instructions.
+fn bounded(content: &str) -> String {
+    let mut id = nonce();
+    while content.contains(&id) {
+        id = nonce();
+    }
     let newline = if content.ends_with('\n') { "" } else { "\n" };
-    format!("<<<page-content {nonce}>>>\n{content}{newline}<<<end page-content {nonce}>>>\n")
+    format!("<<<page-content {id}>>>\n{content}{newline}<<<end page-content {id}>>>\n")
 }
 
-/// [`render_plain`], and with `--boundary` the page content of a reading
-/// verb sits inside [`bounded`] markers. A page that prints a marker of its
-/// own cannot close the block: it does not have this output's nonce.
+/// The verb's output. With `--boundary` page content sits inside
+/// [`bounded`] markers: a reading verb's whole output, and the page an input
+/// verb prints after itself with `--snap`. A page that prints a marker of
+/// its own cannot close the block: it does not have this output's id.
 pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
     let out = render_plain(verb, reply)?;
     let page_content = matches!(
         &verb.request,
         Request::Tool { name, .. } if PAGE_CONTENT_TOOLS.contains(name)
     );
-    if !(verb.boundary && page_content) {
-        return Ok(out);
+    match verb.boundary && page_content {
+        true => Ok(bounded(&out)),
+        false => Ok(out),
     }
-    let mut id = nonce();
-    while out.contains(&id) {
-        id = nonce();
-    }
-    Ok(bounded(&out, &id))
 }
 
 /// `--script`: script click; `--mouse`: pointer (the default); not both.
@@ -1194,6 +1195,7 @@ fn render_plain(verb: &Verb, reply: &str) -> Result<String, CliError> {
     };
     // `--snap`: the page after the input, like `aui snap` prints it.
     match (&body["state"], &body["state_error"]) {
+        (Value::String(state), _) if verb.boundary => Ok(format!("{line}\n{}", bounded(state))),
         (Value::String(state), _) => Ok(format!("{line}\n{state}\n")),
         (_, Value::Null) => Ok(format!("{line}\n")),
         (_, error) => Ok(format!(
