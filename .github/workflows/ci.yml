@@ -108,6 +108,21 @@ jobs:
           path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
 
+  test-macos:
+    name: tests on macOS (build + nextest)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        with:
+          tool: cargo-nextest
+      - run: cargo build --workspace --all-targets --locked
+      - run: cargo nextest run --workspace --locked --profile ci --no-tests=pass
+
   docs:
     name: rustdoc (-D warnings)
     runs-on: ubuntu-24.04
@@ -147,7 +162,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [repo-rules, fmt, clippy, check-crates, test, docs, deny, zizmor]
+    needs: [repo-rules, fmt, clippy, check-crates, test, test-macos, docs, deny, zizmor]
     runs-on: ubuntu-24.04
     env:
       NEEDS: ${{ toJSON(needs) }}
