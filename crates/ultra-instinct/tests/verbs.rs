@@ -873,10 +873,13 @@ const TOOL_VERBS: [(&str, VerbOrReason); 53] = [
     ("browser_set", Ok(("set", &["offline", "on"]))),
     ("browser_download", Ok(("download", &["@e1", "/tmp/f.bin"]))),
     ("browser_network", Ok(("network", &["har", "start"]))),
-    ("browser_go_back", Err("plan P2.2")),
-    ("browser_hover", Err("plan P2.2")),
-    ("browser_drag", Err("plan P2.2")),
-    ("browser_file_upload", Err("plan P2.2")),
+    ("browser_go_back", Ok(("back", &[]))),
+    ("browser_hover", Ok(("hover", &["@e1"]))),
+    ("browser_drag", Ok(("drag", &["@e1", "@e2"]))),
+    (
+        "browser_file_upload",
+        Ok(("upload", &["@e1", "/tmp/f.txt"])),
+    ),
     ("browser_get_text", Err("plan P2.3")),
     ("browser_extract_content", Err("plan P2.3")),
     ("browser_get_html", Err("plan P2.3")),
@@ -942,4 +945,75 @@ fn every_verb_reaches_a_tool_in_the_table() {
             "aui {verb}: add its tool to TOOL_VERBS"
         );
     }
+}
+
+#[test]
+fn back_hover_drag_upload_parse_to_their_tools() {
+    assert_eq!(tool("back", &[]), ("browser_go_back", json!({})));
+    assert_eq!(
+        tool("hover", &["@e2"]),
+        ("browser_hover", json!({"index": "@e2"}))
+    );
+    assert_eq!(
+        tool("drag", &["@e3", "@e5", "--confirm", "Bin"]),
+        (
+            "browser_drag",
+            json!({"from_index": "@e3", "to_index": "@e5", "confirm": "Bin"})
+        )
+    );
+    assert_eq!(
+        tool("upload", &["@e4", "/tmp/a.txt", "/tmp/b.txt"]),
+        (
+            "browser_file_upload",
+            json!({"index": "@e4", "paths": ["/tmp/a.txt", "/tmp/b.txt"]})
+        )
+    );
+    // A relative path is this shell's: the daemon may run elsewhere.
+    let (_, arguments) = tool("upload", &["@e4", "a.txt"]);
+    let sent = arguments["paths"][0].as_str().unwrap();
+    assert!(
+        std::path::Path::new(sent).is_absolute() && sent.ends_with("/a.txt"),
+        "{sent}"
+    );
+    for (verb, args) in [
+        ("back", &["x"][..]),
+        ("hover", &[]),
+        ("drag", &["@e1"]),
+        ("upload", &["@e1"]),
+    ] {
+        let err = parse_verb(verb, &a(args)).err().unwrap().to_string();
+        assert!(err.contains(&format!("usage: aui {verb}")), "{err}");
+    }
+}
+
+#[test]
+fn back_hover_drag_upload_render_one_short_line() {
+    let line = |verb: &str, args: &[&str], body: Value| {
+        let verb = parse_verb(verb, &a(args)).unwrap();
+        render(&verb, &reply(&body.to_string(), false)).unwrap()
+    };
+    assert_eq!(
+        line("back", &[], json!({"went_back": true})),
+        "✓ went back\n"
+    );
+    assert_eq!(
+        line("hover", &["@e2"], json!({"hovered": 2})),
+        "✓ hovering @e2\n"
+    );
+    assert_eq!(
+        line(
+            "drag",
+            &["@e3", "@e5"],
+            json!({"dragged": {"from": 3, "to": 5}})
+        ),
+        "✓ dragged @e3 to @e5\n"
+    );
+    assert_eq!(
+        line(
+            "upload",
+            &["@e4", "/tmp/a.txt", "/tmp/b.txt"],
+            json!({"acted": true, "index": 4, "ticket": 9})
+        ),
+        "✓ ticket 9 · 2 files set on @e4\n"
+    );
 }
