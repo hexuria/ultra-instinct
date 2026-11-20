@@ -212,14 +212,21 @@ pub(crate) struct AutoState {
 
 impl AutoState {
     /// Auto state for a `--launch` session, unless `AUI_SESSION_STATE`
-    /// turns it off or `dir` (the transport's state directory, already
-    /// made private) is `None`. `--cdp` / `--attach` sessions pass
-    /// `enabled: false`: their browsers are the user's own.
-    fn new(session: &SessionName, cdp: &str, enabled: bool, dir: Option<PathBuf>) -> Option<Self> {
+    /// turns it off or `dir` (the transport's state directory, made
+    /// private) yields `None`. `dir` runs only when auto state is on, so a
+    /// session that never saves leaves the directory alone. `--cdp` /
+    /// `--attach` sessions pass `enabled: false`: their browsers are the
+    /// user's own.
+    fn new(
+        session: &SessionName,
+        cdp: &str,
+        enabled: bool,
+        dir: impl FnOnce() -> Option<PathBuf>,
+    ) -> Option<Self> {
         if !enabled || auto_state_off() {
             return None;
         }
-        let dir = dir?;
+        let dir = dir()?;
         Some(Self {
             path: dir.join(format!("{}.json", session.as_str())),
             cdp: cdp.to_owned(),
@@ -601,8 +608,9 @@ pub fn serve_session<T: Transport>(
     };
     // Saved login back into the fresh browser before the first request;
     // the file is rewritten with the session's end state on the way out.
-    let state_dir = T::state_dir().filter(|dir| T::private_dir(dir).is_ok());
-    let mut auto = AutoState::new(session, &endpoint, auto_enabled, state_dir);
+    let mut auto = AutoState::new(session, &endpoint, auto_enabled, || {
+        T::state_dir().filter(|dir| T::private_dir(dir).is_ok())
+    });
     if let Some(state) = auto.as_mut() {
         state.restore(&mut owned.server);
     }
