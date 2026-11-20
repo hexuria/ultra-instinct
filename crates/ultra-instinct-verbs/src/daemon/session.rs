@@ -344,6 +344,13 @@ where
     stream.set_recv_timeout(Some(LINE_WAIT))?;
     let mut conn = Conn::new(&mut stream);
     while let Some(line) = conn.read_line()? {
+        // A blank line ends the connection: `send` writes one after its
+        // request, and probes write one alone. Windows named pipes cannot
+        // tell an idle connection from a closed one, so clients say "done"
+        // instead of relying on EOF.
+        if line.trim().is_empty() {
+            return Ok(false);
+        }
         let Some(value) = with_endpoint(&line, cdp) else {
             // Not JSON: the server answers the parse error.
             if let Some(reply) = server.handle_line(&line) {
@@ -457,12 +464,17 @@ pub fn serve_failure<T: Transport>(daemon: Daemon<T>, message: &str, wait: Durat
             }
             Err(_) => return,
         };
-        let answered = (|| -> io::Result<()> {
+        // A connection that closes without a line (a connect probe) or
+        // sends only a blank one is not the request being answered; keep
+        // waiting for it.
+        let answered = (|| -> io::Result<bool> {
             stream.set_nonblocking(false)?;
             stream.set_recv_timeout(Some(LINE_WAIT))?;
             let mut conn = Conn::new(&mut stream);
-            let Some(line) = conn.read_line()? else {
-                return Ok(());
+            let line = match conn.read_line()? {
+                Some(line) if line.trim().is_empty() => return Ok(false),
+                Some(line) => line,
+                None => return Ok(false),
             };
             let id = serde_json::from_str::<Value>(&line)
                 .ok()
@@ -470,9 +482,10 @@ pub fn serve_failure<T: Transport>(daemon: Daemon<T>, message: &str, wait: Durat
                 .unwrap_or(Value::Null);
             let reply = json!({"jsonrpc": "2.0", "id": id,
                                "error": {"code": -32000, "message": message}});
-            conn.write_line(&reply.to_string())
+            conn.write_line(&reply.to_string())?;
+            Ok(true)
         })();
-        if answered.is_ok() {
+        if answered.unwrap_or(false) {
             return;
         }
     }
@@ -676,7 +689,7 @@ pub fn list_sessions<T: Transport>(dir: &Path) -> Result<String, CliError> {
             .file_stem()
             .map(|stem| stem.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if T::connect(&path).is_ok() {
+        if probe::<T>(&path) {
             live.push(name);
         } else if std::fs::remove_file(&path).is_ok() {
             removed.push(name);
@@ -697,7 +710,10 @@ pub fn list_sessions<T: Transport>(dir: &Path) -> Result<String, CliError> {
     Ok(out)
 }
 
-/// Send one line on a fresh connection and read one reply line.
+/// Send one line on a fresh connection and read one reply line. A blank
+/// line follows the request: it ends the connection on the daemon's side
+/// (see [`serve_connection`]), which named pipes need because they cannot
+/// report a peer's close as EOF.
 pub fn send<T: Transport>(path: &Path, line: &str) -> Result<String, CliError> {
     let mut stream = T::connect(path).map_err(|err| io_err(path, err))?;
     stream
@@ -705,11 +721,26 @@ pub fn send<T: Transport>(path: &Path, line: &str) -> Result<String, CliError> {
         .map_err(|err| io_err(path, err))?;
     let mut conn = Conn::new(&mut stream);
     conn.write_line(line).map_err(|err| io_err(path, err))?;
+    conn.write_line("").map_err(|err| io_err(path, err))?;
     match conn.read_line().map_err(|err| io_err(path, err))? {
         Some(reply) if !reply.trim().is_empty() => Ok(reply),
         _ => Err(CliError::Browser(
             "the daemon closed without a reply".into(),
         )),
+    }
+}
+
+/// Liveness probe: connect, then write a blank line so the daemon closes
+/// the connection at once instead of holding its single thread for the
+/// whole line timeout. On unix the close would arrive as EOF anyway; on
+/// Windows named pipes cannot tell an idle connection from a closed one.
+fn probe<T: Transport>(path: &Path) -> bool {
+    match T::connect(path) {
+        Ok(mut stream) => {
+            let _ = stream.write_all(b"\n");
+            true
+        }
+        Err(_) => false,
     }
 }
 
@@ -719,13 +750,13 @@ pub fn connect_or_spawn<T: Transport>(
     path: &Path,
     spawn: impl FnOnce() -> Result<(), CliError>,
 ) -> Result<bool, CliError> {
-    if T::connect(path).is_ok() {
+    if probe::<T>(path) {
         return Ok(false);
     }
     spawn()?;
     let started = Instant::now();
     while started.elapsed() < SPAWN_WAIT {
-        if T::connect(path).is_ok() {
+        if probe::<T>(path) {
             return Ok(true);
         }
         std::thread::sleep(Duration::from_millis(30));
@@ -838,7 +869,7 @@ pub fn run_verb_at<T: Transport>(
     spawn: impl FnOnce() -> Result<(), CliError>,
 ) -> Result<String, CliError> {
     if verb.request == super::Request::Stop {
-        if T::connect(path).is_err() {
+        if !probe::<T>(path) {
             return Ok(format!(
                 "✓ no daemon for session {}\n",
                 verb.session.as_str()

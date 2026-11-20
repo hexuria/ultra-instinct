@@ -293,7 +293,7 @@ fn downloads_off_or_another_folder_refuse_before_any_press() {
     let err = off
         .call_tool(
             "browser_download",
-            &json!({"cdp": CDP, "index": 1, "path": "/tmp/r.pdf"}),
+            &json!({"cdp": CDP, "index": 1, "path": std::env::temp_dir().join("r.pdf")}),
         )
         .expect_err("off");
     assert_eq!(err, ToolError::DownloadsOff);
@@ -303,7 +303,8 @@ fn downloads_off_or_another_folder_refuse_before_any_press() {
     let dir = std::env::temp_dir().join("ui-downloads-only");
     let mut boxed = server.with_downloads(Downloads::Dir(dir.clone()));
     for elsewhere in [
-        "/etc/r.pdf".to_owned(),
+        // Absolute, outside the allowed folder (a sibling of `dir`).
+        dir.parent().unwrap().join("r.pdf").display().to_string(),
         dir.join("sub/r.pdf").display().to_string(),
         dir.join("../r.pdf").display().to_string(),
     ] {

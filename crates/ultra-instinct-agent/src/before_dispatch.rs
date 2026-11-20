@@ -110,7 +110,7 @@ mod tests {
             .find("pub trait BrowserRuntime {")
             .expect("trait in source");
         let body = &source[start..];
-        let body = &body[..body.find("\n}\n").expect("trait end")];
+        let body = &body[..body.find("\n}").expect("trait end")];
         body.lines()
             .filter_map(|line| line.trim().strip_prefix("fn "))
             .map(|rest| rest[..rest.find(['(', '<']).unwrap_or(rest.len())].to_owned())

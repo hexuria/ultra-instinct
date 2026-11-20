@@ -742,10 +742,11 @@ fn file_upload_sets_files_on_the_bound_node() {
             .observe_compact(&page())
             .call("DOM.setFileInputFiles", json!({})),
     );
+    let path = std::env::temp_dir().join("f.pdf");
     let out = call(
         &mut server,
         "browser_file_upload",
-        json!({"cdp": CDP, "index": 2, "path": "/tmp/f.pdf"}),
+        json!({"cdp": CDP, "index": 2, "path": path}),
     );
     assert_eq!(out["acted"], true, "{out}");
     assert!(
@@ -891,11 +892,10 @@ fn unwritable_artifact_path_is_an_error() {
     let (mut server, _log) = server(
         ScriptBuilder::new().call("Page.captureScreenshot", json!({"data": "iVBORw0KGgo="})),
     );
+    // Absolute but under a directory that does not exist: the write fails.
+    let path = std::env::temp_dir().join("ui-no-such-dir").join("shot.png");
     let err = server
-        .call_tool(
-            "browser_screenshot",
-            &json!({"cdp": CDP, "path": "/nonexistent-ultra-instinct-dir/shot.png"}),
-        )
+        .call_tool("browser_screenshot", &json!({"cdp": CDP, "path": path}))
         .expect_err("cannot write there");
     assert!(matches!(err, ToolError::InvalidArguments(_)), "{err:?}");
 }

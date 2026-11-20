@@ -124,15 +124,17 @@ fn a_relative_path_is_refused_before_any_cdp_call() {
 #[test]
 fn an_absolute_path_is_set_as_given_anywhere() {
     let (mut server, log) = replay(Uploads::Anywhere);
-    let out = upload(&mut server, &[Path::new("/tmp/f.pdf")]).unwrap();
+    let path = std::env::temp_dir().join("f.pdf");
+    let out = upload(&mut server, &[&path]).unwrap();
     assert_eq!(out["acted"], true, "{out}");
-    assert_eq!(files_set(&log), [json!(["/tmp/f.pdf"])]);
+    assert_eq!(files_set(&log), [json!([path.display().to_string()])]);
 }
 
 #[test]
 fn uploads_off_refuses_before_any_cdp_call() {
     let (mut server, log) = replay(Uploads::Off);
-    let err = upload(&mut server, &[Path::new("/tmp/f.pdf")]).expect_err("off");
+    let path = std::env::temp_dir().join("f.pdf");
+    let err = upload(&mut server, &[&path]).expect_err("off");
     assert_eq!(err, ToolError::UploadsOff);
     assert_eq!(err.to_value()["code"], "uploads_off");
     assert!(driving(&log).is_empty(), "{:?}", log.borrow());

@@ -678,6 +678,12 @@ mod imp {
         }
     }
 
+    /// `ERROR_PIPE_BUSY` (a full nonblocking pipe buffer) reaches `write`
+    /// as an uncategorized OS error, not `WouldBlock`.
+    fn pipe_would_block(err: &io::Error) -> bool {
+        err.kind() == io::ErrorKind::WouldBlock || err.raw_os_error() == Some(231)
+    }
+
     impl std::io::Read for PipeStream {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             let deadline = self
@@ -686,17 +692,21 @@ mod imp {
                 .map(|timeout| std::time::Instant::now() + timeout);
             loop {
                 match self.inner.read(buf) {
-                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                        if deadline.is_some_and(|at| std::time::Instant::now() >= at) {
-                            return Err(io::Error::new(
-                                io::ErrorKind::WouldBlock,
-                                "session pipe read timed out",
-                            ));
-                        }
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                    // interprocess downgrades "no data yet" and "peer
+                    // closed" to the same Ok(0); with a deadline armed both
+                    // poll until it (a real close then surfaces as the
+                    // timeout, like SO_RCVTIMEO). Without one, Ok(0) is EOF.
+                    Ok(0) if deadline.is_some() => {}
                     result => return result,
                 }
+                if deadline.is_some_and(|at| std::time::Instant::now() >= at) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "session pipe read timed out",
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(5));
             }
         }
     }
@@ -705,7 +715,7 @@ mod imp {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             loop {
                 match self.inner.write(buf) {
-                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                    Err(err) if pipe_would_block(&err) => {
                         std::thread::sleep(Duration::from_millis(5));
                     }
                     result => return result,
@@ -768,10 +778,15 @@ mod imp {
                         // daemon still starting answers no probe yet. Give
                         // it a moment across several probes before taking
                         // the marker over, or two daemons could share one
-                        // pipe name.
+                        // pipe name. A live probe writes a blank line so the
+                        // daemon closes the connection at once — a named
+                        // pipe cannot tell an idle connection from a closed
+                        // one, and a bare connect would hold it for the
+                        // whole line timeout.
                         let mut live = false;
                         for _ in 0..8 {
-                            if connect_name(&name).is_ok() {
+                            if let Ok(mut stream) = connect_name(&name) {
+                                let _ = stream.write_all(b"\n");
                                 live = true;
                                 break;
                             }
@@ -1027,31 +1042,36 @@ mod tests {
         }
         let both = Browser::named(Some("http://x"), Some(Launch::default()));
         assert!(both.unwrap_err().to_string().contains("pick one"));
-        for other in ["--launch", "--cdp=http://x", "--profile=/p", "--headed"] {
-            let err = daemon_command(&a(&["--attach", other]))
-                .unwrap_err()
-                .to_string();
-            let flag = other.split('=').next().unwrap();
+        // `--attach` multiplexes the user's own Chrome over its
+        // remote-debugging socket, which is unix-only for now.
+        #[cfg(unix)]
+        {
+            for other in ["--launch", "--cdp=http://x", "--profile=/p", "--headed"] {
+                let err = daemon_command(&a(&["--attach", other]))
+                    .unwrap_err()
+                    .to_string();
+                let flag = other.split('=').next().unwrap();
+                assert!(
+                    err.ends_with(&format!("--attach and {flag}: pick one")),
+                    "{err}"
+                );
+            }
+            let err = check_attach(true, [false; 4], false).unwrap_err();
             assert!(
-                err.ends_with(&format!("--attach and {flag}: pick one")),
+                err.to_string()
+                    .contains("name the sites with --allow-domain"),
                 "{err}"
             );
+            let open = |args: &[&str]| parse_verb("open", &a(args)).unwrap();
+            let attach = open(&[
+                "https://m.example/",
+                "--attach",
+                "--allow-domain",
+                "m.example",
+            ]);
+            assert_eq!(attach.browser().unwrap(), Browser::Attach);
+            assert!(attach.spawn_settings());
         }
-        let err = check_attach(true, [false; 4], false).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("name the sites with --allow-domain"),
-            "{err}"
-        );
-        let open = |args: &[&str]| parse_verb("open", &a(args)).unwrap();
-        let attach = open(&[
-            "https://m.example/",
-            "--attach",
-            "--allow-domain",
-            "m.example",
-        ]);
-        assert_eq!(attach.browser().unwrap(), Browser::Attach);
-        assert!(attach.spawn_settings());
     }
 
     #[cfg(any(unix, windows))]
