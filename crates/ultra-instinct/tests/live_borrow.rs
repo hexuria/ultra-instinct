@@ -187,15 +187,26 @@ impl Session {
         }
     }
 
-    /// The `@eN` of the control whose label is `label` in a fresh snap.
+    /// The `@eN` of the control whose label is `label` in a fresh snap;
+    /// snaps again until the page has rendered it (up to 10 s).
     fn reference(&self, label: &str) -> String {
-        let snap = self.verb(&["snap"]);
         let quoted = format!("\"{label}\"");
-        snap.lines()
-            .find(|line| line.starts_with("@e") && line.contains(&quoted))
-            .and_then(|line| line.split_whitespace().next())
-            .unwrap_or_else(|| panic!("no control {quoted} in:\n{snap}"))
-            .to_owned()
+        let started = Instant::now();
+        loop {
+            let snap = self.verb(&["snap"]);
+            if let Some(reference) = snap
+                .lines()
+                .find(|line| line.starts_with("@e") && line.contains(&quoted))
+                .and_then(|line| line.split_whitespace().next())
+            {
+                return reference.to_owned();
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "no control {quoted} in:\n{snap}"
+            );
+            std::thread::sleep(Duration::from_millis(150));
+        }
     }
 }
 
