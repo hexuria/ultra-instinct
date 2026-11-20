@@ -10,8 +10,6 @@ description = "Allow / refuse / escalate decisions for ultra-instinct"
 
 [dependencies]
 ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.0"}
-ultra-instinct-geometry = { path = "../ultra-instinct-geometry", version = "0.1.0"}
-ultra-instinct-protocol = { path = "../ultra-instinct-protocol", version = "0.1.0"}
 
 [dev-dependencies]
 proptest = "1.11"

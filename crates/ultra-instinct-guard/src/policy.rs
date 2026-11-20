@@ -27,10 +27,10 @@
 
 use std::fmt;
 
+use ultra_instinct_core::protocol::{ActionTicket, GuardReason, TicketInvalid};
 use ultra_instinct_core::{
     Action, FormSubmit, InteractionManifold, InteractionRegion, RegionId, Role,
 };
-use ultra_instinct_protocol::{ActionTicket, GuardReason, TicketInvalid};
 
 use crate::ticket::{revalidate, ConsumeError, TicketLedger};
 #[cfg(doc)]

@@ -2,8 +2,8 @@
 //! scripts, through the public API only.
 
 use ultra_instinct_browser::*;
+use ultra_instinct_core::observe::diff;
 use ultra_instinct_core::{Action, RegionId, Role, SourceMask};
-use ultra_instinct_observe::diff;
 
 #[test]
 fn observe_sign_in_on_cdp_snapshot_fuses_the_button() {

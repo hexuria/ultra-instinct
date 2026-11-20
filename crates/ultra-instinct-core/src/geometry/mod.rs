@@ -11,15 +11,13 @@
 //! - near when the gap between rectangles is `<= 0.08` viewport units
 //! - aligned when centers differ by `<= 0.05` on that axis
 
-#![forbid(unsafe_code)]
-
 mod state;
 
 pub use state::{Availability, RegionState, Visibility};
 
 use std::fmt;
 
-use ultra_instinct_core::{InteractionManifold, Rect, RegionId, Relation, SizeClass, Zone};
+use crate::{InteractionManifold, Rect, RegionId, Relation, SizeClass, Zone};
 
 /// Normalized rectangle. Components are fractions of the viewport, not pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -241,7 +239,7 @@ pub fn relations(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ultra_instinct_core::{
+    use crate::{
         Action, InteractionRegion, Rect, RegionFlags, RegionId, RegionParts, Role, SourceMask,
         UnitInterval, Zone,
     };

@@ -4,9 +4,9 @@
 //! [`is_fully_offscreen`], so `observe`, the world snapshot and `guard`
 //! cannot disagree about whether a control is disabled or off screen.
 
-use ultra_instinct_core::{InteractionRegion, Rect};
+use crate::{InteractionRegion, Rect};
 
-use crate::is_fully_offscreen;
+use crate::geometry::is_fully_offscreen;
 
 /// Whether the control accepts input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -91,9 +91,7 @@ impl RegionState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ultra_instinct_core::{
-        Action, RegionFlags, RegionId, RegionParts, Role, SourceMask, UnitInterval,
-    };
+    use crate::{Action, RegionFlags, RegionId, RegionParts, Role, SourceMask, UnitInterval};
 
     fn region(flags: &str, y: f64) -> InteractionRegion {
         InteractionRegion::try_new(RegionParts {

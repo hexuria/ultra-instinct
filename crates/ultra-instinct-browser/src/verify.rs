@@ -4,8 +4,8 @@
 
 use std::fmt;
 
+use ultra_instinct_core::observe::ManifoldDiff;
 use ultra_instinct_core::{token_recall, tokenize, InteractionManifold, RegionId};
-use ultra_instinct_observe::ManifoldDiff;
 
 use crate::page::PageDelta;
 
@@ -170,10 +170,10 @@ pub fn verify_delta(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ultra_instinct_core::observe::diff;
     use ultra_instinct_core::{
         Action, InteractionRegion, Rect, RegionFlags, RegionParts, Role, SourceMask, UnitInterval,
     };
-    use ultra_instinct_observe::diff;
 
     use crate::page::{page_delta, PageState};
 

@@ -5,11 +5,11 @@
 use serde_json::Value;
 use ultra_instinct_agent::ExecError;
 use ultra_instinct_browser::BrowserError;
+use ultra_instinct_core::protocol::GuardReason;
 use ultra_instinct_core::{Action, InteractionRegion};
 use ultra_instinct_guard::{
     is_activating_key, refused_place, ConsumeError, Policy, Refusal, UNOBSERVED_FOCUS,
 };
-use ultra_instinct_protocol::GuardReason;
 
 use crate::bound::ticket_error;
 use crate::error::ToolError;

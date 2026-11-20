@@ -1684,9 +1684,7 @@ dependencies = [
  "ultra-instinct-dojo",
  "ultra-instinct-guard",
  "ultra-instinct-mcp",
- "ultra-instinct-observe",
  "ultra-instinct-policy",
- "ultra-instinct-protocol",
  "ultra-instinct-remote",
 ]
 
@@ -1699,9 +1697,7 @@ dependencies = [
  "ultra-instinct-browser",
  "ultra-instinct-core",
  "ultra-instinct-guard",
- "ultra-instinct-observe",
  "ultra-instinct-policy",
- "ultra-instinct-protocol",
 ]
 
 [[package]]
@@ -1715,8 +1711,6 @@ dependencies = [
  "ultra-instinct-cdp",
  "ultra-instinct-chrome",
  "ultra-instinct-core",
- "ultra-instinct-geometry",
- "ultra-instinct-observe",
 ]
 
 [[package]]
@@ -1730,9 +1724,7 @@ dependencies = [
  "ultra-instinct-cdp",
  "ultra-instinct-core",
  "ultra-instinct-guard",
- "ultra-instinct-observe",
  "ultra-instinct-policy",
- "ultra-instinct-protocol",
 ]
 
 [[package]]
@@ -1755,6 +1747,9 @@ dependencies = [
 [[package]]
 name = "ultra-instinct-core"
 version = "0.1.0"
+dependencies = [
+ "proptest",
+]
 
 [[package]]
 name = "ultra-instinct-dojo"
@@ -1766,20 +1761,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "ultra-instinct-geometry"
-version = "0.1.0"
-dependencies = [
- "ultra-instinct-core",
-]
-
-[[package]]
 name = "ultra-instinct-guard"
 version = "0.1.0"
 dependencies = [
  "proptest",
  "ultra-instinct-core",
- "ultra-instinct-geometry",
- "ultra-instinct-protocol",
 ]
 
 [[package]]
@@ -1794,19 +1780,8 @@ dependencies = [
  "ultra-instinct-browser-tools",
  "ultra-instinct-cdp",
  "ultra-instinct-core",
- "ultra-instinct-geometry",
  "ultra-instinct-guard",
- "ultra-instinct-observe",
  "ultra-instinct-policy",
- "ultra-instinct-protocol",
-]
-
-[[package]]
-name = "ultra-instinct-observe"
-version = "0.1.0"
-dependencies = [
- "proptest",
- "ultra-instinct-core",
 ]
 
 [[package]]
@@ -1817,13 +1792,6 @@ dependencies = [
  "instinct-lexicon",
  "instinct-text",
  "serde_json",
- "ultra-instinct-core",
-]
-
-[[package]]
-name = "ultra-instinct-protocol"
-version = "0.1.0"
-dependencies = [
  "ultra-instinct-core",
 ]
 

@@ -12,13 +12,13 @@ use ultra_instinct_browser::{
     page_delta, verify, verify_delta, BrowserSession, Expectation, PageState, ReplayTransport,
     VerifyError,
 };
+use ultra_instinct_core::geometry::RegionState;
+use ultra_instinct_core::observe::{diff, history::SnapshotId};
+use ultra_instinct_core::protocol::GuardDecision;
 use ultra_instinct_core::{
     parse_fixture, Action, InteractionManifold, InteractionRegion, LocateQuery, RegionId, Role,
 };
-use ultra_instinct_geometry::RegionState;
 use ultra_instinct_guard::{guard, with_front_layer, FrontLayer, GuardRequest, WorldSnapshot};
-use ultra_instinct_observe::{diff, history::SnapshotId};
-use ultra_instinct_protocol::GuardDecision;
 
 use ultra_instinct_browser_tools::BrowserHost as _;
 
@@ -421,9 +421,9 @@ fn verify_tool(server: &mut Server, arguments: &Value) -> Result<Value, ToolErro
     }
 }
 
-fn parse_ticket(value: &Value) -> Result<ultra_instinct_protocol::ActionTicket, ToolError> {
+fn parse_ticket(value: &Value) -> Result<ultra_instinct_core::protocol::ActionTicket, ToolError> {
+    use ultra_instinct_core::protocol::ActionTicket;
     use ultra_instinct_core::{Action, Role};
-    use ultra_instinct_protocol::ActionTicket;
     let obj = value
         .as_object()
         .ok_or_else(|| ToolError::InvalidArguments("ticket must be an object".into()))?;

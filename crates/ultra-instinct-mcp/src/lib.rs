@@ -129,8 +129,8 @@ pub use ultra_instinct_browser_tools::{
 /// covers it: Locate and Inspect read the page with `observe` (regions carry id,
 /// label, parent and state), Act is `guard`, and Diff is `verify` with
 /// `before_snapshot` / `after_snapshot`.
-pub fn tool_for_phase(phase: ultra_instinct_protocol::LoopPhase) -> &'static str {
-    use ultra_instinct_protocol::LoopPhase;
+pub fn tool_for_phase(phase: ultra_instinct_core::protocol::LoopPhase) -> &'static str {
+    use ultra_instinct_core::protocol::LoopPhase;
     match phase {
         LoopPhase::Observe | LoopPhase::Locate | LoopPhase::Inspect => TOOL_OBSERVE,
         LoopPhase::Act => TOOL_GUARD,
@@ -141,7 +141,7 @@ pub fn tool_for_phase(phase: ultra_instinct_protocol::LoopPhase) -> &'static str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ultra_instinct_protocol::{FirewallPhase, LoopPhase, FIREWALL_ORDER, LOOP_ORDER};
+    use ultra_instinct_core::protocol::{FirewallPhase, LoopPhase, FIREWALL_ORDER, LOOP_ORDER};
 
     #[test]
     fn attach_serves_every_tool_but_the_profile_wide_ones() {

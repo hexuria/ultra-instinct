@@ -20,13 +20,13 @@ use ultra_instinct_agent::{
 };
 use ultra_instinct_browser::BrowserError;
 use ultra_instinct_cdp::DEFAULT_CDP_HTTP;
+use ultra_instinct_core::protocol::GuardReason;
 use ultra_instinct_core::{
     Action, ActionSpace, InteractionManifold, InteractionRegion, RegionId, Role,
 };
 use ultra_instinct_guard::{
     check_drop_target, consume_ticket_once_checked, gate, gate_check, gate_drag,
 };
-use ultra_instinct_protocol::GuardReason;
 
 use crate::args::{browser_err, opt_bool, opt_str, opt_usize, req_str};
 use crate::bound::{self, at_index};

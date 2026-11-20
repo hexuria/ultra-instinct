@@ -21,9 +21,9 @@
 //! 8. input goes to `ticket.target_id` — never a caller-supplied id.
 
 use ultra_instinct_browser::PageState;
+use ultra_instinct_core::protocol::{ActionTicket, GuardReason, TicketInvalid};
 use ultra_instinct_core::{Action, InteractionManifold, RegionId};
 use ultra_instinct_guard::{gate_check, revalidate, Policy, TicketLedger};
-use ultra_instinct_protocol::{ActionTicket, GuardReason, TicketInvalid};
 
 use crate::runtime::{BrowserRuntime, Input};
 
