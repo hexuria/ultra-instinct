@@ -18,7 +18,63 @@ mod cli_execute {
 
     #[test]
     fn usage_lists_the_product_commands_only() {
-        let help = execute(&args(&["--help"])).unwrap();
+        // P3.2: the top-level help is one screen and names every group.
+        let short = execute(&args(&["--help"])).unwrap();
+        assert!(short.lines().count() <= 30, "{short}");
+        assert!(short.lines().all(|line| line.len() <= 110), "{short}");
+        for named in [
+            "open",
+            "snap",
+            "run",
+            "doctor",
+            "upgrade",
+            "page observe|guard|verify",
+        ] {
+            assert!(short.contains(named), "{named}: {short}");
+        }
+        assert_eq!(execute(&args(&[])).unwrap(), short);
+        assert_eq!(execute(&args(&["help"])).unwrap(), short);
+        // A topic is that command's part of the full help.
+        let page = execute(&args(&["help", "page"])).unwrap();
+        assert!(
+            page.starts_with("observe (--fixture") && page.contains("\nverify ("),
+            "{page}"
+        );
+        assert_eq!(execute(&args(&["page", "--help"])).unwrap(), page);
+        let diary = execute(&args(&["help", "diary"])).unwrap();
+        assert!(
+            diary.starts_with("replay --diary") && diary.contains("\nexams --diary"),
+            "{diary}"
+        );
+        let verbs = execute(&args(&["click", "--help"])).unwrap();
+        assert!(
+            verbs.starts_with("shell verbs (") && verbs.contains("  tab new [url]"),
+            "{verbs}"
+        );
+        assert_eq!(execute(&args(&["help", "verbs"])).unwrap(), verbs);
+        assert!(execute(&args(&["help", "nope"])).is_err());
+        assert_eq!(execute(&args(&["help", "--help"])).unwrap(), short);
+        assert_eq!(
+            execute(&args(&["help", "run", "-h"])).unwrap(),
+            execute(&args(&["help", "run"])).unwrap()
+        );
+        // A misspelt group command is an error, not help with exit 0.
+        for bad in [
+            &["diary", "replayy", "--diary", "x"][..],
+            &["page", "--json"],
+        ] {
+            assert!(execute(&args(bad)).is_err(), "{bad:?}");
+        }
+        // Old and grouped spellings reach the same command.
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/modal-confirm-closed.manifold"
+        );
+        assert_eq!(
+            execute(&args(&["page", "observe", "--fixture", fixture])).unwrap(),
+            execute(&args(&["observe", "--fixture", fixture])).unwrap()
+        );
+        let help = execute(&args(&["help", "all"])).unwrap();
         let first = help.lines().next().unwrap();
         assert_eq!(
             first,

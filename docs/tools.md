@@ -203,5 +203,7 @@ Other commands:
 | `aui install [--run]` | Print (or run) the Chrome for Testing install command |
 | `aui upgrade [--version <tag>]` | Replace `aui` and `ultra-instinct` where they are installed with the latest release build (or `<tag>`), after its `SHA256SUMS` check; a mismatch replaces nothing. Needs `curl` and `tar` |
 | `aui run --goal <text> ...` | The agent loop for runs nobody checks step by step: the runtime picks every step (`--decision instinct`: Instinct, no model; `--decision model`: your `TEXT_MODEL_*` endpoint; `jev` / `clef`; every model is limited to offered actions) and abstains rather than guess; see `aui --help` |
-| `aui replay --diary <dir>`, `aui lessons ...`, `aui exams ...` | Offline diary tools |
+| `aui diary replay --diary <dir>`, `aui diary lessons ...`, `aui diary exams ...` | Offline diary tools (the bare `aui replay` / `lessons` / `exams` still work) |
+| `aui page observe`, `aui page guard`, `aui page verify` | One-shot page checks against `--cdp` or a fixture (the bare `aui observe` / `guard` / `verify` still work) |
+| `aui help [<command>\|all]`, `aui <command> --help` | The one-screen help, one command's flags, or everything |
 | `aui observe`, `aui guard`, `aui verify` | The product tools from the command line (`--fixture` or `--cdp`) |
