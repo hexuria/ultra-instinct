@@ -127,7 +127,7 @@ try {
     $want = $null
     foreach ($line in Get-Content (Join-Path $tmp 'SHA256SUMS')) {
         $parts = $line -split '\s+'
-        if ($parts[-1] -eq $archive) { $want = $parts[0]; break }
+        if ($parts[-1].TrimStart('*') -eq $archive) { $want = $parts[0]; break }
     }
     $got = (Get-FileHash -Algorithm SHA256 $file).Hash.ToLower()
     if (-not $want -or $want.ToLower() -ne $got) {
