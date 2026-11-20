@@ -141,6 +141,27 @@ fn replace(new: &Path, old: &Path, scratch: &Path) -> Result<(), CliError> {
     std::fs::rename(new, old).map_err(cannot)
 }
 
+/// Hold `<dir>/.aui-upgrade.lock`; another upgrade holding it is an error.
+fn upgrade_lock(dir: &Path) -> Result<std::fs::File, CliError> {
+    let path = dir.join(".aui-upgrade.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|err| fail(format!("cannot write to {}: {err}", dir.display())))?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => Err(fail(format!(
+            "another aui upgrade is running in {}",
+            dir.display()
+        ))),
+        Err(std::fs::TryLockError::Error(err)) => {
+            Err(fail(format!("cannot lock {}: {err}", path.display())))
+        }
+    }
+}
+
 /// Scratch dirs an earlier Windows upgrade left behind: the old binaries a
 /// running process still held. Best-effort; a still-held one stays.
 fn remove_stale_scratch(dir: &Path) {
@@ -189,9 +210,16 @@ pub(crate) fn upgrade_command(args: &[String]) -> Result<String, CliError> {
             dir.display()
         )));
     }
-    if cfg!(windows) {
+    // Windows: one upgrade per install dir at a time, so the cleanup below
+    // only ever finds scratch dirs of finished upgrades. The OS drops the
+    // lock when this process exits, however it exits.
+    let _lock = if cfg!(windows) {
+        let lock = upgrade_lock(dir)?;
         remove_stale_scratch(dir);
-    }
+        Some(lock)
+    } else {
+        None
+    };
     // Beside the binaries, so the final rename stays on one filesystem.
     let scratch = dir.join(format!(".aui-upgrade-{}", std::process::id()));
     std::fs::create_dir(&scratch)
@@ -246,6 +274,25 @@ mod tests {
         assert_eq!(listed(sums, "aui-b.tar.gz").as_deref(), Some("bb"));
         assert_eq!(listed(sums, "aui-c.tar.gz"), None);
         assert_eq!(listed(sums, "a.tar.gz"), None);
+    }
+
+    #[test]
+    fn a_second_upgrade_waits_out_the_first_before_cleaning_scratch() {
+        let dir = std::env::temp_dir().join(format!("aui-upgrade-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = upgrade_lock(&dir).unwrap();
+        // The first upgrade's backup sits in its scratch dir, mid-replace.
+        let scratch = dir.join(".aui-upgrade-1");
+        std::fs::create_dir(&scratch).unwrap();
+        let second = upgrade_lock(&dir);
+        assert!(second.is_err(), "a concurrent upgrade took the lock");
+        assert!(scratch.exists());
+        drop(first);
+        let _third = upgrade_lock(&dir).unwrap();
+        remove_stale_scratch(&dir);
+        assert!(!scratch.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
