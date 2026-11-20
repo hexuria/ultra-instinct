@@ -65,7 +65,7 @@ daemon is unix-socket only).
 | Id | Item | Done-check | Needs |
 |---|---|---|---|
 | P3.1 | Drop the alias tools `browser_form_input`, `browser_get_page_text`, `browser_javascript_exec`, and `browser_search` (ask first: breaks MCP callers that use those names) | Tool count and docs agree; calling a dropped name returns the unknown-tool code | |
-| P3.2 | Move `aui observe / guard / verify` and `replay / lessons / exams` out of the top-level help into one group each | `aui --help` fits one screen; old spellings still work or print where they went | |
+| P3.2 (done) | Move `aui observe / guard / verify` and `replay / lessons / exams` out of the top-level help into one group each | `aui --help` fits one screen; old spellings still work or print where they went | |
 | P3.3 (done) | Delete `fixtures/*.browser-use.json` and `*.cua.json` if no test or bench reads them | `cargo nextest run --workspace` and the bench smoke pass without them | |
 | P3.4 | Fold `ultra-instinct-geometry`, `-protocol` and `-observe` into their one natural owner (ask first: they are published on crates.io and `scripts/architecture.txt` names them) | Architecture check passes; public paths re-exported or the break is in the changelog | |
 | P3.5 (done) | Replace the README hero image with one this repo owns, or drop it | README renders with no third-party link | |

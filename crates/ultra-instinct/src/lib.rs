@@ -135,18 +135,113 @@ impl std::fmt::Display for CliError {
 
 impl std::error::Error for CliError {}
 
+/// `aui --help`: one screen. Every command, one line each; the details are
+/// a topic away (`aui help <command>`, `aui <command> --help`).
 pub fn usage() -> &'static str {
-    "ultra-instinct run|replay|lessons|exams|doctor|install|upgrade|observe|guard|verify|mcp|skills|batch|session|open|snap|click|type|select|key|scroll|wait|shot|tabs|close|dialog|forward|reload|check|uncheck|focus|keyboard|get|is|count|state|cookies|storage|set|download|network|back|hover|drag|upload|text|read|html|find|pdf|tab|eval|console|requests|dblclick|rightclick|midclick|tripleclick|hold|scrollto|zoom|options\nrun --goal <text> (--cdp [url] [--url <page>] | --fixture <replay.cdp.json|page.manifold>) [--max-steps N] [--wait-secs N] [--text-model-cmd <program>] [--decision instinct|jev|clef|clef-flash|dojo|model] [--diary <dir>] [--lessons <store>] [--no-screenshot] [--no-page-text] [--no-derived-text] [--second-opinion] [--live-steps] [--launch [--headed] [--profile <dir>]] [--load-state <path>] [--save-state <path>] [--allow-domain <host>]... [--confirm-press <glob>]... [--confirm <label>]...\n  --launch starts a headless Chrome for the run (headed with --headed; not with --cdp) and closes it at exit; --profile <dir> runs it on that folder, kept on disk (not a browser's own everyday profile)\n  --load-state sets saved cookies + storage before the first observe; --save-state saves them when the run ends (counts only, never values)\n  --allow-domain shop.example|*.shop.example: input only on those hosts (--url must match); --confirm-press \"Pay*\": a matching click ends BLOCKED until --confirm \"<label>\"\n  goal clauses: `click X if present` acts when X shows up (else skipped); `wait for X` waits for X; both wait up to --wait-secs (default 30)\n  owned agent loop: observe -> Instinct -> gate -> ticket -> execute -> verify (no LLM, no MCP)\n  --cdp with --url opens a background tab and closes it at exit; without --url drives the first existing tab\n  --diary <dir> writes the battle diary (schema v1 JSONL): every decision, step, and outcome\n--version prints the version\ndoctor [--json] [--quick] [--cdp <url>] checks Chrome, the --cdp endpoint, a test launch, and $TMPDIR/aui; non-zero when a required check fails\ninstall [--run] prints the command that installs Chrome for Testing into ~/.cache/ultra-instinct/chrome (--run runs it with npx, then doctor)\nupgrade [--version <tag>] replaces this binary with the latest release build (or <tag>); a checksum mismatch replaces nothing\nupgrade [--version <tag>] replaces this binary with the latest release build (or <tag>); a checksum mismatch replaces nothing\nreplay --diary <dir> [--lessons <store>] re-scores every recorded decision with Instinct: agree / would-abstain / regress\nlessons --diary <dir> --store <path> distills diaries into the versioned lesson store (words / places / moves / trust)
+    "ultra-instinct (aui): a browser an agent can drive from the shell\n\
+\n\
+Drive a page (one browser per --session <name>; `aui help verbs` lists every verb):\n\
+\x20 open <url> --launch     start a browser and open a page\n\
+\x20 snap                    list the controls as @e1, @e2, ...\n\
+\x20 click|type|select|key   press a control from the latest snap (refuses when the page changed)\n\
+\x20 text|read|shot|pdf      read the page\n\
+\x20 close                   end the session\n\
+\x20 batch, session          several verbs in one call; list sessions\n\
+\n\
+Hand over a goal:\n\
+\x20 run --goal <text> --launch --url <page>   the agent loop: observe, decide, gate, press, verify\n\
+\n\
+Set up:\n\
+\x20 doctor                  check Chrome and the session directory\n\
+\x20 install                 print (or --run) the Chrome for Testing install command\n\
+\x20 upgrade                 replace this binary with the latest release\n\
+\x20 skills get core         the guide for agents\n\
+\x20 mcp                     serve the tools over stdio (MCP)\n\
+\n\
+Less common:\n\
+\x20 page observe|guard|verify     one-shot page checks against --cdp or a fixture\n\
+\x20 diary replay|lessons|exams    offline tools over a run's --diary\n\
+\n\
+aui help <command> prints that command's flags; aui help all prints everything; --version prints the version\n"
+}
+
+/// Every command with its flags (`aui help all`).
+pub fn full_usage() -> &'static str {
+    "ultra-instinct run|replay|lessons|exams|doctor|install|upgrade|observe|guard|verify|mcp|skills|batch|session|open|snap|click|type|select|key|scroll|wait|shot|tabs|close|dialog|forward|reload|check|uncheck|focus|keyboard|get|is|count|state|cookies|storage|set|download|network|back|hover|drag|upload|text|read|html|find|pdf|tab|eval|console|requests|dblclick|rightclick|midclick|tripleclick|hold|scrollto|zoom|options\nrun --goal <text> (--cdp [url] [--url <page>] | --fixture <replay.cdp.json|page.manifold>) [--max-steps N] [--wait-secs N] [--text-model-cmd <program>] [--decision instinct|jev|clef|clef-flash|dojo|model] [--diary <dir>] [--lessons <store>] [--no-screenshot] [--no-page-text] [--no-derived-text] [--second-opinion] [--live-steps] [--launch [--headed] [--profile <dir>]] [--load-state <path>] [--save-state <path>] [--allow-domain <host>]... [--confirm-press <glob>]... [--confirm <label>]...\n  --launch starts a headless Chrome for the run (headed with --headed; not with --cdp) and closes it at exit; --profile <dir> runs it on that folder, kept on disk (not a browser's own everyday profile)\n  --load-state sets saved cookies + storage before the first observe; --save-state saves them when the run ends (counts only, never values)\n  --allow-domain shop.example|*.shop.example: input only on those hosts (--url must match); --confirm-press \"Pay*\": a matching click ends BLOCKED until --confirm \"<label>\"\n  goal clauses: `click X if present` acts when X shows up (else skipped); `wait for X` waits for X; both wait up to --wait-secs (default 30)\n  owned agent loop: observe -> Instinct -> gate -> ticket -> execute -> verify (no LLM, no MCP)\n  --cdp with --url opens a background tab and closes it at exit; without --url drives the first existing tab\n  --diary <dir> writes the battle diary (schema v1 JSONL): every decision, step, and outcome\n--version prints the version\ndoctor [--json] [--quick] [--cdp <url>] checks Chrome, the --cdp endpoint, a test launch, and $TMPDIR/aui; non-zero when a required check fails\ninstall [--run] prints the command that installs Chrome for Testing into ~/.cache/ultra-instinct/chrome (--run runs it with npx, then doctor)\nupgrade [--version <tag>] replaces this binary with the latest release build (or <tag>); a checksum mismatch replaces nothing\nreplay --diary <dir> [--lessons <store>] re-scores every recorded decision with Instinct: agree / would-abstain / regress\nlessons --diary <dir> --store <path> distills diaries into the versioned lesson store (words / places / moves / trust)
 exams --diary <dir> [--lessons <store>] reports remote calls per 100 decisions and the belt each pairing holds\nmcp serves newline-delimited JSON-RPC on stdin.\nshell verbs (one browser per --session <name>, default `default`; a daemon on $TMPDIR/aui/<session>.sock attaches to --cdp <url>, or with open --launch (not with --cdp) starts its own Chrome, which lives as long as the daemon; a new session with neither refuses):\n  open <url> [--launch [--headed] [--profile <dir>] | --attach] [--idle <secs>] [--allow-domain <host>]... [--confirm-press <glob>]... | snap [--json] | click <ref> [--confirm <label>] [--script] | type <ref> <text> | select <ref> <option> | key <ref> <key>\n  scroll [up|down] | wait --text|--url|--control|--gone <v> | --load domcontentloaded|load [--timeout s] | shot [--annotate] [path] | tabs | close (stops the daemon and its Chrome)\n  open --idle <secs> (1 to 86400, default 3600) ends the daemon and its Chrome after that long without a verb; open flags are set when the session starts\n  open --attach --allow-domain <host>... drives your own running Chrome in a tab of its own (turn on Chrome's remote-debugging toggle and accept its prompt: aui skills get core); close closes only that tab, never your Chrome\n  dblclick|rightclick|midclick|tripleclick <ref> [--confirm <label>] | hold <key> [--ms <n>] [--confirm <label>]\n  scrollto <ref> | zoom in|out|reset|<factor> | options <ref>\n  tab new [url] | tab switch <tab> | tab close <tab> | eval <script> | console | requests\n  text | read | html | find [text] [--role <role>] | pdf <path> [--landscape] [--background] [--scale <n>]\n  back | hover <ref> | drag <ref> <ref> [--confirm <label>] | upload <ref> <path>... [--confirm <label>]\n  dialog [status] | dialog accept [text] | dialog dismiss | forward | reload [--ignore-cache] | check|uncheck <ref> [--script] | focus <ref> | keyboard type|insert <text> [--confirm <label>]\n  get value|label|role|box <ref> | get attr <ref> <name> | is visible|enabled|checked|editable <ref> | count [--label L] [--role R]\n  state save|load <path> | cookies [list] [--name N] [--domain D] [--reveal] | cookies set <name> <value> [--domain D] [--path P] [--expires SECS] [--http-only] [--secure] [--same-site Strict|Lax|None] | cookies clear [--name N] [--domain D]\n  storage local|session [list] [--reveal] | get <key> | set <key> <value> | clear [<key>]\n  set viewport W H [scale] | set device <name> | set media dark|light|no-preference | set offline on|off | set headers K=V... | set reset\n  download <ref> <path> [--overwrite] [--timeout-ms N] | network block <pattern>... | network unblock [<pattern>...] | network har start | network har stop <path>\n  <ref> is @eN from the latest snap (or N): a press refuses when the page changed since; --snap on an input verb prints the page after it; click / check press a real pointer (--script: a DOM click); --max-output N cuts snap text; relative paths are this shell's; a refusal or error exits non-zero\nbatch [--bail] [--json] [--session <name>] \"<verb args>\"... runs verbs in order on one session (no args: a JSON array of strings on stdin); non-zero if any failed\nsession prints the current session name; session list lists live sessions and removes stale sockets\nskills list | skills get <name> prints a guide that ships in the binary (agents: aui skills get core)\nobserve (--fixture <path> | --cdp [url]) prints every region: id, role, label, rect\nguard (--fixture <path> | --cdp [url]) --target <label> [--role button] [--within <id>] [--proposed <id>] [--json]\n  the region whose label equals --target (case and spacing ignored) is the target: unique or refuse, then the hard gate; never clicks\nverify (--expect-text <text> | --expect-absent <id>) (--fixture <path> | --cdp [url])\n"
+}
+
+/// The command groups of the short help, and what each holds.
+const GROUPS: [(&str, [&str; 3]); 2] = [
+    ("page", ["observe", "guard", "verify"]),
+    ("diary", ["replay", "lessons", "exams"]),
+];
+
+/// The part of [`full_usage`] about `topic`: its line and the indented lines
+/// under it. `all` is everything, a group is its three commands, and a shell
+/// verb (or `verbs`) is the shell-verb block.
+fn help(topic: Option<&str>) -> Result<String, CliError> {
+    let Some(topic) = topic else {
+        return Ok(usage().to_owned());
+    };
+    if topic == "all" {
+        return Ok(full_usage().to_owned());
+    }
+    if let Some((_, subs)) = GROUPS.iter().find(|(group, _)| *group == topic) {
+        return subs.iter().map(|sub| help(Some(sub))).collect();
+    }
+    let head = if topic == "verbs" || crate::verbs::VERBS.contains(&topic) {
+        "shell"
+    } else {
+        topic
+    };
+    let mut out = String::new();
+    let mut inside = false;
+    // Line 1 of the full text is the command list, not a section.
+    for line in full_usage().lines().skip(1) {
+        if !line.starts_with(' ') {
+            inside = line.split([' ', '|']).next() == Some(head);
+        }
+        if inside {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if out.is_empty() {
+        return Err(CliError::UnknownCommand(topic.to_owned()));
+    }
+    Ok(out)
 }
 
 /// Run one invocation. `args` does not include the program name.
 /// The returned string is the full stdout body.
 pub fn execute(args: &[String]) -> Result<String, CliError> {
-    if args.is_empty() || args.iter().any(|arg| arg == "--help" || arg == "-h") {
+    if args.is_empty() {
         return Ok(usage().to_owned());
     }
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        let topic = args.iter().find(|arg| !arg.starts_with('-'));
+        return help(topic.map(String::as_str));
+    }
     match args[0].as_str() {
+        "help" => match &args[1..] {
+            [] => Ok(usage().to_owned()),
+            [topic] => help(Some(topic)),
+            _ => Err(CliError::Config(
+                "usage: aui help [<command>|all]".to_owned(),
+            )),
+        },
+        // The grouped spellings; the bare ones below still work.
+        "page" | "diary" => match args.get(1).map(String::as_str) {
+            Some(sub)
+                if GROUPS
+                    .iter()
+                    .any(|(group, subs)| *group == args[0] && subs.contains(&sub)) =>
+            {
+                execute(&args[1..])
+            }
+            _ => help(Some(&args[0])),
+        },
         "--version" | "-V" => {
             Ok(concat!("ultra-instinct ", env!("CARGO_PKG_VERSION"), "\n").to_owned())
         }
