@@ -1,8 +1,10 @@
 # Release binaries (plan P1.1). A `v*` tag builds `aui` + `ultra-instinct` for
 # every target below and attaches one archive per target, a `.sha256` beside
 # each, and a combined SHA256SUMS to a GitHub release. A tag with a `-`
-# (v0.2.0-rc.1) is marked as a prerelease. A pull request that touches this
-# file runs the build matrix only, so the workflow is tested before it merges.
+# (v0.2.0-rc.1) is marked as a prerelease. The release body is the tagged
+# version's section of CHANGELOG.md (P1.5); no section, no release. A pull
+# request that touches this file runs the build matrix only, so the workflow
+# is tested before it merges.
 #
 # Archive names carry no version, so the newest one is always at
 #   https://github.com/hexuria/ultra-instinct/releases/latest/download/aui-<target>.tar.gz
@@ -101,6 +103,13 @@ jobs:
     permissions:
       contents: write # create the release and upload its assets
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            CHANGELOG.md
+            scripts/release-notes.sh
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
@@ -112,10 +121,12 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          # The release body is this version's CHANGELOG.md section (P1.5).
+          scripts/release-notes.sh "$TAG" > "$RUNNER_TEMP/notes.md"
           cd dist
           test "$(ls ./*.tar.gz | wc -l)" -eq 6
           cat ./*.sha256 > SHA256SUMS
           sha256sum --check SHA256SUMS
-          flags=(--verify-tag --title "$TAG" --generate-notes)
+          flags=(--verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md")
           case "$TAG" in *-*) flags+=(--prerelease) ;; esac
           gh release create "$TAG" "${flags[@]}" ./*.tar.gz ./*.sha256 SHA256SUMS

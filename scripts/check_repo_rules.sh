@@ -3,7 +3,8 @@
 #   1. rust-toolchain.toml pins 1.99.0 (AGENTS.md) and the workspace rust-version is <= 1.99;
 #   2. every crate root carries #![forbid(unsafe_code)] (belt and braces next to the workspace lint);
 #   3. every crate stays under its line ceiling (scripts/crate-ceilings.txt);
-#   4. workflows never install a different stable toolchain (nightly only with a pinned date).
+#   4. workflows never install a different stable toolchain (nightly only with a pinned date);
+#   5. CHANGELOG.md has a section for the workspace version.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 fail=0
@@ -44,6 +45,13 @@ fi
 # page classes under crates/ (fixes must be justified by general web behavior).
 if grep -rniE 'miniwob|mind2web|webarena|\balink\b|subbtn' crates --include='*.rs' --include='*.toml' --include='*.json'; then
   echo "benchmark-neutral: benchmark-specific names found in crates/ above"; fail=1
+fi
+
+# The workspace version has release notes: the release workflow publishes
+# that CHANGELOG.md section and stops when it is missing (plan P1.5).
+version="$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
+if ! scripts/release-notes.sh "v$version" >/dev/null 2>&1; then
+  echo "changelog: CHANGELOG.md has no \"## $version\" section for the workspace version"; fail=1
 fi
 
 if (( fail )); then exit 1; fi
