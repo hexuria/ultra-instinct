@@ -90,8 +90,9 @@ and the `browser_*` tools). Index presses take the `@eN` refs
 
 One goal, one command. `--decision` picks who chooses each step:
 `instinct` (no model), `model` (your `TEXT_MODEL_*` endpoint), `jev`, or
-`clef` / `clef-flash`; an `aui` built with the `jev` feature (as
-`install-aui.sh` builds it) defaults to `jev`. `--launch` starts a headless
+`clef` / `clef-flash`; with no flag it is `jev` when
+`TYPESAFE_API_KEY` is set and `instinct` otherwise, so a first run needs no
+key. `--launch` starts a headless
 Chrome for the run and kills it at exit; `--cdp <url>` attaches to yours
 instead.
 
