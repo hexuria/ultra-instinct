@@ -65,7 +65,10 @@ fn installs_both_binaries_after_the_checksum_matches() {
     assert!(stdout.starts_with("installed aui 9.9.9 to "), "{stdout}");
     for bin in ["aui", "ultra-instinct"] {
         let ran = Command::new(root.join("bin").join(bin)).output().unwrap();
-        assert_eq!(String::from_utf8(ran.stdout).unwrap(), format!("{bin} 9.9.9\n"));
+        assert_eq!(
+            String::from_utf8(ran.stdout).unwrap(),
+            format!("{bin} 9.9.9\n")
+        );
     }
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -93,7 +96,10 @@ fn a_missing_release_without_cargo_fails_and_installs_nothing() {
     let out = install(&root);
     assert!(!out.status.success(), "{out:?}");
     let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains("falling back to the source build"), "{stderr}");
+    assert!(
+        stderr.contains("falling back to the source build"),
+        "{stderr}"
+    );
     assert!(stderr.contains("cargo is not on PATH"), "{stderr}");
     assert!(!root.join("bin").exists());
     std::fs::remove_dir_all(root).unwrap();
