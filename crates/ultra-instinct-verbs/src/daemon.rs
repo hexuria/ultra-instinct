@@ -22,7 +22,7 @@
 //! A verb whose socket is missing or stale spawns the daemon (this binary,
 //! detached, null stdio) and waits up to 3 s for the socket. A verb that
 //! would spawn one must name its browser: `--cdp <url>` attaches there, and
-//! with neither `--cdp` nor `--launch` it refuses ([`NO_BROWSER`]) instead
+//! with neither `--cdp` nor `--launch` it refuses (`NO_BROWSER`) instead
 //! of guessing a port, which could be the user's own Chrome; when nothing
 //! answers at `--cdp` the error says to run `aui open --launch` or `aui
 //! doctor`. `aui open --attach --allow-domain <host>` drives the user's own
