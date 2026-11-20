@@ -94,7 +94,11 @@ fn fetch(url: &str, target: &str, scratch: &Path) -> Result<PathBuf, CliError> {
             )));
         }
     }
-    run("tar", &["-xzf", &path(&archive), "-C", &path("")])?;
+    // As root, tar would otherwise restore the archive's (build user's) owner.
+    run(
+        "tar",
+        &["-xzf", &path(&archive), "-C", &path(""), "--no-same-owner"],
+    )?;
     Ok(scratch.join(format!("aui-{target}")))
 }
 
@@ -118,26 +122,35 @@ pub(crate) fn upgrade_command(args: &[String]) -> Result<String, CliError> {
         Some(tag) => format!("{base}/download/{tag}"),
         None => format!("{base}/latest/download"),
     };
+    // Only what is already installed here; `aui` alone stays alone.
+    let installed: Vec<&str> = BINARIES
+        .into_iter()
+        .filter(|bin| dir.join(bin).is_file())
+        .collect();
+    if installed.is_empty() {
+        return Err(fail(format!(
+            "no aui or ultra-instinct in {}; nothing to replace",
+            dir.display()
+        )));
+    }
     // Beside the binaries, so the final rename stays on one filesystem.
     let scratch = dir.join(format!(".aui-upgrade-{}", std::process::id()));
     std::fs::create_dir(&scratch)
         .map_err(|err| fail(format!("cannot write to {}: {err}", dir.display())))?;
     let done = fetch(&url, &target, &scratch).and_then(|unpacked| {
         let before = env!("CARGO_PKG_VERSION");
-        let mut replaced = Vec::new();
-        for bin in BINARIES {
+        for bin in &installed {
             let old = dir.join(bin);
-            // Only what is already installed here; `aui` alone stays alone.
-            if old.is_file() {
-                std::fs::rename(unpacked.join(bin), &old)
-                    .map_err(|err| fail(format!("cannot replace {}: {err}", old.display())))?;
-                replaced.push(bin);
-            }
+            std::fs::rename(unpacked.join(bin), &old)
+                .map_err(|err| fail(format!("cannot replace {}: {err}", old.display())))?;
         }
-        let after = run(&dir.join(replaced[0]).display().to_string(), &["--version"])?;
+        let after = run(
+            &dir.join(installed[0]).display().to_string(),
+            &["--version"],
+        )?;
         Ok(format!(
             "upgraded {} in {}: {before} -> {}\n",
-            replaced.join(" + "),
+            installed.join(" + "),
             dir.display(),
             after.trim().rsplit(' ').next().unwrap_or_default()
         ))

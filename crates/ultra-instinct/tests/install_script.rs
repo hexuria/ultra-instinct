@@ -196,3 +196,21 @@ fn upgrade_refuses_a_tampered_archive_and_keeps_the_old_binary() {
     assert_eq!(std::fs::read_dir(&bin).unwrap().count(), 2);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn upgrade_of_a_binary_under_another_name_replaces_nothing() {
+    let root = release("upgrade-renamed");
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_aui"), bin.join("aui-0.1")).unwrap();
+    let out = Command::new(bin.join("aui-0.1"))
+        .args(["upgrade", "--version", "v9.9.9"])
+        .env("AUI_BASE_URL", format!("file://{}", root.display()))
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "{out:?}");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("nothing to replace"), "{stderr}");
+    assert_eq!(std::fs::read_dir(&bin).unwrap().count(), 1);
+    std::fs::remove_dir_all(root).unwrap();
+}
