@@ -58,7 +58,7 @@ daemon is unix-socket only).
 | P2.3 (done) | Verbs `text`, `read` (extract content), `html`, `find`, `pdf <path>` | Output matches the MCP tool for the same page | P2.1 |
 | P2.4 (done) | Verbs `tab new\|switch\|close`, `eval <script>`, `console`, `requests` | Same | P2.1 |
 | P2.5 (done) | Verbs for the remaining clicks and keys: `dblclick`, `rightclick`, `hold`, `scrollto`, `zoom`, `options <ref>` | P2.1's "no verb" list is empty or each entry has a reason | P2.1 |
-| P2.6 | `docs/tools.md` and the `core` skill list the new verbs | `aui skills get core` names every verb | P2.2 to P2.5 |
+| P2.6 (done) | `docs/tools.md` and the `core` skill list the new verbs | `aui skills get core` names every verb | P2.2 to P2.5 |
 
 ## Phase 3: remove
 

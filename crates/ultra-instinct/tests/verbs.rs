@@ -1342,3 +1342,16 @@ fn click_key_and_view_verbs_print_one_short_line() {
         "0 options\n"
     );
 }
+
+/// P2.6: the `core` skill and `docs/tools.md` name every verb, as code.
+#[test]
+fn the_core_skill_and_the_tools_doc_name_every_verb() {
+    let skill = ultra_instinct::execute(&a(&["skills", "get", "core"])).unwrap();
+    let doc = include_str!("../../../docs/tools.md");
+    for verb in VERBS {
+        for (name, text) in [("skills get core", skill.as_str()), ("docs/tools.md", doc)] {
+            let named = text.contains(&format!("`{verb}`")) || text.contains(&format!("`{verb} "));
+            assert!(named, "{name} does not name `{verb}`");
+        }
+    }
+}
