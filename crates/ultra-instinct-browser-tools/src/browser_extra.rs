@@ -56,10 +56,9 @@ pub const EXTRA_TOOLS: [&str; 9] = [
 ];
 
 /// Tools whose text output `max_chars` cuts (see [`limit_output`]).
-const OUTPUT_TOOLS: [&str; 7] = [
+const OUTPUT_TOOLS: [&str; 6] = [
     "browser_get_state",
     "browser_get_text",
-    "browser_get_page_text",
     "browser_get_html",
     "browser_extract_content",
     "browser_read_console",
@@ -273,7 +272,7 @@ fn limit_output(name: &str, arguments: &Value, mut body: Value) -> Result<Value,
         return Ok(body);
     };
     let field = match name {
-        "browser_get_text" | "browser_get_page_text" => "text",
+        "browser_get_text" => "text",
         "browser_get_html" => "html",
         "browser_extract_content" => "content",
         "browser_get_state" if body.get("text").is_some_and(Value::is_string) => "text",

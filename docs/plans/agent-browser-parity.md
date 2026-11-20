@@ -44,7 +44,7 @@ marked "ask first". Repeat until the acceptance run passes.
 | P1.3 (done) | `aui upgrade`: replace the binary with the latest release, refuse on a checksum mismatch | Old binary upgrades in place; a tampered archive refuses | P1.1 |
 | P1.4 (done) | CI on `macos-15` for build + tests (Linux only today) | The macOS job is green and required | |
 | P1.5 (done) | `CHANGELOG.md` with a release-notes section the release workflow reads | The release body equals the changelog entry | P1.1 |
-| P1.6 | Default decider is `instinct` when no model key is set, so a first run works offline (ask first: changes the `jev` default) | `aui run --launch --url ... --goal ...` runs with no key and no flag | |
+| P1.6 (done) | Default decider is `instinct` when no model key is set, so a first run works offline (ask first: changes the `jev` default) | `aui run --launch --url ... --goal ...` runs with no key and no flag | |
 
 Out of scope here, ask first: npm / Homebrew packages, Windows (the session
 daemon is unix-socket only).
@@ -64,7 +64,7 @@ daemon is unix-socket only).
 
 | Id | Item | Done-check | Needs |
 |---|---|---|---|
-| P3.1 | Drop the alias tools `browser_form_input`, `browser_get_page_text`, `browser_javascript_exec`, and `browser_search` (ask first: breaks MCP callers that use those names) | Tool count and docs agree; calling a dropped name returns the unknown-tool code | |
+| P3.1 (done) | Drop the alias tools `browser_form_input`, `browser_get_page_text`, `browser_javascript_exec`, and `browser_search` (ask first: breaks MCP callers that use those names) | Tool count and docs agree; calling a dropped name returns the unknown-tool code | |
 | P3.2 (done) | Move `aui observe / guard / verify` and `replay / lessons / exams` out of the top-level help into one group each | `aui --help` fits one screen; old spellings still work or print where they went | |
 | P3.3 (done) | Delete `fixtures/*.browser-use.json` and `*.cua.json` if no test or bench reads them | `cargo nextest run --workspace` and the bench smoke pass without them | |
 | P3.4 | Fold `ultra-instinct-geometry`, `-protocol` and `-observe` into their one natural owner (ask first: they are published on crates.io and `scripts/architecture.txt` names them) | Architecture check passes; public paths re-exported or the break is in the changelog | |

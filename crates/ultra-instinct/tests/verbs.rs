@@ -840,7 +840,7 @@ type VerbOrReason = Result<(&'static str, &'static [&'static str]), &'static str
 /// Every `browser_*` tool: the verb call that reaches it, or why it has none.
 /// A tool added to `ultra_instinct_mcp::TOOLS` with neither fails
 /// `every_browser_tool_has_a_verb_or_a_reason`.
-const TOOL_VERBS: [(&str, VerbOrReason); 53] = [
+const TOOL_VERBS: [(&str, VerbOrReason); 49] = [
     ("browser_navigate", Ok(("open", &["https://shop.example/"]))),
     ("browser_get_state", Ok(("snap", &[]))),
     ("browser_click", Ok(("click", &["@e1"]))),
@@ -899,10 +899,6 @@ const TOOL_VERBS: [(&str, VerbOrReason); 53] = [
     ("browser_scroll_to", Ok(("scrollto", &["@e1"]))),
     ("browser_zoom", Ok(("zoom", &["in"]))),
     ("browser_get_dropdown_options", Ok(("options", &["@e1"]))),
-    ("browser_get_page_text", Err("alias of browser_get_text")),
-    ("browser_form_input", Err("alias of browser_type")),
-    ("browser_javascript_exec", Err("alias of browser_exec")),
-    ("browser_search", Err("a search URL through `open`")),
 ];
 
 #[test]

@@ -1,6 +1,6 @@
 # Tools and verbs
 
-`ultra-instinct mcp` (or `aui mcp`) serves 56 tools over newline-delimited
+`ultra-instinct mcp` (or `aui mcp`) serves 52 tools over newline-delimited
 JSON-RPC on stdio: the three product tools and 53 `browser_*` tools (the
 `TOOLS` list in `crates/ultra-instinct-mcp/src/lib.rs`). An embedding host
 calls the same tools through `Server::call_tool` ([`embedding.md`](embedding.md)).
@@ -45,7 +45,6 @@ These never click. They are for hosts that keep their own executor.
 | `browser_get` | One fact about an element: `value` (never a password's), `attr`, `box`, `label`, `role` | `index`, `what`, `name` (for `attr`) |
 | `browser_is` | `visible` / `enabled` / `checked` / `editable`, from a fresh observation | `index`, `what` |
 | `browser_get_text` | `document.body.innerText` | `max_chars` |
-| `browser_get_page_text` | Alias of `browser_get_text` | `max_chars` |
 | `browser_get_html` | `outerHTML` of the document (text inputs' `value` attributes dropped) | `max_chars` |
 | `browser_extract_content` | Readable content as markdown (a deterministic DOM walk, no model) | `max_chars` |
 | `browser_get_dropdown_options` | Observed enabled options and selected labels of a `<select>` | `index` |
@@ -70,7 +69,6 @@ These never click. They are for hosts that keep their own executor.
 | Tool | Does | Key arguments |
 |---|---|---|
 | `browser_type` | Set a field's text through the ticketed executor; the value is read back | `index`, `text`, `snapshot`, `verify` |
-| `browser_form_input` | Alias of `browser_type` | `index`, `text` |
 | `browser_select_dropdown` | Select exactly one option of a `<select>`, grounded in its observed options | `index`, `text`, `snapshot`, `verify` |
 | `browser_send_key` | One key. With `index`: a ticketed KEY on that element (`ArrowLeft`, `ArrowRight`, `ArrowUp`, `ArrowDown`, `Home`, `End`, `PageUp`, `PageDown`, `Enter`, `Escape`). Without: to the focus | `key`, `index`, `snapshot`, `confirm`, `verify` |
 | `browser_hold_key` | Hold a key down (capped at 10 s), to the focus | `key`, `seconds` or `hold_ms`, `confirm` |
@@ -93,7 +91,6 @@ full rules are in [`embedding.md`](embedding.md#policy-at-runtime).
 | `browser_close_tab` | Close a tab; falls back to another one if it was current | `tab_id` |
 | `browser_go_back`, `browser_go_forward` | One history entry back / forward | |
 | `browser_reload` | Reload the current tab | `ignore_cache` |
-| `browser_search` | Navigate to a Google results URL (runs `browser_navigate` inside it) | `query` |
 | `browser_scroll` | Scroll by viewport heights | `down`, `pages` (default 1) |
 | `browser_zoom` | Page scale factor | `factor` (0 to 10), or `direction` (`in`, `out`, `reset`) |
 
@@ -130,7 +127,7 @@ full rules are in [`embedding.md`](embedding.md#policy-at-runtime).
 
 | Tool | Does | Key arguments |
 |---|---|---|
-| `browser_exec`, `browser_javascript_exec` | `Runtime.evaluate` (awaits promises, returns by value) | `script` or `expression` |
+| `browser_exec` | `Runtime.evaluate` (awaits promises, returns by value) | `script` or `expression` |
 | `browser_read_console` | Console entries and JS exceptions buffered since the last read (enables `Runtime` / `Log` on first use) | `max_chars` |
 
 Events are buffered only while a CDP call is in flight (one blocking socket,
