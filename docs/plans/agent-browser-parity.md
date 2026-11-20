@@ -55,7 +55,7 @@ daemon is unix-socket only).
 |---|---|---|---|
 | P2.1 (done) | Parity test: every `browser_*` tool has an `aui` verb or an entry in a "no verb, because" list | The test fails when a tool is added with neither | |
 | P2.2 (done) | Verbs `back`, `hover <ref>`, `drag <ref> <ref>`, `upload <ref> <path>...` | Each runs against a live page; `drag` and `upload` refuse on a stale snap | P2.1 |
-| P2.3 | Verbs `text`, `read` (extract content), `html`, `find`, `pdf <path>` | Output matches the MCP tool for the same page | P2.1 |
+| P2.3 (done) | Verbs `text`, `read` (extract content), `html`, `find`, `pdf <path>` | Output matches the MCP tool for the same page | P2.1 |
 | P2.4 | Verbs `tab new\|switch\|close`, `eval <script>`, `console`, `requests` | Same | P2.1 |
 | P2.5 | Verbs for the remaining clicks and keys: `dblclick`, `rightclick`, `hold`, `scrollto`, `zoom`, `options <ref>` | P2.1's "no verb" list is empty or each entry has a reason | P2.1 |
 | P2.6 | `docs/tools.md` and the `core` skill list the new verbs | `aui skills get core` names every verb | P2.2 to P2.5 |

@@ -904,3 +904,37 @@ fn back_hover_drag_and_upload_on_a_live_page() {
     assert_eq!(session.verb(&["back"]).trim(), "✓ went back");
     assert_eq!(session.title_until("verbs", |t| t == "verbs"), "verbs");
 }
+
+#[test]
+#[ignore = "needs a local Chrome (aui open --launch)"]
+fn text_read_html_find_and_pdf_on_a_live_page() {
+    let server = Server::start(pages);
+    let scratch = Scratch::new("reads");
+    let session = Session::new("reads");
+    session.launch(&server.url("/download"), &[]);
+
+    assert_eq!(session.verb(&["text"]), "Get payload\n");
+    assert_eq!(
+        session.verb(&["read"]).trim(),
+        format!("# download\n[Get payload]({})", server.url("/payload.bin"))
+    );
+    let html = session.verb(&["html"]);
+    assert!(
+        html.starts_with("<html>") && html.contains("download=\"payload.bin\">Get payload</a>"),
+        "{html}"
+    );
+    let link = session.reference("Get payload");
+    let found = format!("{link} link \"Get payload\"\n1 found\n");
+    assert_eq!(session.verb(&["find", "payload"]), found);
+    assert_eq!(session.verb(&["find", "--role", "link"]), found);
+    assert_eq!(session.verb(&["find", "nothing here"]), "0 found\n");
+
+    let pdf = scratch.path("page.pdf");
+    let out = session.verb(&["pdf", &pdf.display().to_string()]);
+    let bytes = std::fs::read(&pdf).unwrap();
+    assert!(bytes.starts_with(b"%PDF-"), "not a PDF");
+    assert_eq!(
+        out.trim(),
+        format!("✓ saved {} ({} bytes)", pdf.display(), bytes.len())
+    );
+}
