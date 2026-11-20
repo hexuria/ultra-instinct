@@ -360,7 +360,7 @@ fn bounded(content: &str) -> String {
 }
 
 /// The verb's output. With `--boundary` page content sits inside
-/// [`bounded`] markers: a reading verb's whole output, and the page an input
+/// boundary markers: a reading verb's whole output, and the page an input
 /// verb prints after itself with `--snap`. A page that prints a marker of
 /// its own cannot close the block: it does not have this output's id.
 pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
