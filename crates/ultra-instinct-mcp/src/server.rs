@@ -27,11 +27,11 @@ use ultra_instinct_browser_tools::{
     BrowserHost, Downloads, HttpBackend, LiveSession, TargetBackend, ToolLimits, ToolState, Uploads,
 };
 use ultra_instinct_cdp::CdpEvent;
-use ultra_instinct_core::InteractionManifold;
-use ultra_instinct_guard::{Policy, TicketLedger};
-use ultra_instinct_observe::history::{
+use ultra_instinct_core::observe::history::{
     detect, HistoryError, SignedSnapshot, SnapshotId, SnapshotRing, StateSignature, TemporalSignal,
 };
+use ultra_instinct_core::InteractionManifold;
+use ultra_instinct_guard::{Policy, TicketLedger};
 
 use crate::ToolError;
 

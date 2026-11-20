@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use ultra_instinct_core::{Action, RegionId, Role};
+use crate::{Action, RegionId, Role};
 
 /// Capability lease issued with Allow. Present at the executor boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,7 +19,7 @@ pub struct ActionTicket {
     pub target_id: RegionId,
     pub target_role: Role,
     pub target_label: String,
-    /// [`ultra_instinct_core::InteractionRegion::fingerprint`] bits at issue time.
+    /// [`crate::InteractionRegion::fingerprint`] bits at issue time.
     pub target_fingerprint: u64,
     /// Hash of the world variables (focus, front layer, clickable, occluded).
     pub world_fingerprint: u64,
@@ -28,7 +28,7 @@ pub struct ActionTicket {
     /// Surface point clicks only: the grid cell `[col, row]` the ticket
     /// allows. The executor clicks exactly this cell.
     pub cell: Option<[u16; 2]>,
-    /// KEY only: the one key the ticket allows (from `ultra_instinct_core::KEY_NAMES`).
+    /// KEY only: the one key the ticket allows (from `crate::KEY_NAMES`).
     pub key: Option<String>,
 }
 

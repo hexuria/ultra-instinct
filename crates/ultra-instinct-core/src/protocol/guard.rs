@@ -6,9 +6,9 @@
 
 use std::fmt;
 
-use ultra_instinct_core::{RegionId, Role};
+use crate::{RegionId, Role};
 
-use crate::MatcherConfidence;
+use crate::protocol::MatcherConfidence;
 
 /// Why guard refused or escalated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -93,7 +93,7 @@ pub struct GuardEvidence {
 
 /// Guard decision. Guard itself never presses.
 ///
-/// [`GuardDecision::Allow`] carries an [`crate::ActionTicket`]. The host must
+/// [`GuardDecision::Allow`] carries an [`crate::protocol::ActionTicket`]. The host must
 /// revalidate that ticket against a fresh observation before pressing the
 /// exact target.
 #[derive(Clone, Debug, PartialEq)]
@@ -104,7 +104,7 @@ pub enum GuardDecision {
         confidence: MatcherConfidence,
         margin: Option<MatcherConfidence>,
         evidence: GuardEvidence,
-        ticket: crate::ActionTicket,
+        ticket: crate::protocol::ActionTicket,
     },
     Refuse {
         reason: GuardReason,

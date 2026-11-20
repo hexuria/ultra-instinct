@@ -1,11 +1,11 @@
 //! Wire value types shared by the guard, the agent, and the MCP adapter.
 //!
 //! The agent loop (`ultra-instinct-agent`) and [`crate::GuardDecision`] /
-//! [`crate::ActionTicket`] are the contracts.
+//! [`crate::protocol::ActionTicket`] are the contracts.
 
 use std::fmt;
 
-use ultra_instinct_core::RegionId;
+use crate::RegionId;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]

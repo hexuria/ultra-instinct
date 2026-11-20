@@ -43,10 +43,10 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
+use ultra_instinct_core::geometry::{RegionState, Visibility};
 use ultra_instinct_core::{
     Action, InteractionManifold, InteractionRegion, Rect, RegionId, Role, SourceMask,
 };
-use ultra_instinct_geometry::{RegionState, Visibility};
 
 /// One dialog in the front layer.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -87,7 +87,7 @@ impl FrontLayer {
 /// Built from one manifold (and optional focused id). A host that decided on
 /// an older observation passes that snapshot as [`crate::GuardRequest::seen_world`];
 /// when any field differs from the world observed now, the guard escalates
-/// [`ultra_instinct_protocol::GuardReason::WorldChanged`].
+/// [`ultra_instinct_core::protocol::GuardReason::WorldChanged`].
 ///
 /// Compared fields:
 ///

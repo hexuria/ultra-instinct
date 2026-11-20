@@ -174,13 +174,10 @@ agent loop on its tab. The example, host options, limits, threading and the
 
 | Crate | Role |
 |---|---|
-| `ultra-instinct-core` | `InteractionManifold`, regions, `ActionSpace`, fixture grammar |
-| `ultra-instinct-geometry` | Viewport geometry helpers and `RegionState` |
-| `ultra-instinct-observe` | Observation history, snapshot ring, id diff |
+| `ultra-instinct-core` | `InteractionManifold`, regions, `ActionSpace`, fixture grammar; modules `geometry` (viewport geometry helpers, `RegionState`), `observe` (observation history, id diff) and `protocol` (guard / ticket / verify wire types) |
 | `ultra-instinct-cdp` | CDP transports: websocket, replay, caller-owned pipe; tab backends |
 | `ultra-instinct-chrome` | Find and launch a local Chrome |
 | `ultra-instinct-browser` | CDP observe (DOM/AX fusion, label folding, identity, stacking), inputs, saved state |
-| `ultra-instinct-protocol` | Guard / ticket / verify wire types |
 | `ultra-instinct-guard` | Hard gate, `ActionTicket`, ledger, world snapshots, the user `Policy` |
 | `ultra-instinct-policy` | `InstinctPolicy`, `TextResolver`, optional model-text and remote policies |
 | `ultra-instinct-agent` | The `Agent` loop, `execute_ticketed`, verification, `MockBrowser` |

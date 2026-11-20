@@ -7,8 +7,6 @@
 //! loop in `ultra-instinct-agent` owns observe → decide → act and presses only
 //! through one-shot tickets.
 
-#![forbid(unsafe_code)]
-
 mod guard;
 mod ticket;
 mod values;

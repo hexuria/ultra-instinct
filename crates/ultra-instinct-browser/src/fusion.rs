@@ -35,11 +35,11 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
+use ultra_instinct_core::geometry::is_fully_offscreen;
 use ultra_instinct_core::{
     normalize_label, token_jaccard, InteractionManifold, InteractionRegion, Rect, RegionFlags,
     RegionId, RegionParts, Role, SourceMask, UnitInterval, INVISIBLE,
 };
-use ultra_instinct_geometry::is_fully_offscreen;
 
 use crate::error::BrowserError;
 use crate::extract::{AxElement, DomElement};

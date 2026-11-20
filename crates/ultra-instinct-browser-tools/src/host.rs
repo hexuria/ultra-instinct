@@ -17,9 +17,9 @@ use std::time::Duration;
 use serde_json::Value;
 use ultra_instinct_browser::{BrowserSession, CdpTransport, PageState};
 use ultra_instinct_cdp::{CdpError, CdpEvent, TargetBackend, DEFAULT_CDP_HTTP};
+use ultra_instinct_core::observe::history::SnapshotId;
 use ultra_instinct_core::InteractionManifold;
 use ultra_instinct_guard::{Policy, TicketLedger};
-use ultra_instinct_observe::history::SnapshotId;
 
 use crate::browser_env::EnvState;
 use crate::browser_extra::Dialog;

@@ -28,8 +28,8 @@
 //! The ranked [`crate::guard`] entry point remains for the MCP / CLI preflight
 //! surface, where a host proposes a label rather than a finite choice.
 
+use ultra_instinct_core::protocol::{ActionTicket, GuardCandidate, GuardReason, TicketDest};
 use ultra_instinct_core::{Action, InteractionManifold, InteractionRegion, RegionId};
-use ultra_instinct_protocol::{ActionTicket, GuardCandidate, GuardReason, TicketDest};
 
 use crate::ticket::issue_ticket;
 use crate::world::{blocker, WorldSnapshot};

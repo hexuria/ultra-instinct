@@ -1005,7 +1005,7 @@ where
     if let Some(url) = agent.browser().page().and_then(|page| page.url()) {
         out.push_str(&format!("final_url {url}\n"));
     }
-    if let Some((ultra_instinct_protocol::GuardReason::NeedsConfirm, label)) =
+    if let Some((ultra_instinct_core::protocol::GuardReason::NeedsConfirm, label)) =
         agent.policy_refusal()
     {
         out.push_str(&format!("rerun with --confirm {}\n", shell_quote(label)));

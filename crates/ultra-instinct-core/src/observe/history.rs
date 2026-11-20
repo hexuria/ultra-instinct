@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 use std::fmt;
 
-use ultra_instinct_core::{InteractionManifold, Role};
+use crate::{InteractionManifold, Role};
 
 /// Identity of one stored snapshot. Monotonic within one ring.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -216,11 +216,11 @@ impl<T> Default for SnapshotRing<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
-    use ultra_instinct_core::{
+    use crate::{
         Action, InteractionRegion, Rect, RegionFlags, RegionId, RegionParts, SourceMask,
         UnitInterval,
     };
+    use proptest::prelude::*;
 
     #[test]
     fn ring_is_empty_until_the_first_push() {

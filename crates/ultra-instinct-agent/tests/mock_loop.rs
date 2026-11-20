@@ -1771,7 +1771,7 @@ fn needs_confirm_ends_blocked_without_pressing() {
     assert_eq!(
         agent.policy_refusal(),
         Some((
-            ultra_instinct_protocol::GuardReason::NeedsConfirm,
+            ultra_instinct_core::protocol::GuardReason::NeedsConfirm,
             "Pay $18"
         ))
     );

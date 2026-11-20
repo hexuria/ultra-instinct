@@ -2,8 +2,8 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use ultra_instinct_core::protocol::{ActionTicket, GuardCandidate, TicketInvalid};
 use ultra_instinct_core::{Action, InteractionManifold, InteractionRegion, RegionId};
-use ultra_instinct_protocol::{ActionTicket, GuardCandidate, TicketInvalid};
 
 use crate::world::WorldSnapshot;
 
@@ -218,7 +218,7 @@ mod tests {
     };
 
     use crate::world::WorldSnapshot;
-    use ultra_instinct_protocol::GuardReason;
+    use ultra_instinct_core::protocol::GuardReason;
 
     use super::*;
     use crate::{guard, GuardDecision, GuardRequest};

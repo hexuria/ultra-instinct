@@ -15,11 +15,9 @@
 //!
 //! This crate does not observe a live browser or the macOS accessibility tree.
 
-#![forbid(unsafe_code)]
-
 pub mod history;
 
-use ultra_instinct_core::{token_jaccard, InteractionManifold, InteractionRegion, RegionId};
+use crate::{token_jaccard, InteractionManifold, InteractionRegion, RegionId};
 
 /// Default acceptance threshold for [`structural_similarity`].
 ///
@@ -340,9 +338,7 @@ pub fn match_regions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ultra_instinct_core::{
-        Action, Rect, RegionFlags, RegionId, RegionParts, Role, SourceMask, UnitInterval,
-    };
+    use crate::{Action, Rect, RegionFlags, RegionId, RegionParts, Role, SourceMask, UnitInterval};
 
     fn button(id: &str, label: &str, x: f64, y: f64) -> InteractionRegion {
         InteractionRegion::try_new(RegionParts {

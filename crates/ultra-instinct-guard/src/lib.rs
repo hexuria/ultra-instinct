@@ -35,9 +35,9 @@ pub mod world;
 
 use std::fmt;
 
+use ultra_instinct_core::geometry::{Availability, RegionState, Visibility};
+use ultra_instinct_core::protocol::MatcherConfidence;
 use ultra_instinct_core::{Action, InteractionManifold, InteractionRegion, LocateQuery, RegionId};
-use ultra_instinct_geometry::{Availability, RegionState, Visibility};
-use ultra_instinct_protocol::MatcherConfidence;
 
 pub use gate::{
     check as gate_check, check_drop_target, gate, gate_drag, gate_drag_to_cell, gate_key,
@@ -52,7 +52,7 @@ pub use ticket::consume_ticket;
 pub use ticket::{
     consume_ticket_once, issue_ticket, revalidate, world_fingerprint, ConsumeError, TicketLedger,
 };
-pub use ultra_instinct_protocol::{
+pub use ultra_instinct_core::protocol::{
     ActionTicket, GuardCandidate, GuardDecision, GuardEvidence, GuardReason, TicketDest,
     TicketInvalid,
 };
@@ -143,7 +143,7 @@ impl GuardRequest {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum GuardError {
-    Confidence(ultra_instinct_protocol::ProtocolError),
+    Confidence(ultra_instinct_core::protocol::ProtocolError),
     UnsupportedAction(Action),
     /// The query used a field the exact-label guard does not support (`near`
     /// or `position`).
@@ -168,8 +168,8 @@ impl fmt::Display for GuardError {
 
 impl std::error::Error for GuardError {}
 
-impl From<ultra_instinct_protocol::ProtocolError> for GuardError {
-    fn from(value: ultra_instinct_protocol::ProtocolError) -> Self {
+impl From<ultra_instinct_core::protocol::ProtocolError> for GuardError {
+    fn from(value: ultra_instinct_core::protocol::ProtocolError) -> Self {
         Self::Confidence(value)
     }
 }

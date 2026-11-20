@@ -8,12 +8,12 @@
 //! - one-shot ledger refusals (`ticket-consumed`) are distinct from staleness.
 
 use proptest::prelude::*;
+use ultra_instinct_core::protocol::{GuardReason, TicketInvalid};
 use ultra_instinct_core::{parse_fixture, Action, InteractionManifold, RegionId};
 use ultra_instinct_guard::{
     consume_ticket_once, gate, neighborhood_of, revalidate, world_fingerprint, ConsumeError,
     TicketLedger, WorldSnapshot,
 };
-use ultra_instinct_protocol::{GuardReason, TicketInvalid};
 
 fn id(raw: &str) -> RegionId {
     RegionId::try_new(raw).unwrap()
