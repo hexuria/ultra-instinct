@@ -43,6 +43,13 @@
 //! `ULTRA_INSTINCT_ALLOW_DOMAINS` / `ULTRA_INSTINCT_CONFIRM_PRESS`;
 //! `--confirm <label>` on a press verb is the tool's `confirm` argument.
 //!
+//! A `--launch` session also keeps its login across `close` and reopen:
+//! the daemon restores `<state dir>/<session>.json` (the `browser_state_*`
+//! format, cookies plus the last origin's storage) when it starts and saves
+//! it when it ends, however it ends. `AUI_SESSION_STATE=0` turns that off;
+//! `AUI_STATE_DIR` moves the directory. `--cdp` and `--attach` sessions keep
+//! no auto state: their browsers are the user's own.
+//!
 //! Unix only (std `UnixListener` / `UnixStream`); elsewhere every verb is a
 //! clear error.
 #![cfg_attr(not(unix), allow(dead_code))]
@@ -522,6 +529,146 @@ mod imp {
         }
     }
 
+    /// `AUI_SESSION_STATE=0|off|false|no` turns auto session state off.
+    const AUTO_STATE_ENV: &str = "AUI_SESSION_STATE";
+    /// `AUI_STATE_DIR` overrides the per-user state directory.
+    const STATE_DIR_ENV: &str = "AUI_STATE_DIR";
+
+    /// The per-user directory session state files live in (kept 0700):
+    /// `AUI_STATE_DIR`, else `~/Library/Application Support/aui` on macOS and
+    /// `${XDG_STATE_HOME:-~/.local/state}/aui` elsewhere.
+    fn state_dir() -> Option<PathBuf> {
+        if let Some(dir) = std::env::var_os(STATE_DIR_ENV) {
+            let dir = PathBuf::from(dir);
+            return (!dir.as_os_str().is_empty()).then_some(dir);
+        }
+        let home = std::env::var_os("HOME").map(PathBuf::from)?;
+        #[cfg(target_os = "macos")]
+        let dir = home.join("Library/Application Support/aui");
+        #[cfg(not(target_os = "macos"))]
+        let dir = std::env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .filter(|d| d.is_absolute())
+            .unwrap_or_else(|| home.join(".local/state"))
+            .join("aui");
+        Some(dir)
+    }
+
+    fn auto_state_off() -> bool {
+        std::env::var(AUTO_STATE_ENV).is_ok_and(|v| state_value_off(&v))
+    }
+
+    pub(crate) fn state_value_off(value: &str) -> bool {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "off" | "false" | "no"
+        )
+    }
+
+    /// A `--launch` session's saved login (`<state dir>/<session>.json`), in
+    /// the `browser_state_*` format. Restored when the daemon starts and
+    /// saved when it ends, however it ends. `pending` holds the origins whose
+    /// storage still waits for a matching navigation; empty means the restore
+    /// is done (or there was nothing to restore).
+    pub(crate) struct AutoState {
+        path: PathBuf,
+        /// The daemon's CDP endpoint, handed to the state tools as `cdp`.
+        cdp: String,
+        pending: Vec<String>,
+        /// Storage was applied after a navigation this session.
+        applied: bool,
+    }
+
+    impl AutoState {
+        /// Auto state for a `--launch` session, unless `AUI_SESSION_STATE`
+        /// turns it off or no state directory resolves. `--cdp` / `--attach`
+        /// sessions pass `enabled: false`: their browsers are the user's own.
+        fn new(session: &SessionName, cdp: &str, enabled: bool) -> Option<Self> {
+            if !enabled || auto_state_off() {
+                return None;
+            }
+            let dir = state_dir()?;
+            private_dir(&dir).ok()?;
+            Some(Self {
+                path: dir.join(format!("{}.json", session.as_str())),
+                cdp: cdp.to_owned(),
+                pending: Vec::new(),
+                applied: false,
+            })
+        }
+
+        /// Load the saved state into the fresh browser, if a file exists.
+        /// Best-effort: a missing, corrupt, or policy-refused state changes
+        /// nothing and never stops the session.
+        fn restore(&mut self, server: &mut ultra_instinct_mcp::Server) {
+            if self.path.exists() {
+                self.load(server);
+            }
+        }
+
+        /// `browser_state_load` on the session's endpoint; `pending` becomes
+        /// the origins still waiting for their page.
+        fn load(&mut self, server: &mut ultra_instinct_mcp::Server) {
+            let Ok(reply) = server.call_tool(
+                "browser_state_load",
+                &json!({"path": self.path.display().to_string(), "cdp": self.cdp}),
+            ) else {
+                return;
+            };
+            self.pending = reply["pending_origins"]
+                .as_array()
+                .map(|list| {
+                    list.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            self.applied = reply["applied_origin"].is_string();
+        }
+
+        /// After a request the daemon answered: while storage origins are
+        /// still pending, a successful `browser_navigate` / `browser_new_tab`
+        /// re-loads the state (cookies re-set idempotently; the origin's
+        /// storage is written once the page is on it). The first application
+        /// reloads the page once, so it reads what was restored.
+        fn after_reply(
+            &mut self,
+            server: &mut ultra_instinct_mcp::Server,
+            request: &Value,
+            ok: bool,
+        ) {
+            if self.pending.is_empty() || !ok {
+                return;
+            }
+            let name = request["params"]["name"].as_str().unwrap_or_default();
+            if !matches!(name, "browser_navigate" | "browser_new_tab") {
+                return;
+            }
+            self.load(server);
+            if self.applied {
+                // The page loaded before its storage landed; load it once
+                // more so it reads the restored values. Best-effort.
+                let _ = server.call_tool("browser_reload", &json!({"cdp": self.cdp}));
+            }
+        }
+
+        /// `browser_state_save` on exit; best-effort (a policy refusal, a
+        /// dead browser, or an unwritable directory never fails shutdown).
+        fn save(&self, server: &mut ultra_instinct_mcp::Server) {
+            let _ = server.call_tool(
+                "browser_state_save",
+                &json!({"path": self.path.display().to_string(), "cdp": self.cdp}),
+            );
+        }
+    }
+
+    /// Whether a JSON-RPC reply carried a successful tool result.
+    pub(crate) fn reply_ok(reply: &str) -> bool {
+        serde_json::from_str::<Value>(reply)
+            .is_ok_and(|v| v.get("error").is_none() && v["result"]["isError"] != true)
+    }
+
     /// Serve `daemon` with `server` until a stop request or `idle` passes
     /// with no request. One connection and one line at a time.
     pub fn serve_on(
@@ -529,6 +676,7 @@ mod imp {
         server: &mut ultra_instinct_mcp::Server,
         cdp: &str,
         idle: Duration,
+        auto: &mut Option<AutoState>,
     ) -> Result<(), CliError> {
         let mut last = Instant::now();
         // The text of the session's latest `aui snap`, for `aui diff`.
@@ -546,7 +694,7 @@ mod imp {
                 Err(err) => return Err(io_err(&daemon.path, err)),
             };
             // A misbehaving client gets dropped; the daemon keeps serving.
-            if let Ok(true) = serve_connection(stream, server, cdp, &mut snap) {
+            if let Ok(true) = serve_connection(stream, server, cdp, &mut snap, auto) {
                 return Ok(());
             }
             last = Instant::now();
@@ -559,6 +707,7 @@ mod imp {
         server: &mut ultra_instinct_mcp::Server,
         cdp: &str,
         snap: &mut Option<String>,
+        auto: &mut Option<AutoState>,
     ) -> io::Result<bool> {
         stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_secs(10)))?;
@@ -580,7 +729,11 @@ mod imp {
             }
             let (value, diff, cut) = take_diff(value);
             if let Some(reply) = server.handle_line(&value.to_string()) {
-                writeln!(writer, "{}", note_snap(&value, reply, diff, cut, snap))?;
+                let out = note_snap(&value, reply, diff, cut, snap);
+                writeln!(writer, "{out}")?;
+                if let Some(state) = auto.as_mut() {
+                    state.after_reply(server, &value, reply_ok(&out));
+                }
             }
         }
         Ok(false)
@@ -759,6 +912,9 @@ mod imp {
         // Bind first: the spawning verb is already waiting on this socket,
         // and a launch can take longer than its 3 s spawn wait.
         let daemon = Daemon::bind(&socket_path(session))?;
+        // Only a `--launch` session keeps auto state: a `--cdp` browser is the
+        // user's own and an `--attach` one cannot serve state tools at all.
+        let auto_enabled = matches!(&browser, Browser::Launch(_));
         let (chrome, endpoint) = match browser {
             // The server drops after the socket: it closes only its own tabs.
             Browser::Attach => match attached_server() {
@@ -768,6 +924,7 @@ mod imp {
                         &mut server,
                         ultra_instinct_mcp::ATTACH_ENDPOINT,
                         idle,
+                        &mut None,
                     )
                 }
                 Err(message) => {
@@ -797,8 +954,18 @@ mod imp {
             server: daemon_server(&endpoint, chrome.is_none()),
             _chrome: chrome,
         };
+        // Saved login back into the fresh browser before the first request;
+        // the file is rewritten with the session's end state on the way out.
+        let mut auto = AutoState::new(session, &endpoint, auto_enabled);
+        if let Some(state) = auto.as_mut() {
+            state.restore(&mut owned.server);
+        }
         // `daemon` (the socket) is dropped inside; `owned` after, in order.
-        serve_on(daemon, &mut owned.server, &endpoint, idle)
+        let result = serve_on(daemon, &mut owned.server, &endpoint, idle, &mut auto);
+        if let Some(state) = &auto {
+            state.save(&mut owned.server);
+        }
+        result
     }
 
     /// `aui session list` over `dir`: each `*.sock` that answers is a live
@@ -1211,9 +1378,30 @@ mod tests {
                     &mut server,
                     "http://127.0.0.1:9222",
                     Duration::from_secs(20),
+                    &mut None,
                 )
                 .unwrap();
             })
+        }
+
+        /// The auto-state opt-out values and the reply check are strict.
+        #[test]
+        fn the_state_opt_out_and_reply_checks_are_strict() {
+            use super::super::imp::{reply_ok, state_value_off};
+            for off in ["0", "off", "false", "no", " OFF ", "No"] {
+                assert!(state_value_off(off), "{off}");
+            }
+            for on in ["", "1", "yes", "on", "disabled"] {
+                assert!(!state_value_off(on), "{on}");
+            }
+            assert!(reply_ok(
+                r#"{"jsonrpc":"2.0","id":1,"result":{"content":[]}}"#
+            ));
+            assert!(!reply_ok(
+                r#"{"jsonrpc":"2.0","id":1,"result":{"isError":true}}"#
+            ));
+            assert!(!reply_ok(r#"{"jsonrpc":"2.0","id":1,"error":{"code":-1}}"#));
+            assert!(!reply_ok("not json"));
         }
 
         #[test]
@@ -1379,7 +1567,14 @@ mod tests {
                     message: "no browser".into(),
                 })
             });
-            serve_on(daemon, &mut server, "http://x", Duration::from_millis(50)).unwrap();
+            serve_on(
+                daemon,
+                &mut server,
+                "http://x",
+                Duration::from_millis(50),
+                &mut None,
+            )
+            .unwrap();
             assert!(!path.exists());
             let _ = std::fs::remove_dir(path.parent().unwrap());
         }

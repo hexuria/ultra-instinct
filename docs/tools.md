@@ -145,7 +145,14 @@ out of `tools/list`. A name that is not a tool, or any other key, is an
 error at start, so a typo cannot leave a tool open.
 
 Each verb talks to the session daemon on `$TMPDIR/aui/<session>.sock`, which
-owns one MCP `Server`. Every verb takes `--session <name>` (default
+owns one MCP `Server`. A `--launch` session also keeps its login across
+`aui close` and reopen: the daemon restores `<state dir>/<session>.json`
+(0600, the `browser_state_*` format) when it starts and saves it when it
+ends. The state dir is `AUI_STATE_DIR`, else
+`~/Library/Application Support/aui` on macOS and
+`${XDG_STATE_HOME:-~/.local/state}/aui` elsewhere; `AUI_SESSION_STATE=0`
+turns it off, and `--cdp` / `--attach` sessions keep none. Every verb takes
+`--session <name>` (default
 `default`), `--cdp <url>`, `--max-output N` and `--boundary` (the reading
 verbs print page content between `<<<page-content <id>>>>` and
 `<<<end page-content <id>>>>`, a random id per output the page cannot know;

@@ -32,9 +32,16 @@ fn aui() -> &'static str {
 
 /// `aui <args>`: (exit ok, stdout + stderr).
 fn run(args: &[&str], stdin: Option<&str>) -> (bool, String) {
+    run_env(args, stdin, &[])
+}
+
+/// `run` with extra environment for the `aui` process (and the daemon it
+/// spawns): `AUI_STATE_DIR` keeps a test's auto session state in scratch.
+fn run_env(args: &[&str], stdin: Option<&str>, env: &[(&str, &str)]) -> (bool, String) {
     let mut command = Command::new(aui());
     command
         .args(args)
+        .envs(env.iter().copied())
         .stdin(if stdin.is_some() {
             Stdio::piped()
         } else {
@@ -85,6 +92,8 @@ impl Drop for Scratch {
 /// One `aui` session; `aui close` on drop, pass or fail.
 struct Session {
     name: String,
+    /// `AUI_STATE_DIR` for this session's verbs, when set.
+    state_dir: Option<PathBuf>,
 }
 
 impl Session {
@@ -93,14 +102,40 @@ impl Session {
         assert!(name.len() <= 32, "session name too long: {name}");
         // A leftover daemon from an aborted run would make `open --launch` refuse.
         let _ = run(&["close", "--session", &name], None);
-        Self { name }
+        Self {
+            name,
+            state_dir: None,
+        }
+    }
+
+    /// The same session name and state dir again: what `aui close` then a
+    /// new `aui open` on it looks like.
+    fn reopen(&self) -> Self {
+        let _ = run(&["close", "--session", &self.name], None);
+        Self {
+            name: self.name.clone(),
+            state_dir: self.state_dir.clone(),
+        }
+    }
+
+    /// Keep this session's auto state under `dir` (`AUI_STATE_DIR`).
+    fn with_state_dir(mut self, dir: PathBuf) -> Self {
+        self.state_dir = Some(dir);
+        self
     }
 
     /// `aui <verb> <args> --session <name>`.
     fn try_verb(&self, args: &[&str]) -> (bool, String) {
         let mut all = args.to_vec();
         all.extend(["--session", &self.name]);
-        run(&all, None)
+        match &self.state_dir {
+            Some(dir) => run_env(
+                &all,
+                None,
+                &[("AUI_STATE_DIR", dir.to_str().expect("utf-8 dir"))],
+            ),
+            None => run(&all, None),
+        }
     }
 
     /// Like [`Session::try_verb`], panicking on a non-zero exit.
@@ -462,6 +497,46 @@ fn state_save_then_load_into_a_fresh_chrome() {
         Some("borrow_sid=abc123"),
         "the server receives the loaded cookie"
     );
+}
+
+/// P5.3: a `--launch` session's daemon saves `<AUI_STATE_DIR>/<name>.json`
+/// on the way out and restores it into the next daemon on the same name —
+/// no `state save` / `state load` in between.
+#[test]
+#[ignore = "needs a local Chrome (aui open --launch)"]
+fn session_state_survives_close_and_reopen() {
+    let server = Server::start(pages);
+    let scratch = Scratch::new("autostate");
+    let state_dir = scratch.path("state");
+    let first = Session::new("auto1").with_state_dir(state_dir.clone());
+    first.launch(&server.url("/blank"), &[]);
+    first.verb(&["cookies", "set", "borrow_sid", "abc123"]);
+    first.verb(&["storage", "local", "set", "borrow-key", "kept-value"]);
+    first.verb(&["close"]);
+
+    // `close` answers on the stop reply; the save lands just after, so poll.
+    let file = state_dir.join(format!("{}.json", first.name));
+    let started = Instant::now();
+    while !file.exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "auto state was never saved"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(mode(&file), 0o600, "auto state file is private");
+    let text = std::fs::read_to_string(&file).expect("auto state file");
+    assert!(
+        text.contains("borrow_sid") && text.contains("kept-value"),
+        "{text}"
+    );
+
+    // Same session name: the new daemon restores before the first verb, so
+    // /state already reads the cookie and the origin's storage.
+    let second = first.reopen();
+    second.launch(&server.url("/blank"), &[]);
+    second.verb(&["open", &server.url("/state")]);
+    assert_eq!(second.title(), "cookie=borrow_sid=abc123|ls=kept-value");
 }
 
 #[test]

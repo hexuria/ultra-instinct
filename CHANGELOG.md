@@ -28,6 +28,8 @@ First release with prebuilt binaries.
 
 - `--proxy scheme://host:port` on `aui open --launch` and `aui run --launch`: the launched Chrome sends its requests through that proxy.
 
+- A `--launch` session keeps its login across `aui close` and reopen: the session daemon restores `<state dir>/<session>.json` (0600, the `browser_state_*` format) when it starts and saves it when it ends. `AUI_SESSION_STATE=0` turns it off; `AUI_STATE_DIR` moves the directory.
+
 - `aui diff`: what changed on the page since the last `aui snap`.
 
 - `--boundary` / `AUI_CONTENT_BOUNDARIES=1`: the reading verbs print page content between marker lines that carry a random id, so page text that imitates a tool result or an instruction stays visibly inside the page.
