@@ -446,6 +446,8 @@ const QUIT_WAIT: Duration = Duration::from_secs(5);
 #[derive(Debug)]
 pub struct ChromeProcess {
     child: Child,
+    #[cfg(windows)]
+    started: SystemTime,
     port: u16,
     binary: PathBuf,
     profile: PathBuf,
@@ -477,12 +479,6 @@ impl Drop for ChromeProcess {
         if self.keep_alive {
             return;
         }
-        #[cfg(windows)]
-        let helpers = if self.temp_profile {
-            String::new()
-        } else {
-            helper_snapshot(self.child.id())
-        };
         if !self.temp_profile {
             ask_quit(self);
         }
@@ -490,7 +486,7 @@ impl Drop for ChromeProcess {
         if matches!(self.child.try_wait(), Ok(None)) {
             kill_tree(&self.child);
         } else {
-            kill_helpers(&helpers);
+            kill_descendants(self.child.id(), self.started);
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -545,63 +541,39 @@ fn kill_tree(child: &Child) {
         .status();
 }
 
-/// Snapshot the root's descendants as pid:creation-ticks pairs while it is
-/// alive, so cleanup after exit cannot mistake a reused pid for its child.
+/// Our `Child` keeps the root's pid from being reused, so processes whose parent chain
+/// leads to it and that started after launch are ours, even after the root has exited.
 #[cfg(windows)]
-fn helper_snapshot(root: u32) -> String {
+fn kill_descendants(root: u32, started: SystemTime) {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const SCRIPT: &str = "$ErrorActionPreference = 'Stop'; \
+        $since = [DateTime]::FromFileTimeUtc([long]$env:AUI_CHROME_SINCE).ToLocalTime(); \
         $all = @(Get-CimInstance Win32_Process); \
-        $root = $all | Where-Object { $_.ProcessId -eq [uint32]$env:AUI_CHROME_ROOT } | Select-Object -First 1; \
-        if (-not $root) { return }; \
+        $ours = @{}; \
         $queue = [Collections.Generic.Queue[object]]::new(); \
-        $queue.Enqueue($root); \
-        $seen = @{}; \
-        $out = @(); \
+        $queue.Enqueue([pscustomobject]@{ ProcessId = [uint32]$env:AUI_CHROME_ROOT; CreationDate = $since }); \
         while ($queue.Count) { \
             $parent = $queue.Dequeue(); \
             foreach ($p in $all) { \
-                if ($p.ParentProcessId -eq $parent.ProcessId -and $p.CreationDate -ge $parent.CreationDate -and -not $seen.ContainsKey($p.ProcessId)) { \
-                    $seen[$p.ProcessId] = $true; \
-                    $out += \"$($p.ProcessId):$($p.CreationDate.Ticks)\"; \
+                if ($p.ParentProcessId -eq $parent.ProcessId -and $p.CreationDate -ge $parent.CreationDate -and -not $ours.ContainsKey($p.ProcessId)) { \
+                    $ours[$p.ProcessId] = $true; \
                     $queue.Enqueue($p) \
                 } \
             } \
         }; \
-        $out -join ' '";
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
-        .env("AUI_CHROME_ROOT", root.to_string())
-        .env_remove("PSModulePath")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
-        .output();
-    match output {
-        Ok(output) if output.status.success() => {
-            String::from_utf8_lossy(&output.stdout).trim().to_owned()
-        }
-        _ => String::new(),
-    }
-}
-
-#[cfg(windows)]
-fn kill_helpers(snapshot: &str) {
-    if snapshot.is_empty() {
-        return;
-    }
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    const SCRIPT: &str = "$ErrorActionPreference = 'Stop'; \
-        foreach ($entry in ($env:AUI_CHROME_HELPERS -split ' ')) { \
-            $id, $ticks = $entry -split ':'; \
-            $p = Get-CimInstance Win32_Process -Filter \"ProcessId=$id\"; \
-            if ($p -and $p.CreationDate.Ticks -eq [long]$ticks) { \
-                Stop-Process -Id $id -Force -ErrorAction SilentlyContinue \
-            } \
+        foreach ($id in @($ours.Keys)) { \
+            Stop-Process -Id $id -Force -ErrorAction SilentlyContinue \
         }";
+    let since = started
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| {
+            duration.as_nanos() / 100 + 116_444_736_000_000_000
+        })
+        .to_string();
     let _ = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
-        .env("AUI_CHROME_HELPERS", snapshot)
+        .env("AUI_CHROME_ROOT", root.to_string())
+        .env("AUI_CHROME_SINCE", since)
         .env_remove("PSModulePath")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -670,6 +642,8 @@ pub fn launch(options: &LaunchOptions) -> Result<ChromeProcess, LaunchError> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    #[cfg(windows)]
+    let launch_time = SystemTime::now();
     let child = match command.spawn() {
         Ok(child) => child,
         Err(err) => {
@@ -681,6 +655,8 @@ pub fn launch(options: &LaunchOptions) -> Result<ChromeProcess, LaunchError> {
     };
     let mut process = ChromeProcess {
         child,
+        #[cfg(windows)]
+        started: launch_time,
         port: 0,
         binary,
         profile,

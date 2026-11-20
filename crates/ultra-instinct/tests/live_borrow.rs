@@ -479,6 +479,28 @@ fn eventually(limit: Duration, what: &str, done: impl Fn() -> bool) {
 }
 
 #[cfg(unix)]
+fn kill_chrome_root(pid: u32) {
+    let status = Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("kill Chrome root");
+    assert!(status.success(), "could not kill Chrome root {pid}");
+}
+
+#[cfg(windows)]
+fn kill_chrome_root(pid: u32) {
+    let status = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("taskkill Chrome root");
+    assert!(status.success(), "could not kill Chrome root {pid}");
+}
+
+#[cfg(unix)]
 fn mode(path: &Path) -> u32 {
     std::fs::metadata(path)
         .unwrap_or_else(|err| panic!("{}: {err}", path.display()))
@@ -1018,6 +1040,35 @@ fn close_quits_a_kept_profile_chrome_and_its_helpers() {
     assert!(sibling_profile.is_dir(), "sibling kept profile removed");
     let _ = std::fs::remove_dir_all(&profile);
     let _ = std::fs::remove_dir_all(&sibling_profile);
+}
+
+#[test]
+#[ignore = "needs a local Chrome (aui open --launch)"]
+fn close_after_chrome_dies_leaves_no_helpers() {
+    let dir = std::env::temp_dir().join(format!("aui-dead-root-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let profile = dir.to_string_lossy().into_owned();
+    let session = Session::new("dead-root");
+    session.launch(
+        "data:text/html,<title>dead root</title>",
+        &["--profile", &profile],
+    );
+    let marker = dir.to_string_lossy().into_owned();
+    let (root, _) = processes()
+        .into_iter()
+        .find(|(_, command)| {
+            command.contains(&marker)
+                && command.contains("--remote-debugging-port=0")
+                && !command.contains("--type=")
+        })
+        .expect("Chrome root process");
+    kill_chrome_root(root);
+    let _ = session.try_verb(&["close"]);
+    eventually(Duration::from_secs(15), "helpers exit", || {
+        using_profile(&dir).is_empty()
+    });
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
