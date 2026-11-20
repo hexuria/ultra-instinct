@@ -543,6 +543,8 @@ fn kill_tree(child: &Child) {
 
 /// Our `Child` keeps the root's pid from being reused, so processes whose parent chain
 /// leads to it and that started after launch are ours, even after the root has exited.
+/// Each kill goes through a handle opened before its start time is checked, so a
+/// helper pid reused after the scan is never hit.
 #[cfg(windows)]
 fn kill_descendants(root: u32, started: SystemTime) {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -556,13 +558,17 @@ fn kill_descendants(root: u32, started: SystemTime) {
             $parent = $queue.Dequeue(); \
             foreach ($p in $all) { \
                 if ($p.ParentProcessId -eq $parent.ProcessId -and $p.CreationDate -ge $parent.CreationDate -and -not $ours.ContainsKey($p.ProcessId)) { \
-                    $ours[$p.ProcessId] = $true; \
+                    $ours[$p.ProcessId] = $p.CreationDate; \
                     $queue.Enqueue($p) \
                 } \
             } \
         }; \
         foreach ($id in @($ours.Keys)) { \
-            Stop-Process -Id $id -Force -ErrorAction SilentlyContinue \
+            try { \
+                $proc = [Diagnostics.Process]::GetProcessById([int]$id); \
+                $null = $proc.Handle; \
+                if ([Math]::Abs(($proc.StartTime - $ours[$id]).TotalMilliseconds) -lt 1) { $proc.Kill() } \
+            } catch {} \
         }";
     let since = started
         .duration_since(UNIX_EPOCH)
