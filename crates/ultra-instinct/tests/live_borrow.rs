@@ -967,6 +967,27 @@ fn close_ends_chrome_and_removes_its_temp_profile() {
 
 #[test]
 #[ignore = "needs a local Chrome (aui open --launch)"]
+fn close_quits_a_kept_profile_chrome_and_its_helpers() {
+    let profile = std::env::temp_dir().join(format!("aui-kept-profile-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&profile);
+    std::fs::create_dir_all(&profile).unwrap();
+    let profile_arg = profile.to_string_lossy().into_owned();
+    let session = Session::new("kept");
+    session.launch(
+        "data:text/html,<title>kept</title>",
+        &["--profile", &profile_arg],
+    );
+    assert!(!using_profile(&profile).is_empty());
+    assert_eq!(session.verb(&["close"]).trim(), "✓ daemon stopped");
+    eventually(Duration::from_secs(15), "Chrome exits", || {
+        using_profile(&profile).is_empty()
+    });
+    assert!(profile.is_dir(), "kept profile removed");
+    let _ = std::fs::remove_dir_all(&profile);
+}
+
+#[test]
+#[ignore = "needs a local Chrome (aui open --launch)"]
 fn idle_exit_ends_the_daemon_chrome_and_profile() {
     let session = Session::new("idle");
     session.launch("data:text/html,<title>idle</title>", &["--idle", "3"]);

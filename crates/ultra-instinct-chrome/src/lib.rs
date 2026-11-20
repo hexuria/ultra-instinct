@@ -11,6 +11,8 @@
 #![forbid(unsafe_code)]
 
 use std::ffi::OsStr;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -479,7 +481,11 @@ impl Drop for ChromeProcess {
             ask_quit(self);
         }
         #[cfg(windows)]
-        kill_tree(&self.child);
+        if matches!(self.child.try_wait(), Ok(None)) {
+            kill_tree(&self.child);
+        } else {
+            kill_profile_helpers(&self.binary, &self.profile);
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
         if self.temp_profile {
@@ -530,6 +536,28 @@ fn kill_tree(child: &Child) {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .status();
+}
+
+/// Once the root exits there is no tree to walk. Chrome cannot share a
+/// user-data-dir, so matching processes of this binary belong to this profile.
+#[cfg(windows)]
+fn kill_profile_helpers(binary: &Path, profile: &Path) {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const SCRIPT: &str = r#"$ErrorActionPreference = 'Stop'; $p = $env:AUI_CHROME_PROFILE; $flag = '--user-data-dir=' + $p; Get-CimInstance Win32_Process -Filter ("Name='" + $env:AUI_CHROME_NAME.Replace("'", "''") + "'") | Where-Object { $c = [string]$_.CommandLine; $c.EndsWith($flag) -or $c.Contains($flag + ' ') -or $c.Contains($flag + '"') -or $c.Contains($p + '\') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"#;
+    let name = binary
+        .file_name()
+        .unwrap_or(binary.as_os_str())
+        .to_string_lossy();
+    let _ = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+        .env("AUI_CHROME_NAME", name.as_ref())
+        .env("AUI_CHROME_PROFILE", profile)
+        .env_remove("PSModulePath")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
         .status();
 }
 
