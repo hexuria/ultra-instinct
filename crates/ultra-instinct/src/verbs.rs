@@ -765,13 +765,18 @@ fn short(id: &str) -> &str {
     id.get(..8).unwrap_or(id)
 }
 
-/// ` · N dropped` when the daemon's event buffer overflowed since the last
-/// read: those entries are gone, so the count must not read as complete.
+/// What a diagnostic read lost, after its count: ` · N dropped` when the
+/// daemon's event buffer overflowed, and the tool's cut marker when
+/// `--max-output` left entries out. Both are gone for good (reads drain).
 fn dropped(body: &Value) -> String {
-    match body["dropped"].as_u64() {
-        Some(lost) if lost > 0 => format!(" · {lost} dropped"),
-        _ => String::new(),
+    let mut out = String::new();
+    if let Some(lost) = body["dropped"].as_u64().filter(|&lost| lost > 0) {
+        out.push_str(&format!(" · {lost} dropped"));
     }
+    if let Some(cut) = body["truncated"].as_str() {
+        out.push_str(&format!(" · {cut}"));
+    }
+    out
 }
 
 pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {

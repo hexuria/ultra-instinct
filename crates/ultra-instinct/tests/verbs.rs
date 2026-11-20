@@ -1197,6 +1197,14 @@ fn tab_eval_console_requests_print_short_lines() {
         line("requests", &[], json!({"dropped": 0, "entries": []})),
         "0 requests\n"
     );
+    assert_eq!(
+        line(
+            "console",
+            &["--max-output", "5"],
+            json!({"dropped": 0, "entries": [], "truncated": "… [truncated 40 chars]"})
+        ),
+        "0 entries · … [truncated 40 chars]\n"
+    );
     // Events the buffer lost are named: the list is not the whole story.
     assert_eq!(
         line("requests", &[], json!({"dropped": 7, "entries": []})),
