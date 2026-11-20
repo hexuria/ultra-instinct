@@ -78,7 +78,7 @@ mod cli_execute {
         let first = help.lines().next().unwrap();
         assert_eq!(
             first,
-            "ultra-instinct run|replay|lessons|exams|doctor|install|upgrade|observe|guard|verify|mcp|skills|batch|session|open|snap|click|type|select|key|scroll|wait|shot|tabs|close|dialog|forward|reload|check|uncheck|focus|keyboard|get|is|count|state|cookies|storage|set|download|network|back|hover|drag|upload|text|read|html|find|pdf|tab|eval|console|requests|dblclick|rightclick|midclick|tripleclick|hold|scrollto|zoom|options"
+            "ultra-instinct run|replay|lessons|exams|doctor|install|upgrade|observe|guard|verify|mcp|skills|batch|session|open|snap|click|type|select|key|scroll|wait|shot|tabs|close|dialog|forward|reload|check|uncheck|focus|keyboard|get|is|count|state|cookies|storage|set|download|network|back|hover|drag|upload|text|read|html|find|pdf|tab|eval|console|requests|dblclick|rightclick|midclick|tripleclick|hold|scrollto|zoom|options|diff"
         );
         assert!(
             help.contains(
@@ -86,14 +86,14 @@ mod cli_execute {
             ) && help.contains("open --idle <secs> (1 to 86400, default 3600)"),
             "{help}"
         );
-        for removed in ["locate", "inspect", "diff", "matcher", "hgra", "act is"] {
+        for removed in ["locate", "inspect", "matcher", "hgra", "act is"] {
             assert!(!help.contains(removed), "{removed}: {help}");
         }
     }
 
     #[test]
     fn removed_commands_are_unknown() {
-        for name in ["locate", "act", "inspect", "diff"] {
+        for name in ["locate", "act", "inspect"] {
             let err =
                 execute(&args(&[name, "--fixture", &fixture("sidebar.manifold")])).unwrap_err();
             assert_eq!(err, CliError::UnknownCommand(name.into()), "{name}");

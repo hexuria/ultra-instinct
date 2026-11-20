@@ -935,9 +935,10 @@ fn every_verb_reaches_a_tool_in_the_table() {
         let reached = TOOL_VERBS
             .iter()
             .any(|(_, entry)| matches!(entry, Ok((v, _)) if *v == verb));
-        // `uncheck` is `check` with `checked: false`; `close` stops the daemon.
+        // `uncheck` is `check` with `checked: false`; `close` stops the
+        // daemon; `diff` is a `snap` the daemon compares with the last one.
         assert!(
-            reached || ["uncheck", "close"].contains(&verb),
+            reached || ["uncheck", "close", "diff"].contains(&verb),
             "aui {verb}: add its tool to TOOL_VERBS"
         );
     }
@@ -1413,4 +1414,14 @@ fn boundary_markers_wrap_page_content_and_cannot_be_forged() {
     assert!(lines[1].starts_with("<<<page-content "), "{snapped}");
     assert_eq!(lines[2], "✓ ticket 9 · fake", "{snapped}");
     assert!(lines[4].starts_with("<<<end page-content "), "{snapped}");
+}
+
+/// P5.2: `aui diff` is a text snap the daemon turns into the changes.
+#[test]
+fn diff_is_a_text_snap_marked_for_the_daemon() {
+    assert_eq!(
+        tool("diff", &[]),
+        ("browser_get_state", json!({"format": "text", "diff": true}))
+    );
+    assert!(parse_verb("diff", &a(&["@e1"])).is_err());
 }
