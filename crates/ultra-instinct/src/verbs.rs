@@ -13,14 +13,16 @@ pub use crate::daemon::{Request, SessionName, Verb};
 use crate::CliError;
 
 /// Shell verbs, in usage order.
-pub const VERBS: [&str; 31] = [
+pub const VERBS: [&str; 36] = [
     "open", "snap", "click", "type", "select", "key", "scroll", "wait", "shot", "tabs", "close",
     "dialog", "forward", "reload", "check", "uncheck", "focus", "keyboard", "get", "is", "count",
     "state", "cookies", "storage", "set", "download", "network", "back", "hover", "drag", "upload",
+    "text", "read", "html", "find", "pdf",
 ];
 
 /// Flags that take a value (`--flag v` or `--flag=v`).
-const VALUE_FLAGS: [&str; 22] = [
+const VALUE_FLAGS: [&str; 23] = [
+    "--scale",
     "--session",
     "--cdp",
     "--max-output",
@@ -46,7 +48,9 @@ const VALUE_FLAGS: [&str; 22] = [
 ];
 
 /// Flags that take no value.
-const SWITCHES: [&str; 14] = [
+const SWITCHES: [&str; 16] = [
+    "--landscape",
+    "--background",
     "--snap",
     "--script",
     "--json",
@@ -372,6 +376,51 @@ fn build(verb: &'static str, flags: &mut Flags) -> Result<Request, CliError> {
             ["dismiss"] => tool("browser_dialog", json!({"action": "dismiss"})),
             _ => usage("[status] | accept [text] | dismiss"),
         },
+        "text" => match p[..] {
+            [] => tool("browser_get_text", json!({})),
+            _ => usage(""),
+        },
+        "read" => match p[..] {
+            [] => tool("browser_extract_content", json!({})),
+            _ => usage(""),
+        },
+        "html" => match p[..] {
+            [] => tool("browser_get_html", json!({})),
+            _ => usage(""),
+        },
+        "find" => {
+            let role = flags.one("--role")?;
+            let mut arguments = json!({});
+            match p[..] {
+                [] if role.is_some() => {}
+                [text] => arguments["text"] = json!(text),
+                _ => return usage("[text] [--role <role>]"),
+            }
+            if let Some(role) = role {
+                arguments["role"] = json!(role);
+            }
+            tool("browser_find", arguments)
+        }
+        "pdf" => {
+            let landscape = flags.switch("--landscape");
+            let background = flags.switch("--background");
+            let scale = flags.one("--scale")?;
+            let [path] = p[..] else {
+                return usage("<path> [--landscape] [--background] [--scale <n>]");
+            };
+            let mut arguments = json!({
+                "path": absolute(path),
+                "landscape": landscape,
+                "print_background": background,
+            });
+            if let Some(scale) = scale {
+                let scale: f64 = scale.parse().map_err(|_| {
+                    CliError::Config(format!("--scale {scale:?} is not a number"))
+                })?;
+                arguments["scale"] = json!(scale);
+            }
+            tool("browser_save_as_pdf", arguments)
+        }
         "back" => match p[..] {
             [] => tool("browser_go_back", json!({})),
             _ => usage(""),
@@ -741,7 +790,24 @@ pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
             }
             format!("✓ seen after {secs:.1} s · {looks} looks")
         }
-        "browser_screenshot" | "browser_download" => {
+        "browser_get_text" => s("text").to_owned(),
+        "browser_get_html" => s("html").to_owned(),
+        "browser_extract_content" => s("content").to_owned(),
+        "browser_find" => {
+            let matches = body["matches"].as_array().cloned().unwrap_or_default();
+            let mut out = String::new();
+            for found in &matches {
+                out.push_str(&format!(
+                    "@e{} {} {:?}\n",
+                    found["index"],
+                    found["role"].as_str().unwrap_or_default(),
+                    found["label"].as_str().unwrap_or_default()
+                ));
+            }
+            out.push_str(&format!("{} found", matches.len()));
+            out
+        }
+        "browser_screenshot" | "browser_download" | "browser_save_as_pdf" => {
             format!("✓ saved {} ({} bytes)", s("path"), body["bytes"])
         }
         "browser_list_tabs" => {

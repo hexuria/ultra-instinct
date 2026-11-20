@@ -880,11 +880,11 @@ const TOOL_VERBS: [(&str, VerbOrReason); 53] = [
         "browser_file_upload",
         Ok(("upload", &["@e1", "/tmp/f.txt"])),
     ),
-    ("browser_get_text", Err("plan P2.3")),
-    ("browser_extract_content", Err("plan P2.3")),
-    ("browser_get_html", Err("plan P2.3")),
-    ("browser_find", Err("plan P2.3")),
-    ("browser_save_as_pdf", Err("plan P2.3")),
+    ("browser_get_text", Ok(("text", &[]))),
+    ("browser_extract_content", Ok(("read", &[]))),
+    ("browser_get_html", Ok(("html", &[]))),
+    ("browser_find", Ok(("find", &["sign"]))),
+    ("browser_save_as_pdf", Ok(("pdf", &["/tmp/p.pdf"]))),
     ("browser_new_tab", Err("plan P2.4")),
     ("browser_switch_tab", Err("plan P2.4")),
     ("browser_close_tab", Err("plan P2.4")),
@@ -1015,5 +1015,82 @@ fn back_hover_drag_upload_render_one_short_line() {
             json!({"acted": true, "index": 4, "ticket": 9})
         ),
         "✓ ticket 9 · 2 files set on @e4\n"
+    );
+}
+
+#[test]
+fn text_read_html_find_pdf_parse_to_their_tools() {
+    assert_eq!(tool("text", &[]), ("browser_get_text", json!({})));
+    assert_eq!(tool("read", &[]), ("browser_extract_content", json!({})));
+    assert_eq!(tool("html", &[]), ("browser_get_html", json!({})));
+    assert_eq!(
+        tool("find", &["sign", "--role", "button"]),
+        ("browser_find", json!({"text": "sign", "role": "button"}))
+    );
+    assert_eq!(
+        tool("find", &["--role", "link"]),
+        ("browser_find", json!({"role": "link"}))
+    );
+    assert_eq!(
+        tool("pdf", &["/tmp/p.pdf", "--landscape", "--scale", "0.5"]),
+        (
+            "browser_save_as_pdf",
+            json!({"path": "/tmp/p.pdf", "landscape": true, "print_background": false, "scale": 0.5})
+        )
+    );
+    for (verb, args) in [
+        ("text", &["x"][..]),
+        ("read", &["x"]),
+        ("html", &["x"]),
+        ("find", &[]),
+        ("find", &["a", "b"]),
+        ("pdf", &[]),
+    ] {
+        let err = parse_verb(verb, &a(args)).err().unwrap().to_string();
+        assert!(err.contains(&format!("usage: aui {verb}")), "{err}");
+    }
+    let err = parse_verb("pdf", &a(&["p.pdf", "--scale", "big"]))
+        .err()
+        .unwrap();
+    assert!(err.to_string().contains("--scale"), "{err}");
+}
+
+#[test]
+fn text_read_html_find_pdf_print_the_tool_reply() {
+    let line = |verb: &str, args: &[&str], body: Value| {
+        let verb = parse_verb(verb, &a(args)).unwrap();
+        render(&verb, &reply(&body.to_string(), false)).unwrap()
+    };
+    assert_eq!(
+        line("text", &[], json!({"text": "Hello\nthere"})),
+        "Hello\nthere\n"
+    );
+    assert_eq!(
+        line("read", &[], json!({"content": "# Hello"})),
+        "# Hello\n"
+    );
+    assert_eq!(
+        line("html", &[], json!({"html": "<html></html>"})),
+        "<html></html>\n"
+    );
+    assert_eq!(
+        line(
+            "find",
+            &["sign"],
+            json!({"matched": 1, "matches": [{"index": 2, "role": "button", "label": "Sign in"}]})
+        ),
+        "@e2 button \"Sign in\"\n1 found\n"
+    );
+    assert_eq!(
+        line("find", &["zzz"], json!({"matched": 0, "matches": []})),
+        "0 found\n"
+    );
+    assert_eq!(
+        line(
+            "pdf",
+            &["/tmp/p.pdf"],
+            json!({"data": "JVBERg==", "path": "/tmp/p.pdf", "bytes": 4})
+        ),
+        "✓ saved /tmp/p.pdf (4 bytes)\n"
     );
 }
