@@ -62,8 +62,8 @@ pub trait Transport {
     fn open(path: &Path) -> Result<Self::Listener, CliError>;
     /// Open a client connection to the endpoint `path` names.
     fn connect(path: &Path) -> io::Result<Self::Stream>;
-    /// Platform flags that detach a spawned daemon's `Command`.
-    fn detach(command: &mut Command);
+    /// Spawn the daemon `command`, detached from this process.
+    fn spawn_detached(command: Command) -> io::Result<()>;
 }
 
 /// The accept side of a bound session endpoint.
@@ -782,8 +782,8 @@ pub fn connect_or_spawn<T: Transport>(
 }
 
 /// Spawn `current_exe() daemon --session <name> [--cdp <url> | --attach |
-/// --launch [--headed] [--profile <dir>]] [--idle <secs>]`, detached (own process
-/// group, null stdio), with the policy env for `open`.
+/// --launch [--headed] [--profile <dir>]] [--idle <secs>]`, detached with
+/// null stdio and the policy env for `open`.
 fn spawn_daemon<T: Transport>(verb: &Verb) -> Result<(), CliError> {
     let exe = std::env::current_exe().map_err(|err| CliError::Io {
         path: "current_exe".into(),
@@ -862,8 +862,7 @@ fn spawn_daemon<T: Transport>(verb: &Verb) -> Result<(), CliError> {
         ultra_instinct_mcp::ToolPolicy::read(&file).map_err(CliError::Config)?;
         command.env(ultra_instinct_mcp::ENV_POLICY_FILE, file);
     }
-    T::detach(&mut command);
-    command.spawn().map(|_| ()).map_err(|err| CliError::Io {
+    T::spawn_detached(command).map_err(|err| CliError::Io {
         path: exe.display().to_string(),
         message: err.to_string(),
     })

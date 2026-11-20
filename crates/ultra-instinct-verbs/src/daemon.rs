@@ -568,8 +568,9 @@ mod imp {
             UnixStream::connect(path)
         }
 
-        fn detach(command: &mut Command) {
-            std::os::unix::process::CommandExt::process_group(command, 0);
+        fn spawn_detached(mut command: Command) -> std::io::Result<()> {
+            std::os::unix::process::CommandExt::process_group(&mut command, 0);
+            command.spawn().map(drop)
         }
     }
 
@@ -615,7 +616,7 @@ mod imp {
 
 #[cfg(windows)]
 mod imp {
-    use std::ffi::OsString;
+    use std::ffi::{OsStr, OsString};
     use std::io::{self, Write};
     use std::os::windows::process::CommandExt;
     use std::path::{Path, PathBuf};
@@ -851,9 +852,79 @@ mod imp {
             connect_name(&pipe_name(path))
         }
 
-        fn detach(command: &mut Command) {
-            command.creation_flags(CREATE_NO_WINDOW);
+        fn spawn_detached(command: Command) -> io::Result<()> {
+            // CreateProcess would hand the daemon this process's inheritable
+            // handles, including the caller's stdout pipe. ShellExecute inherits none.
+            const SCRIPT: &str = "$ErrorActionPreference = 'Stop'; \
+                $psi = [Diagnostics.ProcessStartInfo]::new($env:AUI_SPAWN_EXE, $env:AUI_SPAWN_ARGS); \
+                $psi.UseShellExecute = $true; \
+                $psi.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden; \
+                $null = [Diagnostics.Process]::Start($psi)";
+            let args = command
+                .get_args()
+                .map(quote_arg)
+                .collect::<Vec<_>>()
+                .join(" ");
+            let mut powershell = Command::new("powershell");
+            powershell
+                .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+                .env("AUI_SPAWN_EXE", command.get_program())
+                .env("AUI_SPAWN_ARGS", args)
+                .env_remove("PSModulePath");
+            for (key, value) in command.get_envs() {
+                if let Some(value) = value {
+                    powershell.env(key, value);
+                } else {
+                    powershell.env_remove(key);
+                }
+            }
+            if let Some(dir) = command.get_current_dir() {
+                powershell.current_dir(dir);
+            }
+            let status = powershell
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .creation_flags(CREATE_NO_WINDOW)
+                .status()?;
+            if status.success() {
+                Ok(())
+            } else {
+                Err(io::Error::other(format!(
+                    "could not start the daemon ({status})"
+                )))
+            }
         }
+    }
+
+    fn quote_arg(arg: &OsStr) -> String {
+        let arg = arg.to_string_lossy();
+        if !arg.is_empty()
+            && !arg
+                .chars()
+                .any(|character| matches!(character, ' ' | '\t' | '\n' | '"'))
+        {
+            return arg.into_owned();
+        }
+
+        let mut quoted = String::from("\"");
+        let mut backslashes = 0;
+        for character in arg.chars() {
+            if character == '\\' {
+                backslashes += 1;
+            } else if character == '"' {
+                quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
+                quoted.push('"');
+                backslashes = 0;
+            } else {
+                quoted.push_str(&"\\".repeat(backslashes));
+                quoted.push(character);
+                backslashes = 0;
+            }
+        }
+        quoted.push_str(&"\\".repeat(backslashes * 2));
+        quoted.push('"');
+        quoted
     }
 
     /// Replace `dir`'s DACL through Windows PowerShell (always installed;
@@ -970,6 +1041,20 @@ mod imp {
         use super::session::{SessionListener, SessionStream, Transport as _};
         use super::*;
         use std::io::Read;
+
+        #[test]
+        fn quote_arg_escapes_windows_command_line_arguments() {
+            assert_eq!(quote_arg(OsStr::new("plain")), "plain");
+            assert_eq!(quote_arg(OsStr::new("a b")), "\"a b\"");
+            assert_eq!(quote_arg(OsStr::new("")), "\"\"");
+            assert_eq!(quote_arg(OsStr::new("a\"b")), "\"a\\\"b\"");
+            assert_eq!(
+                quote_arg(OsStr::new(r"C:\dir with space\")),
+                r#""C:\dir with space\\""#,
+            );
+            assert_eq!(quote_arg(OsStr::new(r#"a\\"b"#)), r#""a\\\\\"b""#,);
+            assert_eq!(quote_arg(OsStr::new(r"C:\no\spaces")), r"C:\no\spaces");
+        }
 
         fn dir(tag: &str) -> PathBuf {
             std::env::temp_dir().join(format!("aui-w-{}-{tag}", std::process::id()))
