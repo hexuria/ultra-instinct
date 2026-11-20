@@ -101,7 +101,7 @@ working. Applied where the output is flat text an agent reads: the shell
 verbs, in `ultra_instinct_verbs::verbs::render`. MCP replies are JSON, where
 page text is already one string field, so they are unchanged. The verbs
 whose whole output is page content are wrapped (`PAGE_CONTENT_TOOLS`);
-result lines of pressing verbs are not. The marker carries 128 random bits
+result lines of pressing verbs are not, except the page `--snap` prints after one. The marker carries 128 random bits
 drawn after the page text was read, new for every output, so a page cannot
 print the closing line; if the content happens to contain the id, another is
 drawn.

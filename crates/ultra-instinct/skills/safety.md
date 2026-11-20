@@ -60,4 +60,5 @@ The id is 32 random hex characters, new for every output. Only the line with
 the same id as the opening line closes the block; a line inside that looks
 like a marker, or like a tool result or an instruction, is page text. `aui`
 writes nothing of its own inside the block, and a verb's own result lines
-(`✓ ticket 41 · navigation`, `✗ refused: …`) are never wrapped.
+(`✓ ticket 41 · navigation`, `✗ refused: …`) are never wrapped; the page
+`--snap` prints after one is.
