@@ -715,11 +715,13 @@ mod imp {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             loop {
                 match self.inner.write(buf) {
-                    Err(err) if pipe_would_block(&err) => {
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
+                    Err(err) if pipe_would_block(&err) => {}
+                    // A full nonblocking pipe takes nothing and reports
+                    // success; a closed peer is an error, not Ok(0).
+                    Ok(0) if !buf.is_empty() => {}
                     result => return result,
                 }
+                std::thread::sleep(Duration::from_millis(5));
             }
         }
         fn flush(&mut self) -> io::Result<()> {
