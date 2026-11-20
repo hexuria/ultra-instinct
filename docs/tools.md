@@ -198,7 +198,7 @@ Other commands:
 |---|---|
 | `aui batch [--bail] [--json] "<verb args>"...` | Run verbs in order on one session (no args: a JSON array of strings on stdin); `--json` prints `[{cmd, ok, output}]` |
 | `aui session`, `aui session list` | The current session name; live sessions (stale sockets removed) |
-| `aui skills list`, `aui skills get <name>` | Guides that ship in the binary (`core`) |
+| `aui skills list`, `aui skills get <name> [--ref <ref>]` | Guides that ship in the binary (`core`) and their references (`commands`, `safety`, `sessions`) |
 | `aui doctor [--json] [--quick] [--cdp <url>]` | Check Chrome, the endpoint, a test launch, and `$TMPDIR/aui` |
 | `aui install [--run]` | Print (or run) the Chrome for Testing install command |
 | `aui upgrade [--version <tag>]` | Replace `aui` and `ultra-instinct` where they are installed with the latest release build (or `<tag>`), after its `SHA256SUMS` check; a mismatch replaces nothing. Needs `curl` and `tar` |
