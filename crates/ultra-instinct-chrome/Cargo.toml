@@ -12,4 +12,4 @@ description = "Find and start a local Chrome / Chromium with a DevTools port for
 
 [dev-dependencies]
 # The ignored live launch test lists the started Chrome's pages.
-ultra-instinct-cdp = { path = "../ultra-instinct-cdp", version = "0.1.0"}
+ultra-instinct-cdp = { path = "../ultra-instinct-cdp", version = "0.1.1"}

@@ -20,7 +20,7 @@ members = [
 # ultra-instinct-resonance and the HGRA experiment ultra-instinct-hyper (borrow-and-prune)
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 publish = true

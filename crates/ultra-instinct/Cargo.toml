@@ -11,15 +11,15 @@ description = "ultra-instinct command line"
 include = ["Cargo.toml", "src/**/*.rs", "skills/*.md", "examples/**/*.rs", "tests/**/*.rs"]
 
 [dependencies]
-ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.0"}
-ultra-instinct-browser = { path = "../ultra-instinct-browser", version = "0.1.0"}
-ultra-instinct-guard = { path = "../ultra-instinct-guard", version = "0.1.0"}
-ultra-instinct-mcp = { path = "../ultra-instinct-mcp", version = "0.1.0"}
-ultra-instinct-verbs = { path = "../ultra-instinct-verbs", version = "0.1.0"}
-ultra-instinct-agent = { path = "../ultra-instinct-agent", version = "0.1.0"}
-ultra-instinct-policy = { path = "../ultra-instinct-policy", version = "0.1.0"}
-ultra-instinct-dojo = { path = "../ultra-instinct-dojo", version = "0.1.0"}
-ultra-instinct-remote = { path = "../ultra-instinct-remote", optional = true, version = "0.1.0"}
+ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.1"}
+ultra-instinct-browser = { path = "../ultra-instinct-browser", version = "0.1.1"}
+ultra-instinct-guard = { path = "../ultra-instinct-guard", version = "0.1.1"}
+ultra-instinct-mcp = { path = "../ultra-instinct-mcp", version = "0.1.1"}
+ultra-instinct-verbs = { path = "../ultra-instinct-verbs", version = "0.1.1"}
+ultra-instinct-agent = { path = "../ultra-instinct-agent", version = "0.1.1"}
+ultra-instinct-policy = { path = "../ultra-instinct-policy", version = "0.1.1"}
+ultra-instinct-dojo = { path = "../ultra-instinct-dojo", version = "0.1.1"}
+ultra-instinct-remote = { path = "../ultra-instinct-remote", optional = true, version = "0.1.1"}
 
 [dev-dependencies]
 serde_json = "1"

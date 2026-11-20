@@ -17,10 +17,10 @@ model-text = ["ultra-instinct-policy/model-text"]
 remote = ["ultra-instinct-policy/remote"]
 
 [dependencies]
-ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.0"}
-ultra-instinct-browser = { path = "../ultra-instinct-browser", version = "0.1.0"}
-ultra-instinct-guard = { path = "../ultra-instinct-guard", version = "0.1.0"}
-ultra-instinct-policy = { path = "../ultra-instinct-policy", version = "0.1.0"}
+ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.1"}
+ultra-instinct-browser = { path = "../ultra-instinct-browser", version = "0.1.1"}
+ultra-instinct-guard = { path = "../ultra-instinct-guard", version = "0.1.1"}
+ultra-instinct-policy = { path = "../ultra-instinct-policy", version = "0.1.1"}
 
 [dev-dependencies]
 proptest = "1.11"

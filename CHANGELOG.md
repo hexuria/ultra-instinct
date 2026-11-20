@@ -6,7 +6,7 @@ as the GitHub release body (`scripts/release-notes.sh`), so a tag with no
 section here does not release. A prerelease tag (`v0.1.0-rc.1`) uses the
 section of its version (`0.1.0`).
 
-## Unreleased
+## 0.1.1
 
 ### Platforms
 

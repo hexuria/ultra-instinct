@@ -11,10 +11,10 @@ description = "ultra-instinct remote decision transports (JEV / Clef) and the HT
 # The only crate that carries model SDKs and an HTTP client. Every leg is an
 # optional feature; ultra-instinct turns them on.
 [dependencies]
-ultra-instinct-policy = { path = "../ultra-instinct-policy", version = "0.1.0"}
+ultra-instinct-policy = { path = "../ultra-instinct-policy", version = "0.1.1"}
 
 [dev-dependencies]
-ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.0"}
+ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.1"}
 
 [features]
 default = []

@@ -1700,7 +1700,7 @@ dependencies = [
 
 [[package]]
 name = "ultra-instinct"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde_json",
  "ultra-instinct-agent",
@@ -1716,7 +1716,7 @@ dependencies = [
 
 [[package]]
 name = "ultra-instinct-agent"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
  "serde_json",
@@ -1728,7 +1728,7 @@ dependencies = [
 
 [[package]]
 name = "ultra-instinct-browser"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
  "serde",
@@ -1741,7 +1741,7 @@ dependencies = [
 
 [[package]]
 name = "ultra-instinct-browser-tools"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.23.1",
  "serde_json",
@@ -1755,7 +1755,7 @@ dependencies = [
 
 [[package]]
 name = "ultra-instinct-cdp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
  "rustix",
@@ -1765,21 +1765,21 @@ dependencies = [
 
 [[package]]
 name = "ultra-instinct-chrome"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ultra-instinct-cdp",
 ]
 
 [[package]]
 name = "ultra-instinct-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "ultra-instinct-dojo"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
  "serde_json",
@@ -1788,7 +1788,7 @@ dependencies = [
 
 [[package]]
 name = "ultra-instinct-guard"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
  "ultra-instinct-core",
@@ -1796,7 +1796,7 @@ dependencies = [
 
 [[package]]
 name = "ultra-instinct-mcp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
  "serde_json",
@@ -1812,7 +1812,7 @@ dependencies = [
 
 [[package]]
 name = "ultra-instinct-policy"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "instinct-core",
  "instinct-lexicon",
@@ -1823,7 +1823,7 @@ dependencies = [
 
 [[package]]
 name = "ultra-instinct-remote"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "reqwest",
  "serde_json",
@@ -1834,7 +1834,7 @@ dependencies = [
 
 [[package]]
 name = "ultra-instinct-verbs"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "interprocess",
  "serde_json",

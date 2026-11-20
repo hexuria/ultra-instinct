@@ -9,7 +9,7 @@ rust-version.workspace = true
 description = "Allow / refuse / escalate decisions for ultra-instinct"
 
 [dependencies]
-ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.0"}
+ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.1"}
 
 [dev-dependencies]
 proptest = "1.11"

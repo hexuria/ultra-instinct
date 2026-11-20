@@ -9,13 +9,13 @@ rust-version.workspace = true
 description = "stdio JSON-RPC MCP server for the ultra-instinct action firewall"
 
 [dependencies]
-ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.0"}
-ultra-instinct-browser = { path = "../ultra-instinct-browser", version = "0.1.0"}
-ultra-instinct-guard = { path = "../ultra-instinct-guard", version = "0.1.0"}
-ultra-instinct-cdp = { path = "../ultra-instinct-cdp", version = "0.1.0"}
-ultra-instinct-browser-tools = { path = "../ultra-instinct-browser-tools", version = "0.1.0"}
-ultra-instinct-agent = { path = "../ultra-instinct-agent", version = "0.1.0"}
-ultra-instinct-policy = { path = "../ultra-instinct-policy", version = "0.1.0"}
+ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.1"}
+ultra-instinct-browser = { path = "../ultra-instinct-browser", version = "0.1.1"}
+ultra-instinct-guard = { path = "../ultra-instinct-guard", version = "0.1.1"}
+ultra-instinct-cdp = { path = "../ultra-instinct-cdp", version = "0.1.1"}
+ultra-instinct-browser-tools = { path = "../ultra-instinct-browser-tools", version = "0.1.1"}
+ultra-instinct-agent = { path = "../ultra-instinct-agent", version = "0.1.1"}
+ultra-instinct-policy = { path = "../ultra-instinct-policy", version = "0.1.1"}
 serde_json = "1"
 
 [dev-dependencies]

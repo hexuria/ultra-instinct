@@ -9,7 +9,7 @@ rust-version.workspace = true
 description = "Battle diary, replay arena, lessons and trust for ultra-instinct"
 
 [dependencies]
-ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.0"}
+ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.1"}
 serde_json = "1"
 
 [dev-dependencies]

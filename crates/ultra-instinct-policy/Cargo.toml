@@ -17,7 +17,7 @@ remote = ["dep:serde_json"]
 model-text = ["dep:serde_json"]
 
 [dependencies]
-ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.0"}
+ultra-instinct-core = { path = "../ultra-instinct-core", version = "0.1.1"}
 instinct-core = { workspace = true }
 instinct-text = { workspace = true }
 instinct-lexicon = { workspace = true }
