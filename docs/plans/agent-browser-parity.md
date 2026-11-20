@@ -53,7 +53,7 @@ daemon is unix-socket only).
 
 | Id | Item | Done-check | Needs |
 |---|---|---|---|
-| P2.1 | Parity test: every `browser_*` tool has an `aui` verb or an entry in a "no verb, because" list | The test fails when a tool is added with neither | |
+| P2.1 (done) | Parity test: every `browser_*` tool has an `aui` verb or an entry in a "no verb, because" list | The test fails when a tool is added with neither | |
 | P2.2 | Verbs `back`, `hover <ref>`, `drag <ref> <ref>`, `upload <ref> <path>...` | Each runs against a live page; `drag` and `upload` refuse on a stale snap | P2.1 |
 | P2.3 | Verbs `text`, `read` (extract content), `html`, `find`, `pdf <path>` | Output matches the MCP tool for the same page | P2.1 |
 | P2.4 | Verbs `tab new\|switch\|close`, `eval <script>`, `console`, `requests` | Same | P2.1 |
@@ -66,9 +66,9 @@ daemon is unix-socket only).
 |---|---|---|---|
 | P3.1 | Drop the alias tools `browser_form_input`, `browser_get_page_text`, `browser_javascript_exec`, and `browser_search` (ask first: breaks MCP callers that use those names) | Tool count and docs agree; calling a dropped name returns the unknown-tool code | |
 | P3.2 | Move `aui observe / guard / verify` and `replay / lessons / exams` out of the top-level help into one group each | `aui --help` fits one screen; old spellings still work or print where they went | |
-| P3.3 | Delete `fixtures/*.browser-use.json` and `*.cua.json` if no test or bench reads them | `cargo nextest run --workspace` and the bench smoke pass without them | |
+| P3.3 (done) | Delete `fixtures/*.browser-use.json` and `*.cua.json` if no test or bench reads them | `cargo nextest run --workspace` and the bench smoke pass without them | |
 | P3.4 | Fold `ultra-instinct-geometry`, `-protocol` and `-observe` into their one natural owner (ask first: they are published on crates.io and `scripts/architecture.txt` names them) | Architecture check passes; public paths re-exported or the break is in the changelog | |
-| P3.5 | Replace the README hero image with one this repo owns, or drop it | README renders with no third-party link | |
+| P3.5 (done) | Replace the README hero image with one this repo owns, or drop it | README renders with no third-party link | |
 
 ## Phase 4: improve
 
