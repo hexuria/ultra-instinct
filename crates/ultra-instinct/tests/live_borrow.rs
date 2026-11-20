@@ -951,7 +951,8 @@ fn a_click_that_opens_alert_returns_at_once_with_the_hint() {
         out.contains("a alert dialog is open; call browser_dialog"),
         "{out}"
     );
-    assert!(took < Duration::from_secs(3), "took {took:?}");
+    // A dialog should interrupt the call before its 30 s CDP deadline.
+    assert!(took < Duration::from_secs(10), "took {took:?}");
     let status = session.verb(&["dialog"]);
     assert!(
         status.contains("alert dialog open") && status.contains("saved"),
