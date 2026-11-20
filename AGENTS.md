@@ -337,7 +337,9 @@ deliberate eval.
 - Label folding: `crates/ultra-instinct-browser/tests/label_folding.rs` and
   `crates/ultra-instinct-mcp/tests/label_folding.rs`.
 
-Live Chrome tests stay `#[ignore]`; CI uses CDP replay fixtures. The live
+Live Chrome tests stay `#[ignore]`; CI uses CDP replay fixtures, plus one
+`live-smoke` job that runs `live_borrow.rs` against the runner's headless
+Chrome (all but the `--headed` test). The live
 tests are `crates/ultra-instinct-agent/tests/live_smoke.rs` (the owned loop)
 and `crates/ultra-instinct/tests/live_borrow.rs` (the shell verbs against
 their own `aui open --launch` Chrome and a 127.0.0.1 test server: state,

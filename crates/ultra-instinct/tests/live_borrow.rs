@@ -821,6 +821,7 @@ fn stdin_batch_runs_commands_in_order() {
     let commands = serde_json::json!([
         format!("open {}", server.url("/batch1")),
         format!("open {}", server.url("/batch2")),
+        "snap",
         "click @e1",
         "snap",
         format!("open {}", server.url("/batch3")),
@@ -834,10 +835,10 @@ fn stdin_batch_runs_commands_in_order() {
     assert!(ok, "{out}");
     let results: Value = serde_json::from_str(out.trim()).expect("batch json");
     let results = results.as_array().expect("array");
-    assert_eq!(results.len(), 5);
+    assert_eq!(results.len(), 6);
     assert!(results.iter().all(|r| r["ok"] == true), "{out}");
     assert!(
-        results[3]["output"]
+        results[4]["output"]
             .as_str()
             .unwrap_or_default()
             .starts_with("clicked in batch"),
