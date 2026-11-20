@@ -317,6 +317,15 @@ fn pages(path: &str) -> Option<(&'static str, Vec<u8>)> {
              <button onclick=\"document.getElementById('card').textContent='Other card';\
                document.querySelector('label').firstChild.textContent='Photo '\">Rename</button>",
         ),
+        "/presses" => html(
+            "<!doctype html><title>presses</title>\
+             <button ondblclick=\"document.title='double'\">Twice</button>\
+             <button oncontextmenu=\"event.preventDefault();document.title='right'\">Menu</button>\
+             <button onauxclick=\"if(event.button==1)document.title='middle'\">Middle</button>\
+             <input aria-label=Line value=\"one two three\" onkeydown=\"window.d=Date.now()\" \
+               onkeyup=\"document.title='held:'+(Date.now()-window.d>=300)\">\
+             <select aria-label=Size><option>Small</option><option selected>Large</option></select>",
+        ),
         "/batch1" | "/batch3" => html("<!doctype html><title>batch</title>"),
         "/batch2" => html(
             "<!doctype html><title>batch two</title>\
@@ -991,4 +1000,52 @@ fn tab_eval_console_and_requests_on_a_live_page() {
     assert_eq!(session.verb(&["eval", "document.title"]), "blank\n");
     let (ok, out) = session.try_verb(&["tab", "close", "zzz"]);
     assert!(!ok && out.contains("no tab `zzz`"), "{out}");
+}
+
+#[test]
+#[ignore = "needs a local Chrome (aui open --launch)"]
+fn clicks_hold_scrollto_zoom_and_options_on_a_live_page() {
+    let server = Server::start(pages);
+    let session = Session::new("presses");
+    session.launch(&server.url("/presses"), &[]);
+
+    for (verb, label, title) in [
+        ("dblclick", "Twice", "double"),
+        ("rightclick", "Menu", "right"),
+        ("midclick", "Middle", "middle"),
+    ] {
+        let target = session.reference(label);
+        let out = session.verb(&[verb, &target]);
+        assert!(out.starts_with("✓ ticket "), "{verb}: {out}");
+        assert_eq!(session.title_until(title, |t| t == title), title);
+    }
+    let line = session.reference("Line");
+    let out = session.verb(&["tripleclick", &line]);
+    assert!(out.starts_with("✓ ticket "), "{out}");
+    assert_eq!(
+        session.verb(&["eval", "getSelection().toString()"]),
+        "one two three\n"
+    );
+
+    // The triple click left focus in the field: the key is held there.
+    assert_eq!(
+        session.verb(&["hold", "ArrowRight", "--ms", "400"]),
+        "✓ held ArrowRight\n"
+    );
+    assert_eq!(
+        session.title_until("held:*", |t| t.starts_with("held:")),
+        "held:true"
+    );
+
+    let size = session.reference("Size");
+    assert_eq!(
+        session.verb(&["options", &size]),
+        "  Small\n* Large\n2 options\n"
+    );
+    assert_eq!(
+        session.verb(&["scrollto", &size]),
+        format!("✓ scrolled to {size}\n")
+    );
+    assert_eq!(session.verb(&["zoom", "in"]), "✓ zoom 1.25\n");
+    assert_eq!(session.verb(&["zoom", "reset"]), "✓ zoom 1.0\n");
 }

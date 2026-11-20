@@ -13,15 +13,60 @@ pub use crate::daemon::{Request, SessionName, Verb};
 use crate::CliError;
 
 /// Shell verbs, in usage order.
-pub const VERBS: [&str; 40] = [
-    "open", "snap", "click", "type", "select", "key", "scroll", "wait", "shot", "tabs", "close",
-    "dialog", "forward", "reload", "check", "uncheck", "focus", "keyboard", "get", "is", "count",
-    "state", "cookies", "storage", "set", "download", "network", "back", "hover", "drag", "upload",
-    "text", "read", "html", "find", "pdf", "tab", "eval", "console", "requests",
+pub const VERBS: [&str; 48] = [
+    "open",
+    "snap",
+    "click",
+    "type",
+    "select",
+    "key",
+    "scroll",
+    "wait",
+    "shot",
+    "tabs",
+    "close",
+    "dialog",
+    "forward",
+    "reload",
+    "check",
+    "uncheck",
+    "focus",
+    "keyboard",
+    "get",
+    "is",
+    "count",
+    "state",
+    "cookies",
+    "storage",
+    "set",
+    "download",
+    "network",
+    "back",
+    "hover",
+    "drag",
+    "upload",
+    "text",
+    "read",
+    "html",
+    "find",
+    "pdf",
+    "tab",
+    "eval",
+    "console",
+    "requests",
+    "dblclick",
+    "rightclick",
+    "midclick",
+    "tripleclick",
+    "hold",
+    "scrollto",
+    "zoom",
+    "options",
 ];
 
 /// Flags that take a value (`--flag v` or `--flag=v`).
-const VALUE_FLAGS: [&str; 23] = [
+const VALUE_FLAGS: [&str; 24] = [
+    "--ms",
     "--scale",
     "--session",
     "--cdp",
@@ -375,6 +420,63 @@ fn build(verb: &'static str, flags: &mut Flags) -> Result<Request, CliError> {
             ),
             ["dismiss"] => tool("browser_dialog", json!({"action": "dismiss"})),
             _ => usage("[status] | accept [text] | dismiss"),
+        },
+        "dblclick" | "rightclick" | "midclick" | "tripleclick" => {
+            let confirm = flags.one("--confirm")?;
+            let [index] = p[..] else {
+                return usage("<ref> [--confirm <label>]");
+            };
+            let mut arguments = json!({"index": index});
+            if let Some(label) = confirm {
+                arguments["confirm"] = json!(label);
+            }
+            let name = match verb {
+                "dblclick" => "browser_double_click",
+                "rightclick" => "browser_right_click",
+                "midclick" => "browser_middle_click",
+                _ => "browser_triple_click",
+            };
+            tool(name, arguments)
+        }
+        // The tool holds a key on the focused element (no ticket): `focus`
+        // or `click` the field first.
+        "hold" => {
+            let ms = flags.one("--ms")?;
+            let confirm = flags.one("--confirm")?;
+            let [key] = p[..] else {
+                return usage("<key> [--ms <n>] [--confirm <label>]");
+            };
+            let mut arguments = json!({"key": key});
+            if let Some(ms) = ms {
+                let ms: u64 = ms
+                    .parse()
+                    .map_err(|_| CliError::Config(format!("--ms {ms:?} is not a whole number")))?;
+                arguments["hold_ms"] = json!(ms);
+            }
+            if let Some(label) = confirm {
+                arguments["confirm"] = json!(label);
+            }
+            tool("browser_hold_key", arguments)
+        }
+        "scrollto" => match p[..] {
+            [index] => tool("browser_scroll_to", json!({"index": index})),
+            _ => usage("<ref>"),
+        },
+        "zoom" => match p[..] {
+            [direction @ ("in" | "out" | "reset")] => {
+                tool("browser_zoom", json!({"direction": direction}))
+            }
+            // `NaN` and `inf` parse as f64 but are not JSON numbers: the tool
+            // would read the missing factor as `reset`.
+            [factor] => match factor.parse::<f64>() {
+                Ok(factor) if factor.is_finite() && factor > 0.0 => tool("browser_zoom", json!({"factor": factor})),
+                _ => usage("in|out|reset|<factor>"),
+            },
+            _ => usage("in|out|reset|<factor>"),
+        },
+        "options" => match p[..] {
+            [index] => tool("browser_get_dropdown_options", json!({"index": index})),
+            _ => usage("<ref>"),
         },
         "tab" => match p[..] {
             ["new"] => tool("browser_new_tab", json!({})),
@@ -810,7 +912,48 @@ pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
             verb.session.as_str(),
             s("navigated")
         ),
-        "browser_click" | "browser_type" | "browser_select_dropdown" | "browser_send_key" => {
+        "browser_scroll_to" => format!("✓ scrolled to @e{}", body["index"]),
+        "browser_hold_key" => format!("✓ held {}", s("key")),
+        "browser_zoom" => format!("✓ zoom {}", body["zoomed"]),
+        "browser_get_dropdown_options" => {
+            let labels = |key: &str| -> Vec<String> {
+                body[key]
+                    .as_array()
+                    .map(|all| {
+                        all.iter()
+                            .filter_map(|label| label.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            // `selected` is the selected labels joined with ", ".
+            let options = labels("options");
+            let chosen = s("selected");
+            let selected: Vec<&str> = if options.contains(&chosen) {
+                vec![chosen.as_str()]
+            } else {
+                chosen.split(", ").collect()
+            };
+            let mut out = String::new();
+            for option in &options {
+                let mark = if selected.contains(&option.as_str()) {
+                    '*'
+                } else {
+                    ' '
+                };
+                out.push_str(&format!("{mark} {option}\n"));
+            }
+            out.push_str(&format!("{} options", options.len()));
+            out
+        }
+        "browser_click"
+        | "browser_type"
+        | "browser_select_dropdown"
+        | "browser_send_key"
+        | "browser_double_click"
+        | "browser_right_click"
+        | "browser_middle_click"
+        | "browser_triple_click" => {
             let mut line = format!("✓ ticket {}", body["ticket"]);
             if let Some(kind) = body["verification"].as_str() {
                 line.push_str(&format!(" · {kind}"));

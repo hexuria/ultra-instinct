@@ -891,14 +891,14 @@ const TOOL_VERBS: [(&str, VerbOrReason); 53] = [
     ("browser_exec", Ok(("eval", &["1+1"]))),
     ("browser_read_console", Ok(("console", &[]))),
     ("browser_read_network", Ok(("requests", &[]))),
-    ("browser_double_click", Err("plan P2.5")),
-    ("browser_right_click", Err("plan P2.5")),
-    ("browser_middle_click", Err("plan P2.5")),
-    ("browser_triple_click", Err("plan P2.5")),
-    ("browser_hold_key", Err("plan P2.5")),
-    ("browser_scroll_to", Err("plan P2.5")),
-    ("browser_zoom", Err("plan P2.5")),
-    ("browser_get_dropdown_options", Err("plan P2.5")),
+    ("browser_double_click", Ok(("dblclick", &["@e1"]))),
+    ("browser_right_click", Ok(("rightclick", &["@e1"]))),
+    ("browser_middle_click", Ok(("midclick", &["@e1"]))),
+    ("browser_triple_click", Ok(("tripleclick", &["@e1"]))),
+    ("browser_hold_key", Ok(("hold", &["ArrowDown"]))),
+    ("browser_scroll_to", Ok(("scrollto", &["@e1"]))),
+    ("browser_zoom", Ok(("zoom", &["in"]))),
+    ("browser_get_dropdown_options", Ok(("options", &["@e1"]))),
     ("browser_get_page_text", Err("alias of browser_get_text")),
     ("browser_form_input", Err("alias of browser_type")),
     ("browser_javascript_exec", Err("alias of browser_exec")),
@@ -1217,5 +1217,132 @@ fn tab_eval_console_requests_print_short_lines() {
             json!({"dropped": 3, "entries": [{"level": "log", "text": "hi"}]})
         ),
         "log  hi\n1 entries · 3 dropped\n"
+    );
+}
+
+#[test]
+fn click_key_and_view_verbs_parse_to_their_tools() {
+    for (verb, name) in [
+        ("dblclick", "browser_double_click"),
+        ("rightclick", "browser_right_click"),
+        ("midclick", "browser_middle_click"),
+        ("tripleclick", "browser_triple_click"),
+    ] {
+        assert_eq!(tool(verb, &["@e3"]), (name, json!({"index": "@e3"})));
+        assert_eq!(
+            tool(verb, &["@e3", "--confirm", "Delete"]),
+            (name, json!({"index": "@e3", "confirm": "Delete"}))
+        );
+        let err = parse_verb(verb, &a(&[])).err().unwrap().to_string();
+        assert!(err.contains(&format!("usage: aui {verb} <ref>")), "{err}");
+    }
+    assert_eq!(
+        tool("hold", &["ArrowDown"]),
+        ("browser_hold_key", json!({"key": "ArrowDown"}))
+    );
+    assert_eq!(
+        tool("hold", &["ArrowDown", "--ms", "900", "--confirm", "Go"]),
+        (
+            "browser_hold_key",
+            json!({"key": "ArrowDown", "hold_ms": 900, "confirm": "Go"})
+        )
+    );
+    assert_eq!(
+        tool("scrollto", &["@e9"]),
+        ("browser_scroll_to", json!({"index": "@e9"}))
+    );
+    assert_eq!(
+        tool("zoom", &["in"]),
+        ("browser_zoom", json!({"direction": "in"}))
+    );
+    assert_eq!(
+        tool("zoom", &["1.5"]),
+        ("browser_zoom", json!({"factor": 1.5}))
+    );
+    assert_eq!(
+        tool("options", &["@e5"]),
+        ("browser_get_dropdown_options", json!({"index": "@e5"}))
+    );
+    for (verb, args) in [
+        ("hold", &[][..]),
+        ("hold", &["a", "b"]),
+        ("scrollto", &[]),
+        ("zoom", &[]),
+        ("zoom", &["big"]),
+        ("zoom", &["NaN"]),
+        ("zoom", &["1e309"]),
+        ("zoom", &["0"]),
+        ("zoom", &["-2"]),
+        ("options", &[]),
+    ] {
+        let err = parse_verb(verb, &a(args)).err().unwrap().to_string();
+        assert!(err.contains(&format!("usage: aui {verb}")), "{err}");
+    }
+    let err = parse_verb("hold", &a(&["a", "--ms", "long"]))
+        .err()
+        .unwrap();
+    assert!(err.to_string().contains("--ms"), "{err}");
+}
+
+#[test]
+fn click_key_and_view_verbs_print_one_short_line() {
+    let line = |verb: &str, args: &[&str], body: Value| {
+        let verb = parse_verb(verb, &a(args)).unwrap();
+        render(&verb, &reply(&body.to_string(), false)).unwrap()
+    };
+    for verb in ["dblclick", "rightclick", "midclick", "tripleclick"] {
+        assert_eq!(
+            line(
+                verb,
+                &["@e3"],
+                json!({"acted": true, "index": 3, "ticket": 7})
+            ),
+            "✓ ticket 7\n"
+        );
+    }
+    assert_eq!(
+        line("hold", &["ArrowDown"], json!({"key": "ArrowDown"})),
+        "✓ held ArrowDown\n"
+    );
+    assert_eq!(
+        line("scrollto", &["@e9"], json!({"scrolled": true, "index": 9})),
+        "✓ scrolled to @e9\n"
+    );
+    assert_eq!(
+        line("zoom", &["in"], json!({"zoomed": 1.25})),
+        "✓ zoom 1.25\n"
+    );
+    assert_eq!(
+        line(
+            "options",
+            &["@e5"],
+            json!({"index": 5, "options": ["Small", "Large"], "selected": "Large"})
+        ),
+        "  Small\n* Large\n2 options\n"
+    );
+    // A multi-select joins its selected labels; a label may hold ", " itself.
+    assert_eq!(
+        line(
+            "options",
+            &["@e5"],
+            json!({"index": 5, "options": ["A", "B", "C"], "selected": "A, C"})
+        ),
+        "* A\n  B\n* C\n3 options\n"
+    );
+    assert_eq!(
+        line(
+            "options",
+            &["@e5"],
+            json!({"index": 5, "options": ["Doe, Jane", "Doe"], "selected": "Doe, Jane"})
+        ),
+        "* Doe, Jane\n  Doe\n2 options\n"
+    );
+    assert_eq!(
+        line(
+            "options",
+            &["@e5"],
+            json!({"index": 5, "options": [], "selected": null})
+        ),
+        "0 options\n"
     );
 }
