@@ -16,26 +16,30 @@ The policy flags (section 5) fence both modes.
 
 ## 1. Make sure `aui` exists
 
-Inside a checkout of `hexuria/ultra-instinct`:
-
 ```bash
-command -v aui || bash scripts/install-aui.sh
+command -v aui || curl -fsSL https://raw.githubusercontent.com/hexuria/ultra-instinct/main/scripts/install.sh | sh
 ```
 
-Anywhere else (no checkout):
+`install.sh` needs no Rust toolchain: it downloads the release binary for
+this machine (macOS or Linux, x64 or arm64), checks it against the release's
+`SHA256SUMS`, and puts `aui` + `ultra-instinct` in `~/.local/bin`
+(`AUI_INSTALL_DIR` changes that, `AUI_VERSION=<tag>` pins a release). A
+checksum mismatch installs nothing. With no release binary for the machine,
+or no network path to the release, it falls back to the source build.
+
+The source build, inside a checkout of `hexuria/ultra-instinct`:
 
 ```bash
-command -v aui || curl -fsSL https://raw.githubusercontent.com/hexuria/ultra-instinct/main/scripts/install-aui.sh | bash
+AUI_FORCE=1 bash scripts/install-aui.sh
 ```
 
-`install-aui.sh` is idempotent: it no-ops when `aui` is already on PATH,
-builds from this repo when present, and otherwise clones
+`install-aui.sh` needs cargo. It no-ops when `aui` is already on PATH unless
+`AUI_FORCE=1`, builds from this repo when present, and otherwise clones
 `hexuria/ultra-instinct` into `~/.cache/ultra-instinct` and `cargo install`s it
 (features `jev clef model-text` — the full policy surface). It `cd`s into the
 source first so the repo's pinned toolchain applies regardless of your cwd.
-If it fails on a missing Rust toolchain, tell the user to run rustup. If the
-installed `aui` predates a policy you need (`run` errors that the policy is
-unavailable), reinstall with `AUI_FORCE=1`.
+If the installed `aui` predates a policy you need (`run` errors that the
+policy is unavailable), install again.
 
 ## 2. Make sure Chrome answers CDP
 
