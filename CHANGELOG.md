@@ -22,6 +22,8 @@ First release with prebuilt binaries.
 
 ### Shell verbs
 
+- `--boundary` / `AUI_CONTENT_BOUNDARIES=1`: the reading verbs print page content between marker lines that carry a random id, so page text that imitates a tool result or an instruction stays visibly inside the page.
+
 - Every `browser_*` MCP tool now has an `aui` verb or a recorded reason for having none, checked by a test.
 - New verbs: `back`, `hover`, `drag`, `upload`, `text`, `read`, `html`, `find`, `pdf`, `tab new|switch|close`, `eval`, `console`, `requests`, `dblclick`, `rightclick`, `midclick`, `tripleclick`, `hold`, `scrollto`, `zoom`, `options`.
 - `aui --version` prints the version.

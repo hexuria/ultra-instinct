@@ -56,6 +56,9 @@ control with `aui click <ref> --confirm "<label>"`.
 
 `--max-output N` on any verb cuts long text output (`snap`, `text`, `read`,
 `html`, `console`, `requests`) to N chars.
+`--boundary` on a reading verb (or `AUI_CONTENT_BOUNDARIES=1` for all of
+them) prints the page content between `<<<page-content <id>>>>` and
+`<<<end page-content <id>>>>`: see `aui skills get core --ref safety`.
 Relative paths are yours: they resolve against your cwd.
 
 - `--snap` on an input verb (`click`, `type`, `select`, `key`, `check`,

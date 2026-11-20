@@ -339,7 +339,11 @@ const PAGE_CONTENT_TOOLS: [&str; 12] = [
 /// Fresh for every output, so a page cannot know it when it is rendered.
 fn nonce() -> String {
     use std::hash::{BuildHasher, Hasher};
-    let word = || std::collections::hash_map::RandomState::new().build_hasher().finish();
+    let word = || {
+        std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish()
+    };
     format!("{:016x}{:016x}", word(), word())
 }
 

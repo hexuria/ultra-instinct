@@ -86,12 +86,25 @@ Each is a design note in this file first, then a PR. All are "ask first".
 
 | Id | Item | Done-check |
 |---|---|---|
-| P5.1 | Content boundary markers around page text in tool output | Page text that imitates a tool result stays inside the markers; the marker cannot be forged from the page |
+| P5.1 (done) | Content boundary markers around page text in tool output | Page text that imitates a tool result stays inside the markers; the marker cannot be forged from the page |
 | P5.2 | `aui diff`: what changed between two snaps | Reports appeared / disappeared / changed controls on a fixture pair |
 | P5.3 | Session state auto save and restore per session name | Log in once, `aui close`, reopen: still logged in; state file is 0600 |
 | P5.4 | Proxy flag on `--launch` | Requests go through a local test proxy |
 | P5.5 | Session recording (video or frame sequence) | A run produces a playable file; secret fields are hidden in it |
 | P5.6 | Action policy file: allow / deny by tool name per project | A denied tool refuses with a stable code |
+
+### Design notes
+
+**P5.1 content boundary markers.** Opt-in (`--boundary` on a verb, or
+`AUI_CONTENT_BOUNDARIES=1`), so existing scripts that parse `aui text` keep
+working. Applied where the output is flat text an agent reads: the shell
+verbs, in `ultra_instinct_verbs::verbs::render`. MCP replies are JSON, where
+page text is already one string field, so they are unchanged. The verbs
+whose whole output is page content are wrapped (`PAGE_CONTENT_TOOLS`);
+result lines of pressing verbs are not. The marker carries 128 random bits
+drawn after the page text was read, new for every output, so a page cannot
+print the closing line; if the content happens to contain the id, another is
+drawn.
 
 ## Not planned
 

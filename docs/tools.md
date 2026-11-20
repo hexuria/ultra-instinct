@@ -137,7 +137,10 @@ no reader thread), so events between calls show up at the next read.
 
 Each verb talks to the session daemon on `$TMPDIR/aui/<session>.sock`, which
 owns one MCP `Server`. Every verb takes `--session <name>` (default
-`default`), `--cdp <url>` and `--max-output N`. `<ref>` is `@eN` from the
+`default`), `--cdp <url>`, `--max-output N` and `--boundary` (the reading
+verbs print page content between `<<<page-content <id>>>>` and
+`<<<end page-content <id>>>>`, a random id per output the page cannot know;
+`AUI_CONTENT_BOUNDARIES=1` turns it on for every verb). `<ref>` is `@eN` from the
 latest `aui snap` (or `N`): the daemon binds each ref press to that snap, so
 a page that changed since refuses (`· run aui snap`) instead of pressing
 another element, and a press before any snap refuses. `--snap` on an input
