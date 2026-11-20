@@ -126,6 +126,8 @@ pub struct Verb {
     /// `--attach` (`open` only): the spawned daemon drives the user's own
     /// Chrome through its remote-debugging toggle.
     pub attach: bool,
+    /// `--proxy <url>` (with `--launch`): the launched Chrome's proxy.
+    pub proxy: Option<String>,
     /// `--boundary` (or `AUI_CONTENT_BOUNDARIES`): page content in the
     /// output sits between two marker lines the page cannot forge.
     pub boundary: bool,
@@ -137,6 +139,7 @@ impl Verb {
         let own = Launch {
             headed: self.headed,
             profile: self.profile.clone(),
+            proxy: self.proxy.clone(),
         };
         if self.attach {
             return Ok(Browser::Attach);
@@ -165,6 +168,8 @@ pub(crate) struct Launch {
     pub headed: bool,
     /// `--profile <dir>`: the user-data dir, kept on disk.
     pub profile: Option<String>,
+    /// `--proxy <url>`: every request of the launched Chrome goes through it.
+    pub proxy: Option<String>,
 }
 
 /// The one browser a new session runs on.
@@ -257,6 +262,36 @@ pub fn launch_profile(
     Ok(Some(path.display().to_string()))
 }
 
+/// A `--proxy` value for a launched Chrome: `http`, `https`, `socks4` or
+/// `socks5`, a host and a port, and nothing else. Chrome takes no user name
+/// or password here, so one is refused instead of dropped.
+pub fn launch_proxy(launch: bool, proxy: Option<&str>) -> Result<Option<String>, CliError> {
+    let Some(proxy) = proxy else { return Ok(None) };
+    if !launch {
+        return Err(CliError::Config(
+            "--proxy needs --launch: it is the launched Chrome's proxy".into(),
+        ));
+    }
+    let bad = |why: &str| CliError::Config(format!("--proxy {proxy}: {why}"));
+    let (scheme, rest) = proxy
+        .split_once("://")
+        .ok_or_else(|| bad("give scheme://host:port"))?;
+    if !["http", "https", "socks4", "socks5"].contains(&scheme) {
+        return Err(bad("the scheme must be http, https, socks4 or socks5"));
+    }
+    if rest.contains('@') {
+        return Err(bad("a user name or password is not supported"));
+    }
+    let (host, port) = rest
+        .rsplit_once(':')
+        .ok_or_else(|| bad("give scheme://host:port"))?;
+    let plain = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '[' | ']' | ':');
+    if host.is_empty() || !host.chars().all(plain) || port.parse::<u16>().map_or(true, |p| p == 0) {
+        return Err(bad("give scheme://host:port"));
+    }
+    Ok(Some(proxy.to_owned()))
+}
+
 /// An `--idle` value: whole seconds, 1 to [`MAX_IDLE_SECS`].
 pub(crate) fn parse_idle(raw: &str) -> Result<u64, CliError> {
     let secs: u64 = raw.trim().parse().map_err(|_| CliError::BadNumber {
@@ -308,6 +343,7 @@ pub fn daemon_command(args: &[String]) -> Result<String, CliError> {
     let others = [launch, cdp.is_some(), profile.is_some(), headed];
     check_attach(attach, others, !allow.trim().is_empty())?;
     let profile = launch_profile(launch, cdp.is_some(), profile.as_deref())?;
+    let proxy = launch_proxy(launch, flags.one("--proxy")?.as_deref())?;
     let idle = flags
         .one("--idle")?
         .map(|raw| parse_idle(&raw))
@@ -322,7 +358,14 @@ pub fn daemon_command(args: &[String]) -> Result<String, CliError> {
     }
     let browser = match attach {
         true => Browser::Attach,
-        false => Browser::named(cdp.as_deref(), launch.then_some(Launch { headed, profile }))?,
+        false => Browser::named(
+            cdp.as_deref(),
+            launch.then_some(Launch {
+                headed,
+                profile,
+                proxy,
+            }),
+        )?,
     };
     imp::serve_session(&session, browser, std::time::Duration::from_secs(idle))?;
     Ok(String::new())
@@ -736,6 +779,7 @@ mod imp {
             Browser::Launch(own) => match launch::launch(&LaunchOptions {
                 headed: own.headed,
                 profile_dir: own.profile.map(std::path::PathBuf::from),
+                proxy: own.proxy,
                 ..LaunchOptions::default()
             }) {
                 Ok(chrome) => {
@@ -869,6 +913,9 @@ mod imp {
                 }
                 if let Some(profile) = &own.profile {
                     command.args(["--profile", profile]);
+                }
+                if let Some(proxy) = &own.proxy {
+                    command.args(["--proxy", proxy]);
                 }
             }
         }

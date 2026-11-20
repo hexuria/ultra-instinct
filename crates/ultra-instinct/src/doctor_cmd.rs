@@ -20,9 +20,11 @@ use ultra_instinct_verbs::probe::{json_string_field, response_complete};
 pub(crate) fn launch_chrome(
     headed: bool,
     profile: Option<&std::path::Path>,
+    proxy: Option<String>,
 ) -> Result<ChromeProcess, CliError> {
     launch::launch(&LaunchOptions {
         headed,
+        proxy,
         profile_dir: profile.map(std::path::Path::to_path_buf),
         ..LaunchOptions::default()
     })

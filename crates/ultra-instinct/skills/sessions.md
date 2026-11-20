@@ -6,7 +6,9 @@ Every verb takes `--session <name>` (letters, digits, `-`; default
 `default`) and `--cdp <url>`. A verb that starts a new session must name
 its browser: `aui open --launch [--headed] [--profile <dir>]` makes the
 daemon start its own Chrome (headless at 1440×900 unless `--headed`, which
-opens maximized), which ends when the daemon does; `--profile <dir>` runs it
+opens maximized), which ends when the daemon does; `--proxy
+scheme://host:port` (http, https, socks4, socks5; no user name or password)
+sends that Chrome's requests through a proxy; `--profile <dir>` runs it
 on that profile folder and keeps it, so a login there lasts (`aui close`
 lets that Chrome quit cleanly, up to 5 s). Use a folder of its own: your
 browser's everyday profile folder, an empty value, or a profile another

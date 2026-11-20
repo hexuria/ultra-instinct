@@ -379,6 +379,8 @@ pub struct LaunchOptions {
     /// `--window-size` as (width, height). `None`: [`DEFAULT_WINDOW`]
     /// headless; a maximized window headed.
     pub window_size: Option<(u32, u32)>,
+    /// `--proxy-server`: `scheme://host:port` every request goes through.
+    pub proxy: Option<String>,
 }
 
 /// The headless window when [`LaunchOptions::window_size`] is `None`.
@@ -393,6 +395,7 @@ impl Default for LaunchOptions {
             keep_alive: false,
             timeout: Duration::from_secs(20),
             window_size: None,
+            proxy: None,
         }
     }
 }
@@ -512,6 +515,12 @@ pub fn launch(options: &LaunchOptions) -> Result<ChromeProcess, LaunchError> {
         .arg("--remote-debugging-port=0")
         .arg(format!("--user-data-dir={}", profile.display()))
         .args(window_args(options))
+        .args(
+            options
+                .proxy
+                .iter()
+                .map(|proxy| format!("--proxy-server={proxy}")),
+        )
         .args([
             "--no-first-run",
             "--no-default-browser-check",

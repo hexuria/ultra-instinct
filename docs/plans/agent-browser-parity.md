@@ -89,7 +89,7 @@ Each is a design note in this file first, then a PR. All are "ask first".
 | P5.1 (done) | Content boundary markers around page text in tool output | Page text that imitates a tool result stays inside the markers; the marker cannot be forged from the page |
 | P5.2 (done) | `aui diff`: what changed between two snaps | Reports appeared / disappeared / changed controls on a fixture pair |
 | P5.3 | Session state auto save and restore per session name | Log in once, `aui close`, reopen: still logged in; state file is 0600 |
-| P5.4 | Proxy flag on `--launch` | Requests go through a local test proxy |
+| P5.4 (done) | Proxy flag on `--launch` | Requests go through a local test proxy |
 | P5.5 | Session recording (video or frame sequence) | A run produces a playable file; secret fields are hidden in it |
 | P5.6 (done) | Action policy file: allow / deny by tool name per project | A denied tool refuses with a stable code |
 
@@ -122,6 +122,14 @@ one. A control is its role and label, the n-th with that pair; refs are not
 compared, because one new control shifts the refs after it. No new MCP tool:
 an MCP caller already holds both states. The comparison is
 `ultra_instinct_verbs::diff::diff_snaps`, a pure function over two snap texts.
+
+**P5.4 proxy.** `--proxy scheme://host:port` on `aui open --launch` and
+`aui run --launch` becomes Chrome's `--proxy-server`
+(`LaunchOptions::proxy`). Only with `--launch`: a Chrome the user started
+has its own settings. The value is checked (scheme, host, port, nothing
+else) so it cannot carry another Chrome flag, and a user name or password is
+refused, because Chrome ignores one there and the request would go out
+unauthenticated. Chrome does not proxy loopback addresses.
 
 ## Not planned
 

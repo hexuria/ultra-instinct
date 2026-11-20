@@ -1425,3 +1425,34 @@ fn diff_is_a_text_snap_marked_for_the_daemon() {
     );
     assert!(parse_verb("diff", &a(&["@e1"])).is_err());
 }
+
+/// P5.4: `--proxy` is a launch setting with a strict shape.
+#[test]
+fn proxy_needs_launch_and_a_plain_scheme_host_port() {
+    let open = |extra: &[&str]| {
+        let mut args = vec!["https://example.com"];
+        args.extend_from_slice(extra);
+        parse_verb("open", &a(&args))
+    };
+    let ok = open(&["--launch", "--proxy", "socks5://127.0.0.1:1080"]).unwrap();
+    assert_eq!(ok.proxy.as_deref(), Some("socks5://127.0.0.1:1080"));
+    assert_eq!(open(&["--launch"]).unwrap().proxy, None);
+    for (bad, says) in [
+        (&["--proxy", "http://p:8080"][..], "--proxy needs --launch"),
+        (&["--launch", "--proxy", "p:8080"], "scheme://host:port"),
+        (&["--launch", "--proxy", "ftp://p:21"], "scheme must be"),
+        (
+            &["--launch", "--proxy", "http://me:pw@p:8080"],
+            "not supported",
+        ),
+        (&["--launch", "--proxy", "http://p"], "scheme://host:port"),
+        (&["--launch", "--proxy", "http://p:0"], "scheme://host:port"),
+        (
+            &["--launch", "--proxy", "http://p:80 --no-sandbox"],
+            "scheme://host:port",
+        ),
+    ] {
+        let err = open(bad).unwrap_err().to_string();
+        assert!(err.contains(says), "{bad:?}: {err}");
+    }
+}
