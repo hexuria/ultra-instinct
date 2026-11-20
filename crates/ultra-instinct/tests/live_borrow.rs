@@ -303,6 +303,20 @@ fn pages(path: &str) -> Option<(&'static str, Vec<u8>)> {
              <a href=\"/payload.bin\" download=\"payload.bin\">Get payload</a>",
         ),
         "/payload.bin" => Some(("application/octet-stream", payload())),
+        "/verbs" => html(
+            "<!doctype html><title>verbs</title>\
+             <a href=\"/blank\">Leave</a>\
+             <button onmouseover=\"document.title='hovered'\">Hover me</button>\
+             <div id=card draggable=true style=\"width:80px;height:40px;background:#9cf\" \
+               ondragstart=\"event.dataTransfer.setData('text','x')\">Card</div>\
+             <button style=\"display:block;width:200px;height:80px;margin-top:20px\" \
+               ondragover=\"event.preventDefault()\" \
+               ondrop=\"event.preventDefault();document.title='dropped'\">Bin</button>\
+             <label>Resume <input type=file multiple \
+               onchange=\"document.title='files:'+Array.from(this.files).map(function(f){return f.name}).join(',')\"></label>\
+             <button onclick=\"document.getElementById('card').textContent='Other card';\
+               document.querySelector('label').firstChild.textContent='Photo '\">Rename</button>",
+        ),
         "/batch1" | "/batch3" => html("<!doctype html><title>batch</title>"),
         "/batch2" => html(
             "<!doctype html><title>batch two</title>\
@@ -826,4 +840,67 @@ fn stdin_batch_runs_commands_in_order() {
         .map(|seen| seen.path)
         .collect();
     assert_eq!(order, ["/batch1", "/batch2", "/batch3"]);
+}
+
+#[test]
+#[ignore = "needs a local Chrome (aui open --launch)"]
+fn back_hover_drag_and_upload_on_a_live_page() {
+    let server = Server::start(pages);
+    let scratch = Scratch::new("verbs");
+    let session = Session::new("verbs");
+    session.launch(&server.url("/verbs"), &[]);
+    let file = scratch.path("resume.txt");
+    std::fs::write(&file, "hello").unwrap();
+
+    let hover = session.reference("Hover me");
+    assert_eq!(
+        session.verb(&["hover", &hover]).trim(),
+        format!("✓ hovering {hover}")
+    );
+    assert_eq!(
+        session.title_until("hovered", |t| t == "hovered"),
+        "hovered"
+    );
+
+    let (card, bin) = (session.reference("Card"), session.reference("Bin"));
+    let out = session.verb(&["drag", &card, &bin]);
+    assert_eq!(out.trim(), format!("✓ dragged {card} to {bin}"));
+    assert_eq!(
+        session.title_until("dropped", |t| t == "dropped"),
+        "dropped"
+    );
+
+    let input = session.reference("Resume");
+    let out = session.verb(&["upload", &input, &file.display().to_string()]);
+    assert!(out.contains("1 files set on"), "{out}");
+    assert_eq!(
+        session.title_until("files:*", |t| t.starts_with("files:")),
+        "files:resume.txt"
+    );
+
+    // The page changes after the snap: both refuse instead of acting on it.
+    let rename = session.reference("Rename");
+    let (card, bin, input) = (
+        session.reference("Card"),
+        session.reference("Bin"),
+        session.reference("Resume"),
+    );
+    session.verb(&["click", &rename]);
+    for args in [
+        vec!["drag", card.as_str(), bin.as_str()],
+        vec!["upload", input.as_str(), file.to_str().unwrap()],
+    ] {
+        let (ok, out) = session.try_verb(&args);
+        assert!(
+            !ok && out.contains("✗ refused:") && out.contains("run aui snap"),
+            "{args:?}: {out}"
+        );
+    }
+    assert_eq!(session.title(), "files:resume.txt", "nothing was pressed");
+
+    let leave = session.reference("Leave");
+    session.verb(&["click", &leave]);
+    assert_eq!(session.title_until("blank", |t| t == "blank"), "blank");
+    assert_eq!(session.verb(&["back"]).trim(), "✓ went back");
+    assert_eq!(session.title_until("verbs", |t| t == "verbs"), "verbs");
 }

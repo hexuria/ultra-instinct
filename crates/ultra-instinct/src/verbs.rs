@@ -13,10 +13,10 @@ pub use crate::daemon::{Request, SessionName, Verb};
 use crate::CliError;
 
 /// Shell verbs, in usage order.
-pub const VERBS: [&str; 27] = [
+pub const VERBS: [&str; 31] = [
     "open", "snap", "click", "type", "select", "key", "scroll", "wait", "shot", "tabs", "close",
     "dialog", "forward", "reload", "check", "uncheck", "focus", "keyboard", "get", "is", "count",
-    "state", "cookies", "storage", "set", "download", "network",
+    "state", "cookies", "storage", "set", "download", "network", "back", "hover", "drag", "upload",
 ];
 
 /// Flags that take a value (`--flag v` or `--flag=v`).
@@ -372,6 +372,40 @@ fn build(verb: &'static str, flags: &mut Flags) -> Result<Request, CliError> {
             ["dismiss"] => tool("browser_dialog", json!({"action": "dismiss"})),
             _ => usage("[status] | accept [text] | dismiss"),
         },
+        "back" => match p[..] {
+            [] => tool("browser_go_back", json!({})),
+            _ => usage(""),
+        },
+        "hover" => match p[..] {
+            [index] => tool("browser_hover", json!({"index": index})),
+            _ => usage("<ref>"),
+        },
+        "drag" => {
+            let confirm = flags.one("--confirm")?;
+            let [from, to] = p[..] else {
+                return usage("<ref> <ref> [--confirm <label>]");
+            };
+            let mut arguments = json!({"from_index": from, "to_index": to});
+            if let Some(label) = confirm {
+                arguments["confirm"] = json!(label);
+            }
+            tool("browser_drag", arguments)
+        }
+        "upload" => {
+            let confirm = flags.one("--confirm")?;
+            let [index, ref paths @ ..] = p[..] else {
+                return usage("<ref> <path>... [--confirm <label>]");
+            };
+            if paths.is_empty() {
+                return usage("<ref> <path>... [--confirm <label>]");
+            }
+            let paths: Vec<String> = paths.iter().map(|path| absolute(path)).collect();
+            let mut arguments = json!({"index": index, "paths": paths});
+            if let Some(label) = confirm {
+                arguments["confirm"] = json!(label);
+            }
+            tool("browser_file_upload", arguments)
+        }
         "forward" => match p[..] {
             [] => tool("browser_go_forward", json!({})),
             _ => usage(""),
@@ -727,6 +761,19 @@ pub fn render(verb: &Verb, reply: &str) -> Result<String, CliError> {
         }
         "browser_dialog" => render_dialog(&body),
         "browser_go_forward" => "✓ went forward".to_owned(),
+        "browser_go_back" => "✓ went back".to_owned(),
+        "browser_hover" => format!("✓ hovering @e{}", body["hovered"]),
+        "browser_drag" => format!(
+            "✓ dragged @e{} to @e{}",
+            body["dragged"]["from"], body["dragged"]["to"]
+        ),
+        "browser_file_upload" => {
+            let files = arguments["paths"].as_array().map_or(0, Vec::len);
+            format!(
+                "✓ ticket {} · {files} files set on @e{}",
+                body["ticket"], body["index"]
+            )
+        }
         "browser_reload" => "✓ reloaded".to_owned(),
         "browser_check" => {
             let state = if body["checked"] == true {
