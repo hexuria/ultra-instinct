@@ -44,16 +44,23 @@ if command -v sha256sum >/dev/null; then sha256sum ./*.tar.gz; else shasum -a 25
     root
 }
 
-fn install(root: &Path) -> Output {
-    Command::new("sh")
+fn install_from(root: &Path, version: Option<&str>) -> Output {
+    let mut command = Command::new("sh");
+    command
         .arg(SCRIPT)
         .env("AUI_BASE_URL", format!("file://{}", root.display()))
-        .env("AUI_VERSION", "v9.9.9")
         .env("AUI_INSTALL_DIR", root.join("bin"))
         // No cargo: a failed download must not start a source build here.
         .env("PATH", "/usr/bin:/bin")
-        .output()
-        .unwrap()
+        .env_remove("AUI_VERSION");
+    if let Some(version) = version {
+        command.env("AUI_VERSION", version);
+    }
+    command.output().unwrap()
+}
+
+fn install(root: &Path) -> Output {
+    install_from(root, Some("v9.9.9"))
 }
 
 #[test]
@@ -90,10 +97,25 @@ fn a_tampered_archive_installs_nothing() {
 }
 
 #[test]
-fn a_missing_release_without_cargo_fails_and_installs_nothing() {
-    let root = release("missing");
+fn a_missing_pinned_release_never_falls_back_to_source() {
+    let root = release("missing-pinned");
     std::fs::remove_dir_all(root.join("download/v9.9.9")).unwrap();
     let out = install(&root);
+    assert!(!out.status.success(), "{out:?}");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr.contains("AUI_VERSION=v9.9.9 was not installed"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("falling back"), "{stderr}");
+    assert!(!root.join("bin").exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_missing_latest_release_without_cargo_fails_and_installs_nothing() {
+    let root = release("missing");
+    let out = install_from(&root, None);
     assert!(!out.status.success(), "{out:?}");
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(

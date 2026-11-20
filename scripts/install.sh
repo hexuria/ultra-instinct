@@ -8,7 +8,8 @@
 # SHA256SUMS, and copies both binaries to AUI_INSTALL_DIR (default
 # ~/.local/bin). A checksum mismatch stops the install. When there is no
 # release binary for this machine, or the download fails, it falls back to the
-# source build (scripts/install-aui.sh, needs cargo).
+# source build of main (scripts/install-aui.sh, needs cargo) and copies the
+# result to AUI_INSTALL_DIR. With AUI_VERSION set there is no fallback.
 #
 #   AUI_VERSION      release tag to install (default: the latest release)
 #   AUI_INSTALL_DIR  where the binaries go (default: ~/.local/bin)
@@ -25,7 +26,28 @@ DIR="${AUI_INSTALL_DIR:-$HOME/.local/bin}"
 say() { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "$*" >&2; }
 
+# Copy both binaries from $1 to $DIR. Copy beside the destination, then
+# rename: a running `aui` keeps its file.
+place() {
+    mkdir -p "$DIR"
+    for bin in aui ultra-instinct; do
+        cp "$1/$bin" "$DIR/.$bin.new"
+        chmod 755 "$DIR/.$bin.new"
+        mv -f "$DIR/.$bin.new" "$DIR/$bin"
+    done
+    say "installed $("$DIR/aui" --version) to $DIR"
+    case ":$PATH:" in
+        *":$DIR:"*) ;;
+        *) warn "warning: $DIR is not on PATH; add it to use aui" ;;
+    esac
+}
+
 source_build() {
+    if [ -n "${AUI_VERSION:-}" ]; then
+        # The source build is the main branch, not the release asked for.
+        warn "error: $1; AUI_VERSION=$AUI_VERSION was not installed"
+        exit 1
+    fi
     warn "$1; falling back to the source build"
     if ! command -v cargo >/dev/null 2>&1; then
         warn "error: no release binary was installed and cargo is not on PATH"
@@ -33,10 +55,20 @@ source_build() {
     fi
     here="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
     if [ -n "$here" ] && [ -f "$here/install-aui.sh" ]; then
-        AUI_FORCE=1 exec bash "$here/install-aui.sh"
+        builder="$here/install-aui.sh"
+    else
+        builder="$(mktemp)"
+        if ! curl -fsSL -o "$builder" "$RAW/scripts/install-aui.sh"; then
+            warn "error: could not download $RAW/scripts/install-aui.sh"
+            exit 1
+        fi
     fi
-    curl -fsSL "$RAW/scripts/install-aui.sh" | AUI_FORCE=1 bash
-    exit $?
+    AUI_FORCE=1 bash "$builder"
+    cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+    if [ "$cargo_bin" != "$DIR" ]; then
+        place "$cargo_bin"
+    fi
+    exit 0
 }
 
 target() {
@@ -94,16 +126,4 @@ if [ -z "$want" ] || [ "$want" != "$got" ]; then
 fi
 
 tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
-mkdir -p "$DIR"
-for bin in aui ultra-instinct; do
-    # Copy beside the destination, then rename: a running `aui` keeps its file.
-    cp "$TMP/aui-$TARGET/$bin" "$DIR/.$bin.new"
-    chmod 755 "$DIR/.$bin.new"
-    mv -f "$DIR/.$bin.new" "$DIR/$bin"
-done
-
-say "installed $("$DIR/aui" --version) to $DIR"
-case ":$PATH:" in
-    *":$DIR:"*) ;;
-    *) warn "warning: $DIR is not on PATH; add it to use aui" ;;
-esac
+place "$TMP/aui-$TARGET"
