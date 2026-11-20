@@ -466,9 +466,11 @@ fn build(verb: &'static str, flags: &mut Flags) -> Result<Request, CliError> {
             [direction @ ("in" | "out" | "reset")] => {
                 tool("browser_zoom", json!({"direction": direction}))
             }
+            // `NaN` and `inf` parse as f64 but are not JSON numbers: the tool
+            // would read the missing factor as `reset`.
             [factor] => match factor.parse::<f64>() {
-                Ok(factor) => tool("browser_zoom", json!({"factor": factor})),
-                Err(_) => usage("in|out|reset|<factor>"),
+                Ok(factor) if factor.is_finite() && factor > 0.0 => tool("browser_zoom", json!({"factor": factor})),
+                _ => usage("in|out|reset|<factor>"),
             },
             _ => usage("in|out|reset|<factor>"),
         },

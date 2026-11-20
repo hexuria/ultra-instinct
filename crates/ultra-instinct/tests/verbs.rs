@@ -1269,6 +1269,10 @@ fn click_key_and_view_verbs_parse_to_their_tools() {
         ("scrollto", &[]),
         ("zoom", &[]),
         ("zoom", &["big"]),
+        ("zoom", &["NaN"]),
+        ("zoom", &["1e309"]),
+        ("zoom", &["0"]),
+        ("zoom", &["-2"]),
         ("options", &[]),
     ] {
         let err = parse_verb(verb, &a(args)).err().unwrap().to_string();
