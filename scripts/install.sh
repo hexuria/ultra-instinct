@@ -63,11 +63,12 @@ source_build() {
             exit 1
         fi
     fi
-    AUI_FORCE=1 bash "$builder"
-    cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
-    if [ "$cargo_bin" != "$DIR" ]; then
-        place "$cargo_bin"
-    fi
+    # Build into a scratch root, whatever cargo's own install root is, so the
+    # binaries copied to $DIR are the ones just built.
+    stage="$(mktemp -d)"
+    AUI_FORCE=1 CARGO_INSTALL_ROOT="$stage" bash "$builder"
+    place "$stage/bin"
+    rm -rf "$stage"
     exit 0
 }
 
