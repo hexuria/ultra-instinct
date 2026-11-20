@@ -31,6 +31,10 @@ fn a_typo_or_a_wrong_shape_is_an_error_not_an_open_tool() {
         (r#"{"denied": []}"#, "unknown key `denied`"),
         (r#"{"deny": "browser_exec"}"#, "`deny` is not a list"),
         (r#"{"allow": [1]}"#, "not a tool name"),
+        (
+            r#"{"deny": ["browser_exec"], "deny": []}"#,
+            "`deny` is given twice",
+        ),
         ("[]", "not a JSON object"),
         ("{", "EOF"),
     ] {
@@ -63,4 +67,16 @@ fn a_policy_narrows_an_allow_list_and_never_widens_it() {
         .with_tool_policy(&policy);
     assert!(server.allows("browser_get_text"));
     assert!(!server.allows("browser_click") && !server.allows("browser_exec"));
+}
+
+#[test]
+fn a_policy_link_to_a_missing_file_is_found_and_fails_to_read() {
+    let dir = std::env::temp_dir().join(format!("aui-policy-link-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    assert_eq!(ultra_instinct_mcp::find_policy_file(&dir), None);
+    std::os::unix::fs::symlink(dir.join("gone.json"), dir.join("aui-policy.json")).unwrap();
+    let found = ultra_instinct_mcp::find_policy_file(&dir).expect("the link is found");
+    assert!(ToolPolicy::read(&found).is_err());
+    std::fs::remove_dir_all(&dir).unwrap();
 }

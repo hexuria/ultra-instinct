@@ -1,21 +1,13 @@
-//! The action policy file: which tools a project lets run, by tool name.
-//!
-//! ```json
-//! {"deny": ["browser_exec", "browser_file_upload"]}
-//! {"allow": ["browser_navigate", "browser_get_state", "browser_get_text"]}
-//! ```
-//!
-//! `allow` (when present) is the whole list; `deny` takes names off it. A
-//! name that is not a tool, another key, or a wrong type is an error, so a
-//! typo cannot leave a tool open. A refused tool answers `tool_not_allowed`.
+//! The action policy file: `{"allow": [...], "deny": [...]}` over tool
+//! names. `allow` (when present) is the whole list; `deny` takes names off.
+//! Anything else is an error, so a typo cannot leave a tool open.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-/// Env var naming the policy file; it wins over [`POLICY_FILE`] in the
-/// working directory.
+/// Env var naming the policy file; it wins over [`POLICY_FILE`].
 pub const ENV_POLICY_FILE: &str = "AUI_POLICY_FILE";
 /// The file `aui` looks for in the working directory.
 pub const POLICY_FILE: &str = "aui-policy.json";
@@ -33,6 +25,12 @@ impl ToolPolicy {
     /// Parse the JSON text of a policy file.
     pub fn parse(text: &str) -> Result<Self, String> {
         let value: Value = serde_json::from_str(text).map_err(|err| err.to_string())?;
+        // A repeated key would keep its last list only.
+        for key in ["allow", "deny"] {
+            if text.matches(&format!("\"{key}\"")).count() > 1 {
+                return Err(format!("`{key}` is given twice"));
+            }
+        }
         let object = value.as_object().ok_or("the policy is not a JSON object")?;
         let mut policy = Self::default();
         for (key, names) in object {
@@ -80,10 +78,11 @@ impl ToolPolicy {
 }
 
 /// The policy file in force: [`ENV_POLICY_FILE`] when set, else
-/// [`POLICY_FILE`] in `dir` when it exists. Absolute when `dir` is.
+/// [`POLICY_FILE`] in `dir` when anything has that name (a link to a
+/// missing file is found, and fails to read). Absolute when `dir` is.
 pub fn find_policy_file(dir: &Path) -> Option<PathBuf> {
-    match std::env::var(ENV_POLICY_FILE) {
-        Ok(named) if !named.trim().is_empty() => Some(dir.join(named)),
-        _ => Some(dir.join(POLICY_FILE)).filter(|file| file.is_file()),
+    match std::env::var_os(ENV_POLICY_FILE) {
+        Some(named) if !named.is_empty() => Some(dir.join(named)),
+        _ => Some(dir.join(POLICY_FILE)).filter(|file| file.symlink_metadata().is_ok()),
     }
 }

@@ -607,11 +607,13 @@ mod imp {
         let url = launch::find_attach_endpoint().map_err(|err| err.to_string())?;
         let browser =
             ultra_instinct_mcp::CdpBrowser::connect_websocket(&url).map_err(|e| e.to_string())?;
-        let mut server = hardened(ultra_instinct_mcp::Server::with_attach(browser));
+        // The daemon's own blank tab comes first: a policy file that takes
+        // `browser_new_tab` off limits the caller, not this.
+        let mut server = ultra_instinct_mcp::Server::with_attach(browser);
         server
             .call_tool("browser_new_tab", &json!({"url": "about:blank"}))
             .map_err(|err| err.to_string())?;
-        Ok(server)
+        Ok(hardened(server))
     }
 
     /// The hidden `aui daemon` body.
