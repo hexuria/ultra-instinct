@@ -233,14 +233,24 @@ mod tests {
             ("f_000003.png".to_owned(), 3_000u64),
         ];
         let list = concat_list(dir, &frames);
+        let frame = |name: &str| dir.join(name).display().to_string();
         assert!(list.starts_with("ffconcat version 1.0\n"), "{list}");
-        assert!(list.contains("file '/tmp/rec.mp4.frames/f_000001.png'\nduration 0.500\n"));
-        assert!(list.contains("file '/tmp/rec.mp4.frames/f_000002.png'\nduration 1.500\n"));
-        assert!(list.contains("file '/tmp/rec.mp4.frames/f_000003.png'\nduration 1.000\n"));
+        assert!(list.contains(&format!(
+            "file '{}'\nduration 0.500\n",
+            frame("f_000001.png")
+        )));
+        assert!(list.contains(&format!(
+            "file '{}'\nduration 1.500\n",
+            frame("f_000002.png")
+        )));
+        assert!(list.contains(&format!(
+            "file '{}'\nduration 1.000\n",
+            frame("f_000003.png")
+        )));
         // The demuxer wants the last file repeated with no duration.
         assert!(list
             .trim_end()
-            .ends_with("file '/tmp/rec.mp4.frames/f_000003.png'"));
+            .ends_with(&format!("file '{}'", frame("f_000003.png"))));
     }
 
     #[test]

@@ -15,3 +15,10 @@ ultra-instinct-mcp = { path = "../ultra-instinct-mcp", version = "0.1.0"}
 
 [dependencies.serde_json]
 version = "1"
+
+[target.'cfg(windows)'.dependencies]
+# Local-socket IPC for the session daemon: Windows named pipes.
+# Pinned: 2.4.9 is under a week old. widestring builds the pipe's
+# security descriptor from SDDL.
+interprocess = "=2.4.8"
+widestring = "=1.2.1"

@@ -3,9 +3,10 @@
 //! Same steps as `scripts/install.sh`, in the directory the running binary
 //! is in: download the archive for this build's target and the release's
 //! `SHA256SUMS`, refuse on a checksum mismatch, then rename the new `aui` and
-//! `ultra-instinct` over the old ones. The tree carries no HTTP client: the
-//! download is `curl`, the unpack is `tar`, the digest is `sha256sum` or
-//! `shasum`.
+//! `ultra-instinct` over the old ones (on Windows the running old ones are
+//! renamed aside first). The tree carries no HTTP client: the
+//! download is `curl`, the unpack is `tar`, the digest is `sha256sum`,
+//! `shasum` or Windows' `certutil`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -15,6 +16,10 @@ use crate::CliError;
 const RELEASES: &str = "https://github.com/hexuria/ultra-instinct/releases";
 /// Overrides [`RELEASES`]; the tests point it at a release on disk.
 const BASE_ENV: &str = "AUI_BASE_URL";
+/// The archive's (and install dir's) binary names; `.exe` on Windows.
+#[cfg(windows)]
+const BINARIES: [&str; 2] = ["aui.exe", "ultra-instinct.exe"];
+#[cfg(not(windows))]
 const BINARIES: [&str; 2] = ["aui", "ultra-instinct"];
 
 /// The release target this binary was built for, when a release has one.
@@ -27,6 +32,8 @@ fn target() -> Option<String> {
         "macos" => "apple-darwin",
         "linux" if cfg!(target_env = "musl") => "unknown-linux-musl",
         "linux" => "unknown-linux-gnu",
+        // Only the x86_64 MSVC build ships for Windows.
+        "windows" if arch == "x86_64" => "pc-windows-msvc",
         _ => return None,
     };
     Some(format!("{arch}-{os}"))
@@ -50,8 +57,22 @@ fn run(program: &str, args: &[&str]) -> Result<String, CliError> {
 }
 
 fn sha256(file: &str) -> Result<String, CliError> {
-    let out = run("sha256sum", &[file]).or_else(|_| run("shasum", &["-a", "256", file]))?;
-    Ok(out.split_whitespace().next().unwrap_or_default().to_owned())
+    if let Ok(out) = run("sha256sum", &[file]).or_else(|_| run("shasum", &["-a", "256", file])) {
+        return Ok(out.split_whitespace().next().unwrap_or_default().to_owned());
+    }
+    // Windows' built-in digest tool; the hex digest is its own output line,
+    // spaced or not depending on the OS version.
+    let out = run("certutil", &["-hashfile", file, "SHA256"])?;
+    Ok(out
+        .lines()
+        .map(|line| {
+            line.chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>()
+        })
+        .find(|line| line.len() == 64 && line.bytes().all(|b| b.is_ascii_hexdigit()))
+        .unwrap_or_default()
+        .to_owned())
 }
 
 /// The digest `SHA256SUMS` lists for `archive` (`<hex>  <name>` lines).
@@ -102,6 +123,62 @@ fn fetch(url: &str, target: &str, scratch: &Path) -> Result<PathBuf, CliError> {
     Ok(scratch.join(format!("aui-{target}")))
 }
 
+/// Rename `new` over `old`. Windows cannot overwrite a running image (this
+/// process's own, or a session daemon's) but can rename it, so the old file
+/// moves into `scratch` first and stays there until nothing runs it.
+fn replace(new: &Path, old: &Path, scratch: &Path) -> Result<(), CliError> {
+    let cannot = |err: std::io::Error| fail(format!("cannot replace {}: {err}", old.display()));
+    if cfg!(windows) {
+        let name = old.file_name().unwrap_or_default().to_string_lossy();
+        let aside = scratch.join(format!("{name}.old"));
+        std::fs::rename(old, &aside).map_err(cannot)?;
+        if let Err(err) = std::fs::rename(new, old) {
+            let _ = std::fs::rename(&aside, old);
+            return Err(cannot(err));
+        }
+        return Ok(());
+    }
+    std::fs::rename(new, old).map_err(cannot)
+}
+
+/// Hold `<dir>/.aui-upgrade.lock`; another upgrade holding it is an error.
+fn upgrade_lock(dir: &Path) -> Result<std::fs::File, CliError> {
+    let path = dir.join(".aui-upgrade.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|err| fail(format!("cannot write to {}: {err}", dir.display())))?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => Err(fail(format!(
+            "another aui upgrade is running in {}",
+            dir.display()
+        ))),
+        Err(std::fs::TryLockError::Error(err)) => {
+            Err(fail(format!("cannot lock {}: {err}", path.display())))
+        }
+    }
+}
+
+/// Scratch dirs an earlier Windows upgrade left behind: the old binaries a
+/// running process still held. Best-effort; a still-held one stays.
+fn remove_stale_scratch(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".aui-upgrade-")
+        {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 pub(crate) fn upgrade_command(args: &[String]) -> Result<String, CliError> {
     let version = match args {
         [] => None,
@@ -133,6 +210,16 @@ pub(crate) fn upgrade_command(args: &[String]) -> Result<String, CliError> {
             dir.display()
         )));
     }
+    // Windows: one upgrade per install dir at a time, so the cleanup below
+    // only ever finds scratch dirs of finished upgrades. The OS drops the
+    // lock when this process exits, however it exits.
+    let _lock = if cfg!(windows) {
+        let lock = upgrade_lock(dir)?;
+        remove_stale_scratch(dir);
+        Some(lock)
+    } else {
+        None
+    };
     // Beside the binaries, so the final rename stays on one filesystem.
     let scratch = dir.join(format!(".aui-upgrade-{}", std::process::id()));
     std::fs::create_dir(&scratch)
@@ -140,9 +227,7 @@ pub(crate) fn upgrade_command(args: &[String]) -> Result<String, CliError> {
     let done = fetch(&url, &target, &scratch).and_then(|unpacked| {
         let before = env!("CARGO_PKG_VERSION");
         for bin in &installed {
-            let old = dir.join(bin);
-            std::fs::rename(unpacked.join(bin), &old)
-                .map_err(|err| fail(format!("cannot replace {}: {err}", old.display())))?;
+            replace(&unpacked.join(bin), &dir.join(bin), &scratch)?;
         }
         let after = run(
             &dir.join(installed[0]).display().to_string(),
@@ -174,6 +259,7 @@ mod tests {
                     "aarch64-unknown-linux-gnu",
                     "x86_64-unknown-linux-musl",
                     "aarch64-unknown-linux-musl",
+                    "x86_64-pc-windows-msvc",
                 ]
                 .contains(&target.as_str()),
                 "{target}"
@@ -188,6 +274,25 @@ mod tests {
         assert_eq!(listed(sums, "aui-b.tar.gz").as_deref(), Some("bb"));
         assert_eq!(listed(sums, "aui-c.tar.gz"), None);
         assert_eq!(listed(sums, "a.tar.gz"), None);
+    }
+
+    #[test]
+    fn a_second_upgrade_waits_out_the_first_before_cleaning_scratch() {
+        let dir = std::env::temp_dir().join(format!("aui-upgrade-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = upgrade_lock(&dir).unwrap();
+        // The first upgrade's backup sits in its scratch dir, mid-replace.
+        let scratch = dir.join(".aui-upgrade-1");
+        std::fs::create_dir(&scratch).unwrap();
+        let second = upgrade_lock(&dir);
+        assert!(second.is_err(), "a concurrent upgrade took the lock");
+        assert!(scratch.exists());
+        drop(first);
+        let _third = upgrade_lock(&dir).unwrap();
+        remove_stale_scratch(&dir);
+        assert!(!scratch.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

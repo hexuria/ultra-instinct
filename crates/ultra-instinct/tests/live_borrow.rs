@@ -13,11 +13,12 @@
 //! 127.0.0.1 inside this file (or `data:` URLs); no other site is visited.
 //! Every check reads what the page or the server saw, not only the verb's
 //! own reply: page facts go into `document.title`, which `aui snap` prints.
-#![cfg(unix)]
+#![cfg(any(unix, windows))]
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -186,15 +187,26 @@ impl Session {
         }
     }
 
-    /// The `@eN` of the control whose label is `label` in a fresh snap.
+    /// The `@eN` of the control whose label is `label` in a fresh snap;
+    /// snaps again until the page has rendered it (up to 10 s).
     fn reference(&self, label: &str) -> String {
-        let snap = self.verb(&["snap"]);
         let quoted = format!("\"{label}\"");
-        snap.lines()
-            .find(|line| line.starts_with("@e") && line.contains(&quoted))
-            .and_then(|line| line.split_whitespace().next())
-            .unwrap_or_else(|| panic!("no control {quoted} in:\n{snap}"))
-            .to_owned()
+        let started = Instant::now();
+        loop {
+            let snap = self.verb(&["snap"]);
+            if let Some(reference) = snap
+                .lines()
+                .find(|line| line.starts_with("@e") && line.contains(&quoted))
+                .and_then(|line| line.split_whitespace().next())
+            {
+                return reference.to_owned();
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "no control {quoted} in:\n{snap}"
+            );
+            std::thread::sleep(Duration::from_millis(150));
+        }
     }
 }
 
@@ -386,13 +398,33 @@ fn pages(path: &str) -> Option<(&'static str, Vec<u8>)> {
 // ---- process checks ---------------------------------------------------------
 
 /// `ps` command lines, one per process.
+#[cfg(unix)]
 fn processes() -> Vec<(u32, String)> {
     let out = Command::new("ps")
         .args(["-axww", "-o", "pid=,command="])
         .output()
         .expect("ps");
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
+    parse_processes(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// `Get-CimInstance` command lines, one per process (Windows has no `ps`;
+/// `tasklist` carries no command line).
+#[cfg(windows)]
+fn processes() -> Vec<(u32, String)> {
+    let out = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }",
+        ])
+        .output()
+        .expect("powershell");
+    parse_processes(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_processes(text: &str) -> Vec<(u32, String)> {
+    text.lines()
         .filter_map(|line| {
             let line = line.trim_start();
             let (pid, command) = line.split_once(' ')?;
@@ -446,6 +478,29 @@ fn eventually(limit: Duration, what: &str, done: impl Fn() -> bool) {
     }
 }
 
+#[cfg(unix)]
+fn kill_chrome_root(pid: u32) {
+    let status = Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("kill Chrome root");
+    assert!(status.success(), "could not kill Chrome root {pid}");
+}
+
+#[cfg(windows)]
+fn kill_chrome_root(pid: u32) {
+    let status = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("taskkill Chrome root");
+    assert!(status.success(), "could not kill Chrome root {pid}");
+}
+
+#[cfg(unix)]
 fn mode(path: &Path) -> u32 {
     std::fs::metadata(path)
         .unwrap_or_else(|err| panic!("{}: {err}", path.display()))
@@ -481,6 +536,7 @@ fn state_save_then_load_into_a_fresh_chrome() {
             out.contains("1 cookies") || out.contains("cookies"),
             "{out}"
         );
+        #[cfg(unix)]
         assert_eq!(mode(&file), 0o600, "state file is private");
         let text = std::fs::read_to_string(&file).expect("state file");
         assert!(
@@ -537,6 +593,7 @@ fn session_state_survives_close_and_reopen() {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+    #[cfg(unix)]
     assert_eq!(mode(&file), 0o600, "auto state file is private");
     let text = std::fs::read_to_string(&file).expect("auto state file");
     assert!(
@@ -807,6 +864,7 @@ fn network_block_unblock_and_a_redacted_har() {
     let har = scratch.path("run.har");
     let out = session.verb(&["network", "har", "stop", &har.display().to_string()]);
     println!("{}", out.trim());
+    #[cfg(unix)]
     assert_eq!(mode(&har), 0o600, "HAR file is private");
     let text = std::fs::read_to_string(&har).expect("har");
     assert!(
@@ -927,6 +985,90 @@ fn close_ends_chrome_and_removes_its_temp_profile() {
         !profile.exists()
     });
     assert!(!session.socket().exists(), "socket removed");
+}
+
+#[test]
+#[ignore = "needs a local Chrome (aui open --launch)"]
+fn close_quits_a_kept_profile_chrome_and_its_helpers() {
+    let name = format!("aui-kept-profile-{}", std::process::id());
+    let profile = std::env::temp_dir().join(&name);
+    let sibling_profile = profile.with_file_name(format!("{name} personal"));
+    let _ = std::fs::remove_dir_all(&profile);
+    let _ = std::fs::remove_dir_all(&sibling_profile);
+    std::fs::create_dir_all(&profile).unwrap();
+    std::fs::create_dir_all(&sibling_profile).unwrap();
+    let profile_arg = profile.to_string_lossy().into_owned();
+    let sibling_profile_arg = sibling_profile.to_string_lossy().into_owned();
+    let session = Session::new("kept");
+    let session2 = Session::new("kept2");
+    session.launch(
+        "data:text/html,<title>kept</title>",
+        &["--profile", &profile_arg],
+    );
+    session2.launch(
+        "data:text/html,<title>kept2</title>",
+        &["--profile", &sibling_profile_arg],
+    );
+    let profile_marker = profile.to_string_lossy().into_owned();
+    let sibling_marker = sibling_profile.to_string_lossy().into_owned();
+    assert!(
+        processes().iter().any(|(_, command)| {
+            command.contains(&profile_marker) && !command.contains(&sibling_marker)
+        }),
+        "first Chrome was not started",
+    );
+    assert!(
+        !using_profile(&sibling_profile).is_empty(),
+        "second Chrome was not started",
+    );
+    assert_eq!(session.verb(&["close"]).trim(), "✓ daemon stopped");
+    eventually(Duration::from_secs(15), "first Chrome exits", || {
+        !processes().into_iter().any(|(_, command)| {
+            command.contains(&profile_marker) && !command.contains(&sibling_marker)
+        })
+    });
+    assert!(
+        !using_profile(&sibling_profile).is_empty(),
+        "closing the first session stopped the second Chrome",
+    );
+    session2.verb(&["snap"]);
+    assert_eq!(session2.verb(&["close"]).trim(), "✓ daemon stopped");
+    eventually(Duration::from_secs(15), "second Chrome exits", || {
+        using_profile(&sibling_profile).is_empty()
+    });
+    assert!(profile.is_dir(), "kept profile removed");
+    assert!(sibling_profile.is_dir(), "sibling kept profile removed");
+    let _ = std::fs::remove_dir_all(&profile);
+    let _ = std::fs::remove_dir_all(&sibling_profile);
+}
+
+#[test]
+#[ignore = "needs a local Chrome (aui open --launch)"]
+fn close_after_chrome_dies_leaves_no_helpers() {
+    let dir = std::env::temp_dir().join(format!("aui-dead-root-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let profile = dir.to_string_lossy().into_owned();
+    let session = Session::new("dead-root");
+    session.launch(
+        "data:text/html,<title>dead root</title>",
+        &["--profile", &profile],
+    );
+    let marker = dir.to_string_lossy().into_owned();
+    let (root, _) = processes()
+        .into_iter()
+        .find(|(_, command)| {
+            command.contains(&marker)
+                && command.contains("--remote-debugging-port=0")
+                && !command.contains("--type=")
+        })
+        .expect("Chrome root process");
+    kill_chrome_root(root);
+    let _ = session.try_verb(&["close"]);
+    eventually(Duration::from_secs(15), "helpers exit", || {
+        using_profile(&dir).is_empty()
+    });
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1252,6 +1394,9 @@ fn launch_proxy_sends_requests_through_the_proxy() {
 }
 
 /// P4.1: the README quick start runs as written, in six commands or fewer.
+/// The bash block, the `aui` symlink and `TMPDIR` are unix; the PowerShell
+/// block is exercised by hand on Windows.
+#[cfg(unix)]
 #[test]
 #[ignore = "needs a local Chrome (aui open --launch)"]
 fn the_readme_quick_start_runs_as_written() {

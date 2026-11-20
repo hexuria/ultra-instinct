@@ -21,9 +21,11 @@ command -v aui || curl -fsSL https://raw.githubusercontent.com/hexuria/ultra-ins
 ```
 
 `install.sh` needs no Rust toolchain: it downloads the release binary for
-this machine (macOS or Linux, x64 or arm64), checks it against the release's
+this machine (macOS or Linux, x64 or arm64; Windows x64 uses
+`scripts/install.ps1` instead), checks it against the release's
 `SHA256SUMS`, and puts `aui` + `ultra-instinct` in `~/.local/bin`
-(`AUI_INSTALL_DIR` changes that, `AUI_VERSION=<tag>` pins a release). A
+(`%LOCALAPPDATA%\Programs\aui` on Windows; `AUI_INSTALL_DIR` changes that,
+`AUI_VERSION=<tag>` pins a release). A
 checksum mismatch installs nothing. With no release binary for the machine,
 or no network path to the release, it falls back to the source build.
 

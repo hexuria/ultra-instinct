@@ -33,6 +33,10 @@ jobs:
   build:
     name: build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
+    # The steps are bash; git-bash on the Windows runner runs them unchanged.
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -43,6 +47,7 @@ jobs:
           - { target: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm }
           - { target: x86_64-unknown-linux-musl, runner: ubuntu-22.04 }
           - { target: aarch64-unknown-linux-musl, runner: ubuntu-22.04-arm }
+          - { target: x86_64-pc-windows-msvc, runner: windows-2022 }
     env:
       TARGET: ${{ matrix.target }}
     steps:
@@ -71,15 +76,19 @@ jobs:
       - name: Each binary runs and prints its version
         run: |
           set -euo pipefail
+          ext=""
+          case "$TARGET" in *windows*) ext=".exe" ;; esac
           for bin in aui ultra-instinct; do
-            "target/$TARGET/release/$bin" --version
+            "target/$TARGET/release/$bin$ext" --version
           done
       - name: Package
         run: |
           set -euo pipefail
           stage="aui-$TARGET"
           mkdir -p "dist/$stage"
-          cp "target/$TARGET/release/aui" "target/$TARGET/release/ultra-instinct" LICENSE README.md "dist/$stage/"
+          ext=""
+          case "$TARGET" in *windows*) ext=".exe" ;; esac
+          cp "target/$TARGET/release/aui$ext" "target/$TARGET/release/ultra-instinct$ext" LICENSE README.md "dist/$stage/"
           cd dist
           tar -czf "$stage.tar.gz" "$stage"
           rm -r "$stage"
@@ -124,7 +133,7 @@ jobs:
           # The release body is this version's CHANGELOG.md section (P1.5).
           scripts/release-notes.sh "$TAG" > "$RUNNER_TEMP/notes.md"
           cd dist
-          test "$(ls ./*.tar.gz | wc -l)" -eq 6
+          test "$(ls ./*.tar.gz | wc -l)" -eq 7
           cat ./*.sha256 > SHA256SUMS
           sha256sum --check SHA256SUMS
           flags=(--verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md")

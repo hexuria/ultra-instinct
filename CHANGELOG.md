@@ -6,6 +6,18 @@ as the GitHub release body (`scripts/release-notes.sh`), so a tag with no
 section here does not release. A prerelease tag (`v0.1.0-rc.1`) uses the
 section of its version (`0.1.0`).
 
+## Unreleased
+
+### Platforms
+
+- Windows x64 (`x86_64-pc-windows-msvc`): the shell verbs and session
+  daemon run on Windows named pipes instead of Unix sockets, `aui doctor`
+  and session state use `%LOCALAPPDATA%`, `aui upgrade` verifies with
+  `certutil`, and `scripts/install.ps1` installs the release binary
+  (`irm https://raw.githubusercontent.com/hexuria/ultra-instinct/main/scripts/install.ps1 | iex`).
+- `--attach` stays macOS/Linux only: it rides the session-multiplexing
+  browser socket, which is still `cfg(unix)`.
+
 ## 0.1.0
 
 First release with prebuilt binaries.

@@ -27,8 +27,10 @@ fn stdio_server_lists_tools_and_observes() {
     let mut reader = BufReader::new(stdout);
     let path = fixture("sign-in.cdp.json");
     assert!(!path.contains('"'), "{path}");
+    // serde_json escaping keeps Windows `\` separators valid inside the string.
+    let path = serde_json::to_string(&path).unwrap();
     let observe = format!(
-        r#"{{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"observe","arguments":{{"fixture":"{path}"}}}}}}"#
+        r#"{{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"observe","arguments":{{"fixture":{path}}}}}}}"#
     );
     let script = format!(
         "{}\n{}\n{}\n{}\n",

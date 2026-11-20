@@ -11,6 +11,8 @@
 #![forbid(unsafe_code)]
 
 use std::ffi::OsStr;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -75,14 +77,35 @@ pub fn chrome_cache_dir() -> Option<PathBuf> {
 }
 
 /// Everyday user-data dirs of Chrome (stable / Beta / Canary or Dev),
-/// Chromium, Brave and Edge under `$HOME` (`$XDG_CONFIG_HOME` on Linux).
+/// Chromium, Brave and Edge under `$HOME` (`$XDG_CONFIG_HOME` on Linux,
+/// `%LOCALAPPDATA%` on Windows).
 /// A DevTools port must not open on one of these: it is the user's own
 /// logged-in profile.
 pub fn default_user_data_dirs() -> Vec<PathBuf> {
     let env = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty());
+    if cfg!(windows) {
+        return env("LOCALAPPDATA")
+            .map_or_else(Vec::new, |local| windows_user_data_dirs(Path::new(&local)));
+    }
     env("HOME").map_or_else(Vec::new, |home| {
         default_user_data_dirs_in(Path::new(&home), env("XDG_CONFIG_HOME").map(PathBuf::from))
     })
+}
+
+/// The per-browser `User Data` dirs under `%LOCALAPPDATA%` on Windows.
+fn windows_user_data_dirs(local: &Path) -> Vec<PathBuf> {
+    [
+        "Google\\Chrome\\User Data",
+        "Google\\Chrome Beta\\User Data",
+        "Google\\Chrome Dev\\User Data",
+        "Google\\Chrome SxS\\User Data",
+        "Chromium\\User Data",
+        "BraveSoftware\\Brave-Browser\\User Data",
+        "Microsoft\\Edge\\User Data",
+    ]
+    .iter()
+    .map(|name| local.join(name))
+    .collect()
 }
 
 fn default_user_data_dirs_in(home: &Path, xdg_config: Option<PathBuf>) -> Vec<PathBuf> {
@@ -423,6 +446,8 @@ const QUIT_WAIT: Duration = Duration::from_secs(5);
 #[derive(Debug)]
 pub struct ChromeProcess {
     child: Child,
+    #[cfg(windows)]
+    started: SystemTime,
     port: u16,
     binary: PathBuf,
     profile: PathBuf,
@@ -454,21 +479,14 @@ impl Drop for ChromeProcess {
         if self.keep_alive {
             return;
         }
-        if !self.temp_profile && cfg!(unix) {
-            let asked = Command::new("kill")
-                .args(["-TERM", &self.child.id().to_string()])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .is_ok_and(|status| status.success());
-            let started = Instant::now();
-            while asked && started.elapsed() < QUIT_WAIT {
-                if !matches!(self.child.try_wait(), Ok(None)) {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
+        if !self.temp_profile {
+            ask_quit(self);
+        }
+        #[cfg(windows)]
+        if matches!(self.child.try_wait(), Ok(None)) {
+            kill_tree(&self.child);
+        } else {
+            kill_descendants(self.child.id(), self.started);
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -479,6 +497,107 @@ impl Drop for ChromeProcess {
                 let _ = std::fs::remove_dir_all(&self.profile);
             }
         }
+    }
+}
+
+/// Ask a kept-profile Chrome to quit, then give it up to [`QUIT_WAIT`] to
+/// flush cookies and storage before the caller's `kill()` fallback.
+/// Unix gets SIGTERM; Windows gets `taskkill` without `/F` (a polite
+/// close request to the windowed browser process).
+#[cfg(unix)]
+fn ask_quit(chrome: &mut ChromeProcess) {
+    let asked = Command::new("kill")
+        .args(["-TERM", &chrome.child.id().to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    wait_quit(chrome, asked);
+}
+
+/// Windows: `taskkill /PID` without `/F` posts a close request.
+#[cfg(windows)]
+fn ask_quit(chrome: &mut ChromeProcess) {
+    let asked = Command::new("taskkill")
+        .args(["/PID", &chrome.child.id().to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    wait_quit(chrome, asked);
+}
+
+/// Windows: helpers are not killed with the browser process and keep the
+/// profile open; `taskkill /T /F` ends the whole tree while its root lives.
+#[cfg(windows)]
+fn kill_tree(child: &Child) {
+    let _ = Command::new("taskkill")
+        .args(["/PID", &child.id().to_string(), "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// Our `Child` keeps the root's pid from being reused, so processes whose parent chain
+/// leads to it and that started after launch are ours, even after the root has exited.
+/// Each kill goes through a handle opened before its start time is checked, so a
+/// helper pid reused after the scan is never hit.
+#[cfg(windows)]
+fn kill_descendants(root: u32, started: SystemTime) {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const SCRIPT: &str = "$ErrorActionPreference = 'Stop'; \
+        $since = [DateTime]::FromFileTimeUtc([long]$env:AUI_CHROME_SINCE).ToLocalTime(); \
+        $all = @(Get-CimInstance Win32_Process); \
+        $ours = @{}; \
+        $queue = [Collections.Generic.Queue[object]]::new(); \
+        $queue.Enqueue([pscustomobject]@{ ProcessId = [uint32]$env:AUI_CHROME_ROOT; CreationDate = $since }); \
+        while ($queue.Count) { \
+            $parent = $queue.Dequeue(); \
+            foreach ($p in $all) { \
+                if ($p.ParentProcessId -eq $parent.ProcessId -and $p.CreationDate -ge $parent.CreationDate -and -not $ours.ContainsKey($p.ProcessId)) { \
+                    $ours[$p.ProcessId] = $p.CreationDate; \
+                    $queue.Enqueue($p) \
+                } \
+            } \
+        }; \
+        foreach ($id in @($ours.Keys)) { \
+            try { \
+                $proc = [Diagnostics.Process]::GetProcessById([int]$id); \
+                $null = $proc.Handle; \
+                if ([Math]::Abs(($proc.StartTime - $ours[$id]).TotalMilliseconds) -lt 1) { $proc.Kill() } \
+            } catch {} \
+        }";
+    let since = started
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| {
+            duration.as_nanos() / 100 + 116_444_736_000_000_000
+        })
+        .to_string();
+    let _ = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+        .env("AUI_CHROME_ROOT", root.to_string())
+        .env("AUI_CHROME_SINCE", since)
+        .env_remove("PSModulePath")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+}
+
+#[cfg(not(any(unix, windows)))]
+fn ask_quit(_chrome: &mut ChromeProcess) {}
+
+fn wait_quit(chrome: &mut ChromeProcess, asked: bool) {
+    let started = Instant::now();
+    while asked && started.elapsed() < QUIT_WAIT {
+        if !matches!(chrome.child.try_wait(), Ok(None)) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -529,6 +648,8 @@ pub fn launch(options: &LaunchOptions) -> Result<ChromeProcess, LaunchError> {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    #[cfg(windows)]
+    let launch_time = SystemTime::now();
     let child = match command.spawn() {
         Ok(child) => child,
         Err(err) => {
@@ -540,6 +661,8 @@ pub fn launch(options: &LaunchOptions) -> Result<ChromeProcess, LaunchError> {
     };
     let mut process = ChromeProcess {
         child,
+        #[cfg(windows)]
+        started: launch_time,
         port: 0,
         binary,
         profile,

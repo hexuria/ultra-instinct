@@ -11,7 +11,8 @@
 //! ```
 //!
 //! One session is one daemon (`aui daemon --session <name>`, hidden) serving
-//! `$TMPDIR/aui/<session>.sock` (directory 0700, socket 0600). It answers one
+//! `$TMPDIR/aui/<session>.sock` (directory 0700, socket 0600) on unix — a
+//! marker file plus a per-user named pipe on Windows. It answers one
 //! connection and one line at a time, in a single thread: each line is a
 //! JSON-RPC request for one [`ultra_instinct_mcp::Server`], so a session owns
 //! one CDP socket. Every press goes through the ticketed `browser_*`
@@ -57,19 +58,21 @@
 //! `<file>` when it is on `PATH`, else the frames and an `index.ffconcat`
 //! list stand on their own.
 //!
-//! Unix only (std `UnixListener` / `UnixStream`); elsewhere every verb is a
+//! The session endpoint is a socket file in a 0700 directory on unix and
+//! a named pipe plus a marker file on Windows; elsewhere every verb is a
 //! clear error.
-#![cfg_attr(not(unix), allow(dead_code))]
+#![cfg_attr(not(any(unix, windows)), allow(dead_code))]
 
 use serde_json::{json, Value};
 
-use crate::verbs::{parse_verb, render};
+use crate::verbs::parse_verb;
 use crate::CliError;
 
 /// The session a verb or daemon names when `--session` is not given.
 pub const DEFAULT_SESSION: &str = "default";
 
-/// Longest session name: the socket path must fit `sun_path`.
+/// Longest session name: the endpoint path (socket file or marker) must
+/// stay short on every platform.
 const MAX_SESSION_CHARS: usize = 32;
 
 /// Idle exit when `--idle` is not given: 60 minutes.
@@ -159,7 +162,7 @@ impl Verb {
             proxy: self.proxy.clone(),
         };
         if self.attach {
-            return Ok(Browser::Attach);
+            return attach_browser();
         }
         Browser::named(self.cdp.as_deref(), self.launch.then_some(own))
     }
@@ -174,6 +177,13 @@ impl Verb {
             || self.record.is_some()
     }
 }
+
+/// `--attach` drives the user's own Chrome over the browser socket its
+/// remote-debugging toggle opens — a session-multiplexing browser that is
+/// unix-only for now.
+#[cfg(not(unix))]
+pub(crate) const ATTACH_NEEDS_UNIX: &str = "--attach drives your own Chrome over its \
+remote-debugging socket, which needs macOS or Linux for now; use --launch or --cdp";
 
 /// The refusal of a verb that would start a session with no browser named.
 pub(crate) const NO_BROWSER: &str = "no browser named for a new session: \
@@ -237,6 +247,19 @@ pub(crate) fn check_attach(
         ));
     }
     Ok(())
+}
+
+/// `Browser::Attach` where the session-multiplexing browser exists.
+#[cfg(unix)]
+fn attach_browser() -> Result<Browser, CliError> {
+    Ok(Browser::Attach)
+}
+
+/// `Browser::Attach` elsewhere is a clear refusal, before any daemon
+/// spawns (the daemon path refuses it too, for a direct `aui daemon`).
+#[cfg(not(unix))]
+fn attach_browser() -> Result<Browser, CliError> {
+    Err(CliError::Config(ATTACH_NEEDS_UNIX.into()))
 }
 
 /// The `--launch` / `--cdp` / `--profile` rules of `open`, `run` and the
@@ -450,77 +473,79 @@ pub fn connect_hint(
     }
 }
 
-#[cfg(all(unix, test))]
+mod session;
+
+#[cfg(all(any(unix, windows), test))]
 use imp::{serve_on, Daemon};
 
 #[cfg(unix)]
 mod imp {
-    use std::io::{self, BufRead, BufReader, Write};
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::{Path, PathBuf};
-    use std::time::{Duration, Instant};
+    use std::process::Command;
+    use std::time::Duration;
 
-    use serde_json::{json, Value};
-    use ultra_instinct_browser::launch::{self, ChromeProcess, LaunchOptions};
-    use ultra_instinct_browser::{CdpTransport, WebSocketTransport};
-
-    use super::{
-        connect_hint, render, request_line, with_endpoint, Browser, SessionName, Verb, STOP_METHOD,
-    };
+    use super::session;
+    use super::{Browser, SessionName, Verb};
     use crate::CliError;
 
-    /// How long a verb waits for a spawned daemon's socket.
-    const SPAWN_WAIT: Duration = Duration::from_secs(3);
-    /// A verb's wait for one reply (`browser_wait` may take 60 s; a launch 20 s).
-    const REPLY_WAIT: Duration = Duration::from_secs(120);
-    /// How long a daemon whose Chrome failed to start waits to tell a verb.
-    const FAILURE_WAIT: Duration = Duration::from_secs(10);
-    /// Accept-loop tick while idle.
-    const TICK: Duration = Duration::from_millis(25);
+    /// The unix session transport: a socket file in a 0700 directory.
+    pub struct Transport;
 
-    fn io_err(path: &Path, err: io::Error) -> CliError {
-        CliError::Io {
-            path: path.display().to_string(),
-            message: err.to_string(),
+    impl session::SessionStream for UnixStream {
+        fn set_nonblocking(&self, on: bool) -> std::io::Result<()> {
+            UnixStream::set_nonblocking(self, on)
+        }
+        fn set_recv_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+            self.set_read_timeout(timeout)
         }
     }
 
-    /// `$TMPDIR/aui` (`aui doctor` may have made it first).
-    pub fn socket_dir() -> PathBuf {
-        std::env::temp_dir().join("aui")
+    impl session::SessionListener for UnixListener {
+        type Stream = UnixStream;
+        fn accept(&self) -> std::io::Result<UnixStream> {
+            UnixListener::accept(self).map(|(stream, _)| stream)
+        }
     }
 
-    /// `$TMPDIR/aui/<session>.sock`.
-    pub fn socket_path(session: &SessionName) -> PathBuf {
-        socket_dir().join(format!("{}.sock", session.as_str()))
-    }
+    impl session::Transport for Transport {
+        type Stream = UnixStream;
+        type Listener = UnixListener;
 
-    /// The socket directory, mode 0700, whether this process made it or
-    /// found it (refuses one it cannot make private).
-    fn private_dir(dir: &Path) -> Result<(), CliError> {
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
-            .map_err(|err| io_err(dir, err))?;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
-            .map_err(|err| io_err(dir, err))
-    }
+        fn private_dir(dir: &Path) -> Result<(), CliError> {
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(dir)
+                .map_err(|err| session::io_err(dir, err))?;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(|err| session::io_err(dir, err))
+        }
 
-    /// A bound daemon socket; removed on drop.
-    pub struct Daemon {
-        listener: UnixListener,
-        path: PathBuf,
-    }
+        fn private_state_dir(dir: &Path) -> Result<(), CliError> {
+            Self::private_dir(dir)
+        }
 
-    impl Daemon {
-        /// Bind `path` (0600) in a 0700 directory. A live daemon on it is an
-        /// error; a stale socket file is replaced.
-        pub fn bind(path: &Path) -> Result<Self, CliError> {
-            if let Some(dir) = path.parent() {
-                private_dir(dir)?;
+        /// `$TMPDIR/aui` state files: `~/Library/Application Support/aui`
+        /// on macOS, `${XDG_STATE_HOME:-~/.local/state}/aui` elsewhere.
+        fn state_dir() -> Option<PathBuf> {
+            if let Some(dir) = session::state_dir_override() {
+                return Some(dir);
             }
+            let home = std::env::var_os("HOME").map(PathBuf::from)?;
+            #[cfg(target_os = "macos")]
+            let dir = home.join("Library/Application Support/aui");
+            #[cfg(not(target_os = "macos"))]
+            let dir = std::env::var_os("XDG_STATE_HOME")
+                .map(PathBuf::from)
+                .filter(|d| d.is_absolute())
+                .unwrap_or_else(|| home.join(".local/state"))
+                .join("aui");
+            Some(dir)
+        }
+
+        fn open(path: &Path) -> Result<UnixListener, CliError> {
             if path.exists() {
                 if UnixStream::connect(path).is_ok() {
                     return Err(CliError::Config(format!(
@@ -528,726 +553,593 @@ mod imp {
                         path.display()
                     )));
                 }
-                std::fs::remove_file(path).map_err(|err| io_err(path, err))?;
+                std::fs::remove_file(path).map_err(|err| session::io_err(path, err))?;
             }
-            let listener = UnixListener::bind(path).map_err(|err| io_err(path, err))?;
+            let listener = UnixListener::bind(path).map_err(|err| session::io_err(path, err))?;
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-                .map_err(|err| io_err(path, err))?;
+                .map_err(|err| session::io_err(path, err))?;
             listener
                 .set_nonblocking(true)
-                .map_err(|err| io_err(path, err))?;
-            Ok(Self {
-                listener,
-                path: path.to_owned(),
-            })
+                .map_err(|err| session::io_err(path, err))?;
+            Ok(listener)
+        }
+
+        fn connect(path: &Path) -> std::io::Result<UnixStream> {
+            UnixStream::connect(path)
+        }
+
+        fn spawn_detached(mut command: Command) -> std::io::Result<()> {
+            std::os::unix::process::CommandExt::process_group(&mut command, 0);
+            command.spawn().map(drop)
         }
     }
 
-    impl Drop for Daemon {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.path);
-        }
-    }
+    /// A bound unix endpoint, for the session tests.
+    #[cfg(test)]
+    pub type Daemon = session::Daemon<Transport>;
 
-    /// `AUI_SESSION_STATE=0|off|false|no` turns auto session state off.
-    const AUTO_STATE_ENV: &str = "AUI_SESSION_STATE";
-    /// `AUI_STATE_DIR` overrides the per-user state directory.
-    const STATE_DIR_ENV: &str = "AUI_STATE_DIR";
-
-    /// The per-user directory session state files live in (kept 0700):
-    /// `AUI_STATE_DIR`, else `~/Library/Application Support/aui` on macOS and
-    /// `${XDG_STATE_HOME:-~/.local/state}/aui` elsewhere.
-    fn state_dir() -> Option<PathBuf> {
-        if let Some(dir) = std::env::var_os(STATE_DIR_ENV) {
-            let dir = PathBuf::from(dir);
-            return (!dir.as_os_str().is_empty()).then_some(dir);
-        }
-        let home = std::env::var_os("HOME").map(PathBuf::from)?;
-        #[cfg(target_os = "macos")]
-        let dir = home.join("Library/Application Support/aui");
-        #[cfg(not(target_os = "macos"))]
-        let dir = std::env::var_os("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .filter(|d| d.is_absolute())
-            .unwrap_or_else(|| home.join(".local/state"))
-            .join("aui");
-        Some(dir)
-    }
-
-    fn auto_state_off() -> bool {
-        std::env::var(AUTO_STATE_ENV).is_ok_and(|v| state_value_off(&v))
-    }
-
-    pub(crate) fn state_value_off(value: &str) -> bool {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "0" | "off" | "false" | "no"
-        )
-    }
-
-    /// A `--launch` session's saved login (`<state dir>/<session>.json`), in
-    /// the `browser_state_*` format. Restored when the daemon starts and
-    /// saved when it ends, however it ends. `pending` holds the origins whose
-    /// storage still waits for a matching navigation; empty means the restore
-    /// is done (or there was nothing to restore).
-    pub(crate) struct AutoState {
-        path: PathBuf,
-        /// The daemon's CDP endpoint, handed to the state tools as `cdp`.
-        cdp: String,
-        pending: Vec<String>,
-        /// Storage was applied after a navigation this session.
-        applied: bool,
-    }
-
-    impl AutoState {
-        /// Auto state for a `--launch` session, unless `AUI_SESSION_STATE`
-        /// turns it off or no state directory resolves. `--cdp` / `--attach`
-        /// sessions pass `enabled: false`: their browsers are the user's own.
-        fn new(session: &SessionName, cdp: &str, enabled: bool) -> Option<Self> {
-            if !enabled || auto_state_off() {
-                return None;
-            }
-            let dir = state_dir()?;
-            private_dir(&dir).ok()?;
-            Some(Self {
-                path: dir.join(format!("{}.json", session.as_str())),
-                cdp: cdp.to_owned(),
-                pending: Vec::new(),
-                applied: false,
-            })
-        }
-
-        /// Load the saved state into the fresh browser, if a file exists.
-        /// Best-effort: a missing, corrupt, or policy-refused state changes
-        /// nothing and never stops the session.
-        fn restore(&mut self, server: &mut ultra_instinct_mcp::Server) {
-            if self.path.exists() {
-                self.load(server);
-            }
-        }
-
-        /// `browser_state_load` on the session's endpoint; `pending` becomes
-        /// the origins still waiting for their page.
-        fn load(&mut self, server: &mut ultra_instinct_mcp::Server) {
-            let Ok(reply) = server.call_tool(
-                "browser_state_load",
-                &json!({"path": self.path.display().to_string(), "cdp": self.cdp}),
-            ) else {
-                return;
-            };
-            self.pending = reply["pending_origins"]
-                .as_array()
-                .map(|list| {
-                    list.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default();
-            self.applied = reply["applied_origin"].is_string();
-        }
-
-        /// After a request the daemon answered: while storage origins are
-        /// still pending, a successful `browser_navigate` / `browser_new_tab`
-        /// re-loads the state (cookies re-set idempotently; the origin's
-        /// storage is written once the page is on it). The first application
-        /// reloads the page once, so it reads what was restored.
-        fn after_reply(
-            &mut self,
-            server: &mut ultra_instinct_mcp::Server,
-            request: &Value,
-            ok: bool,
-        ) {
-            if self.pending.is_empty() || !ok {
-                return;
-            }
-            let name = request["params"]["name"].as_str().unwrap_or_default();
-            if !matches!(name, "browser_navigate" | "browser_new_tab") {
-                return;
-            }
-            self.load(server);
-            if self.applied {
-                // The page loaded before its storage landed; load it once
-                // more so it reads the restored values. Best-effort.
-                let _ = server.call_tool("browser_reload", &json!({"cdp": self.cdp}));
-            }
-        }
-
-        /// `browser_state_save` on exit; best-effort (a policy refusal, a
-        /// dead browser, or an unwritable directory never fails shutdown).
-        fn save(&self, server: &mut ultra_instinct_mcp::Server) {
-            let _ = server.call_tool(
-                "browser_state_save",
-                &json!({"path": self.path.display().to_string(), "cdp": self.cdp}),
-            );
-        }
-    }
-
-    /// Whether a JSON-RPC reply carried a successful tool result.
-    pub(crate) fn reply_ok(reply: &str) -> bool {
-        serde_json::from_str::<Value>(reply)
-            .is_ok_and(|v| v.get("error").is_none() && v["result"]["isError"] != true)
-    }
-
-    /// Serve `daemon` with `server` until a stop request or `idle` passes
-    /// with no request. One connection and one line at a time.
-    pub fn serve_on(
-        daemon: Daemon,
-        server: &mut ultra_instinct_mcp::Server,
-        cdp: &str,
-        idle: Duration,
-        auto: &mut Option<AutoState>,
-        recorder: &mut Option<crate::record::Recorder>,
-    ) -> Result<(), CliError> {
-        let mut last = Instant::now();
-        // The text of the session's latest `aui snap`, for `aui diff`.
-        let mut snap = None;
-        loop {
-            let stream = match daemon.listener.accept() {
-                Ok((stream, _)) => stream,
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                    if last.elapsed() >= idle {
-                        return Ok(());
-                    }
-                    std::thread::sleep(TICK);
-                    continue;
-                }
-                Err(err) => return Err(io_err(&daemon.path, err)),
-            };
-            // A misbehaving client gets dropped; the daemon keeps serving.
-            if let Ok(true) = serve_connection(stream, server, cdp, &mut snap, auto, recorder) {
-                return Ok(());
-            }
-            last = Instant::now();
-        }
-    }
-
-    /// Answer each line of one connection. `Ok(true)`: stop requested.
-    fn serve_connection(
-        stream: UnixStream,
-        server: &mut ultra_instinct_mcp::Server,
-        cdp: &str,
-        snap: &mut Option<String>,
-        auto: &mut Option<AutoState>,
-        recorder: &mut Option<crate::record::Recorder>,
-    ) -> io::Result<bool> {
-        stream.set_nonblocking(false)?;
-        stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-        let mut writer = stream.try_clone()?;
-        for line in BufReader::new(stream).lines() {
-            let line = line?;
-            let Some(value) = with_endpoint(&line, cdp) else {
-                // Not JSON: the server answers the parse error.
-                if let Some(reply) = server.handle_line(&line) {
-                    writeln!(writer, "{reply}")?;
-                }
-                continue;
-            };
-            if value.get("method").and_then(Value::as_str) == Some(STOP_METHOD) {
-                let id = value.get("id").cloned().unwrap_or(Value::Null);
-                let reply = json!({"jsonrpc": "2.0", "id": id, "result": {"stopped": true}});
-                writeln!(writer, "{reply}")?;
-                return Ok(true);
-            }
-            let (value, diff, cut) = take_diff(value);
-            if let Some(reply) = server.handle_line(&value.to_string()) {
-                let out = note_snap(&value, reply, diff, cut, snap);
-                writeln!(writer, "{out}")?;
-                if let Some(state) = auto.as_mut() {
-                    state.after_reply(server, &value, reply_ok(&out));
-                }
-                // After the auto-state reload, so a frame shows the page as
-                // the session left it.
-                if let Some(rec) = recorder.as_mut() {
-                    rec.after_reply(server, &value, reply_ok(&out));
-                }
-            }
-        }
-        Ok(false)
-    }
-
-    /// `aui diff` is a text `browser_get_state` with `diff: true`: the
-    /// request without that flag, whether it was set, and its `max_chars`
-    /// (`--max-output`), taken off so the look that is compared is whole.
-    fn take_diff(mut request: Value) -> (Value, bool, Option<usize>) {
-        let Some(arguments) = request["params"]["arguments"].as_object_mut() else {
-            return (request, false, None);
-        };
-        if arguments.remove("diff") != Some(Value::Bool(true)) {
-            return (request, false, None);
-        }
-        let cut = arguments.remove("max_chars").and_then(|max| max.as_u64());
-        (request, true, cut.map(|max| max as usize))
-    }
-
-    /// Remember the text of a `browser_get_state` reply as the session's
-    /// latest snap. For `aui diff`, the reply's text becomes the changes
-    /// since the snap before it (an error when there was none).
-    fn note_snap(
-        request: &Value,
-        reply: String,
-        diff: bool,
-        cut: Option<usize>,
-        snap: &mut Option<String>,
-    ) -> String {
-        let params = &request["params"];
-        if params["name"] != "browser_get_state" || params["arguments"]["format"] != "text" {
-            return reply;
-        }
-        let Ok(mut body) = serde_json::from_str::<Value>(&reply) else {
-            return reply;
-        };
-        let result = &mut body["result"];
-        let Some(text) = result["content"][0]["text"].as_str().map(str::to_owned) else {
-            return reply;
-        };
-        if result["isError"] == true {
-            return reply;
-        }
-        // A snap cut by `--max-output` is no baseline: its missing controls
-        // would read as gone.
-        if params["arguments"].get("max_chars").is_some() {
-            *snap = None;
-            return reply;
-        }
-        let before = snap.replace(text.clone());
-        if !diff {
-            return reply;
-        }
-        match before {
-            Some(before) => {
-                let changes = crate::diff::diff_snaps(&before, &text);
-                let mut shown = changes.trim_end().to_owned();
-                if let Some((at, _)) = cut.and_then(|max| shown.char_indices().nth(max)) {
-                    shown.truncate(at);
-                    shown.push_str("\n… cut by --max-output; run aui snap for the refs");
-                }
-                result["content"][0]["text"] = json!(shown);
-            }
-            None => {
-                result["content"][0]["text"] = json!(json!({
-                    "code": "snapshot_required",
-                    "message": "no earlier aui snap to compare with",
-                })
-                .to_string());
-                result["isError"] = json!(true);
-            }
-        }
-        body.to_string()
-    }
-
-    /// A daemon that could not start: answer the first request that arrives
-    /// within `wait` with `message` (a JSON-RPC error), then stop.
-    pub fn serve_failure(daemon: Daemon, message: &str, wait: Duration) {
-        let started = Instant::now();
-        while started.elapsed() < wait {
-            let stream = match daemon.listener.accept() {
-                Ok((stream, _)) => stream,
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(TICK);
-                    continue;
-                }
-                Err(_) => return,
-            };
-            let answered = (|| -> io::Result<()> {
-                stream.set_nonblocking(false)?;
-                stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-                let mut writer = stream.try_clone()?;
-                let mut line = String::new();
-                BufReader::new(stream).read_line(&mut line)?;
-                let id = serde_json::from_str::<Value>(&line)
-                    .ok()
-                    .and_then(|v| v.get("id").cloned())
-                    .unwrap_or(Value::Null);
-                let reply = json!({"jsonrpc": "2.0", "id": id,
-                                   "error": {"code": -32000, "message": message}});
-                writeln!(writer, "{reply}")
-            })();
-            if answered.is_ok() {
-                return;
-            }
-        }
-    }
-
-    /// What one daemon owns. Fields drop in order: the MCP server (and with
-    /// it every CDP socket) first, then Chrome is killed and its temp
-    /// profile removed.
-    struct Owned {
-        server: ultra_instinct_mcp::Server,
-        _chrome: Option<ChromeProcess>,
-    }
-
-    /// The daemon's server: live websockets under the env policy. When the
-    /// daemon did not launch Chrome, a connect failure carries the hint.
-    fn daemon_server(cdp: &str, hint: bool) -> ultra_instinct_mcp::Server {
-        let cdp = cdp.to_owned();
-        file_policy(hardened(ultra_instinct_mcp::Server::with_connector(
-            move |url| {
-                WebSocketTransport::connect(url)
-                    .map(|transport| Box::new(transport) as Box<dyn CdpTransport>)
-                    .map_err(|err| if hint { connect_hint(err, &cdp) } else { err })
-            },
-        )))
-    }
-
-    /// `server` under the action policy file the spawning verb named
-    /// (`ENV_POLICY_FILE`), when it named one. The verb already read it; if
-    /// it no longer reads, nothing runs.
-    fn file_policy(server: ultra_instinct_mcp::Server) -> ultra_instinct_mcp::Server {
-        match std::env::var_os(ultra_instinct_mcp::ENV_POLICY_FILE) {
-            Some(file) if !file.is_empty() => {
-                match ultra_instinct_mcp::ToolPolicy::read(Path::new(&file)) {
-                    Ok(policy) => server.with_tool_policy(&policy),
-                    Err(_) => server.with_tool_allowlist(Vec::<String>::new()),
-                }
-            }
-            _ => server,
-        }
-    }
-
-    /// The daemon's settings on any server: the env policy, and a ref press
-    /// binds to the latest `aui snap` of its tab, and needs one.
-    fn hardened(server: ultra_instinct_mcp::Server) -> ultra_instinct_mcp::Server {
-        server
-            .with_env_policy()
-            .require_snapshot(true)
-            .bind_to_latest_look(true)
-    }
-
-    /// The user's own Chrome: find its browser socket, connect (Chrome may
-    /// ask the user first), and open the daemon's own tab, so no verb ever
-    /// lands on one of the user's tabs unasked.
-    fn attached_server() -> Result<ultra_instinct_mcp::Server, String> {
-        let url = launch::find_attach_endpoint().map_err(|err| err.to_string())?;
-        let browser =
-            ultra_instinct_mcp::CdpBrowser::connect_websocket(&url).map_err(|e| e.to_string())?;
-        let mut server = hardened(ultra_instinct_mcp::Server::with_attach(browser));
-        server
-            .call_tool("browser_new_tab", &json!({"url": "about:blank"}))
-            .map_err(|err| err.to_string())?;
-        // After the daemon's own blank tab: a policy file that takes
-        // `browser_new_tab` off limits the caller, not this.
-        Ok(file_policy(server))
-    }
-
-    /// The hidden `aui daemon` body.
     pub(super) fn serve_session(
         session: &SessionName,
         browser: Browser,
         idle: Duration,
         record: Option<PathBuf>,
     ) -> Result<(), CliError> {
-        // Bind first: the spawning verb is already waiting on this socket,
-        // and a launch can take longer than its 3 s spawn wait.
-        let daemon = Daemon::bind(&socket_path(session))?;
-        // `--record` works on every browser kind: it only watches the page.
-        // The verb already made the frames dir; a failure here just records
-        // nothing rather than stopping the session.
-        let mut recorder = record
-            .as_deref()
-            .and_then(|file| crate::record::Recorder::open(file).ok());
-        // Only a `--launch` session keeps auto state: a `--cdp` browser is the
-        // user's own and an `--attach` one cannot serve state tools at all.
-        let auto_enabled = matches!(&browser, Browser::Launch(_));
-        let (chrome, endpoint) = match browser {
-            // The server drops after the socket: it closes only its own tabs.
-            Browser::Attach => match attached_server() {
-                Ok(mut server) => {
-                    let result = serve_on(
-                        daemon,
-                        &mut server,
-                        ultra_instinct_mcp::ATTACH_ENDPOINT,
-                        idle,
-                        &mut None,
-                        &mut recorder,
-                    );
-                    finish_recording(&mut recorder);
-                    return result;
-                }
-                Err(message) => {
-                    serve_failure(daemon, &message, FAILURE_WAIT);
-                    finish_recording(&mut recorder);
-                    return Err(CliError::Browser(message));
-                }
-            },
-            Browser::Cdp(cdp) => (None, cdp),
-            Browser::Launch(own) => match launch::launch(&LaunchOptions {
-                headed: own.headed,
-                profile_dir: own.profile.map(std::path::PathBuf::from),
-                proxy: own.proxy,
-                ..LaunchOptions::default()
-            }) {
-                Ok(chrome) => {
-                    let endpoint = chrome.endpoint();
-                    (Some(chrome), endpoint)
-                }
-                Err(err) => {
-                    let message = err.to_string();
-                    serve_failure(daemon, &message, FAILURE_WAIT);
-                    finish_recording(&mut recorder);
-                    return Err(CliError::Browser(message));
-                }
-            },
-        };
-        let mut owned = Owned {
-            server: daemon_server(&endpoint, chrome.is_none()),
-            _chrome: chrome,
-        };
-        // Saved login back into the fresh browser before the first request;
-        // the file is rewritten with the session's end state on the way out.
-        let mut auto = AutoState::new(session, &endpoint, auto_enabled);
-        if let Some(state) = auto.as_mut() {
-            state.restore(&mut owned.server);
-        }
-        // `daemon` (the socket) is dropped inside; `owned` after, in order.
-        let result = serve_on(
-            daemon,
-            &mut owned.server,
-            &endpoint,
-            idle,
-            &mut auto,
-            &mut recorder,
-        );
-        finish_recording(&mut recorder);
-        if let Some(state) = &auto {
-            state.save(&mut owned.server);
-        }
-        result
-    }
-
-    /// Assemble the recording however the session ends; never fails.
-    fn finish_recording(recorder: &mut Option<crate::record::Recorder>) {
-        if let Some(recorder) = recorder.take() {
-            recorder.finish();
-        }
-    }
-
-    /// `aui session list` over `dir`: each `*.sock` that answers is a live
-    /// session; the rest are removed and named.
-    pub(super) fn list_sessions(dir: &Path) -> Result<String, CliError> {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                return Ok("no sessions\n".to_owned())
-            }
-            Err(err) => return Err(io_err(dir, err)),
-        };
-        let mut sockets: Vec<PathBuf> = entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "sock"))
-            .collect();
-        sockets.sort();
-        let (mut live, mut removed) = (Vec::new(), Vec::new());
-        for path in sockets {
-            let name = path
-                .file_stem()
-                .map(|stem| stem.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            if UnixStream::connect(&path).is_ok() {
-                live.push(name);
-            } else if std::fs::remove_file(&path).is_ok() {
-                removed.push(name);
-            }
-        }
-        let mut out = String::new();
-        for name in &live {
-            out.push_str(&format!("{name}\n"));
-        }
-        out.push_str(&match live.len() {
-            0 => "no sessions\n".to_owned(),
-            1 => "1 live session\n".to_owned(),
-            n => format!("{n} live sessions\n"),
-        });
-        for name in &removed {
-            out.push_str(&format!("removed stale socket {name}.sock\n"));
-        }
-        Ok(out)
-    }
-
-    /// Send one line on a fresh connection and read one reply line.
-    pub(super) fn send(path: &Path, line: &str) -> Result<String, CliError> {
-        let mut stream = UnixStream::connect(path).map_err(|err| io_err(path, err))?;
-        stream
-            .set_read_timeout(Some(REPLY_WAIT))
-            .map_err(|err| io_err(path, err))?;
-        writeln!(stream, "{line}").map_err(|err| io_err(path, err))?;
-        stream
-            .shutdown(std::net::Shutdown::Write)
-            .map_err(|err| io_err(path, err))?;
-        let mut reply = String::new();
-        BufReader::new(stream)
-            .read_line(&mut reply)
-            .map_err(|err| io_err(path, err))?;
-        if reply.trim().is_empty() {
-            return Err(CliError::Browser(
-                "the daemon closed without a reply".into(),
-            ));
-        }
-        Ok(reply)
-    }
-
-    /// Connect to the session's daemon; when its socket is missing or stale
-    /// run `spawn` and wait up to 3 s for it. `Ok(true)`: it was spawned.
-    pub(super) fn connect_or_spawn(
-        path: &Path,
-        spawn: impl FnOnce() -> Result<(), CliError>,
-    ) -> Result<bool, CliError> {
-        if UnixStream::connect(path).is_ok() {
-            return Ok(false);
-        }
-        spawn()?;
-        let started = Instant::now();
-        while started.elapsed() < SPAWN_WAIT {
-            if UnixStream::connect(path).is_ok() {
-                return Ok(true);
-            }
-            std::thread::sleep(Duration::from_millis(30));
-        }
-        Err(CliError::Browser(format!(
-            "the daemon did not open {} within 3 s",
-            path.display()
-        )))
-    }
-
-    /// Spawn `current_exe() daemon --session <name> [--cdp <url> | --attach |
-    /// --launch [--headed] [--profile <dir>]] [--idle <secs>]`, detached (own process
-    /// group, null stdio), with the policy env for `open`.
-    fn spawn_daemon(verb: &Verb) -> Result<(), CliError> {
-        let exe = std::env::current_exe().map_err(|err| CliError::Io {
-            path: "current_exe".into(),
-            message: err.to_string(),
-        })?;
-        let mut command = std::process::Command::new(&exe);
-        command.args(["daemon", "--session", verb.session.as_str()]);
-        match verb.browser()? {
-            Browser::Cdp(cdp) => {
-                command.args(["--cdp", &cdp]);
-            }
-            Browser::Attach => {
-                command.arg("--attach");
-            }
-            Browser::Launch(own) => {
-                command.arg("--launch");
-                if own.headed {
-                    command.arg("--headed");
-                }
-                if let Some(profile) = &own.profile {
-                    command.args(["--profile", profile]);
-                }
-                if let Some(proxy) = &own.proxy {
-                    command.args(["--proxy", proxy]);
-                }
-            }
-        }
-        if let Some(secs) = verb.idle_secs {
-            command.args(["--idle", &secs.to_string()]);
-        }
-        if let Some(file) = &verb.record {
-            // Absolute, like `--profile`: the daemon outlives this shell's
-            // cwd. The frames dir is made now so a bad path fails this verb,
-            // not the daemon halfway through a session.
-            let file = match std::path::Path::new(file).is_absolute() {
-                true => std::path::PathBuf::from(file),
-                false => std::env::current_dir()
-                    .map_err(|err| CliError::Io {
-                        path: file.clone(),
-                        message: err.to_string(),
-                    })?
-                    .join(file),
-            };
-            let file = file.display().to_string();
-            crate::record::Recorder::prepare(std::path::Path::new(&file)).map_err(|err| {
-                CliError::Io {
-                    path: file.clone(),
-                    message: err.to_string(),
-                }
-            })?;
-            command.args(["--record", &file]);
-        }
-        command
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        if !verb.allow_domains.is_empty() {
-            command.env(
-                ultra_instinct_mcp::ENV_ALLOW_DOMAINS,
-                verb.allow_domains.join(","),
-            );
-        }
-        if !verb.confirm_press.is_empty() {
-            command.env(
-                ultra_instinct_mcp::ENV_CONFIRM_PRESS,
-                verb.confirm_press.join(","),
-            );
-        }
-        // The project's action policy file, checked here so a bad file is
-        // an error now, not a daemon that refuses everything.
-        let dir = std::env::current_dir().map_err(|err| CliError::Io {
-            path: ".".into(),
-            message: err.to_string(),
-        })?;
-        if let Some(file) = ultra_instinct_mcp::find_policy_file(&dir) {
-            ultra_instinct_mcp::ToolPolicy::read(&file).map_err(CliError::Config)?;
-            command.env(ultra_instinct_mcp::ENV_POLICY_FILE, file);
-        }
-        std::os::unix::process::CommandExt::process_group(&mut command, 0);
-        command.spawn().map(|_| ()).map_err(|err| CliError::Io {
-            path: exe.display().to_string(),
-            message: err.to_string(),
-        })
+        session::serve_session::<Transport>(session, browser, idle, record)
     }
 
     pub(super) fn run_verb(verb: &Verb) -> Result<String, CliError> {
-        run_verb_at(verb, &socket_path(&verb.session), || spawn_daemon(verb))
+        session::run_verb::<Transport>(verb)
     }
 
-    /// [`run_verb`] against `path`, spawning with `spawn`.
+    pub(super) fn list_sessions(dir: &Path) -> Result<String, CliError> {
+        session::list_sessions::<Transport>(dir)
+    }
+
+    #[cfg(test)]
+    pub(super) fn send(path: &Path, line: &str) -> Result<String, CliError> {
+        session::send::<Transport>(path, line)
+    }
+
+    #[cfg(test)]
     pub(super) fn run_verb_at(
         verb: &Verb,
         path: &Path,
         spawn: impl FnOnce() -> Result<(), CliError>,
     ) -> Result<String, CliError> {
-        if verb.request == super::Request::Stop {
-            if UnixStream::connect(path).is_err() {
-                return Ok(format!(
-                    "✓ no daemon for session {}\n",
-                    verb.session.as_str()
-                ));
-            }
-        } else {
-            // A new session must name its browser; nothing is spawned else.
-            let spawned = connect_or_spawn(path, || verb.browser().and_then(|_| spawn()))?;
-            if verb.spawn_settings() && !spawned {
-                return Err(CliError::Config(format!(
-                    "session {} is already running; --launch, --attach, --idle and its policy are set when it starts (aui close first)",
-                    verb.session.as_str()
-                )));
-            }
-            let reply = send(path, &request_line(&verb.request))?;
-            let out = render(verb, &reply)?;
-            if spawned && verb.verb == "open" {
-                let started = match (verb.launch, verb.attach) {
-                    (true, _) => " · daemon started with its own Chrome · opened",
-                    (_, true) => " · daemon attached to your Chrome · opened",
-                    _ => " · daemon started · opened",
-                };
-                return Ok(out.replacen(" · opened", started, 1));
-            }
-            return Ok(out);
+        session::run_verb_at::<Transport>(verb, path, spawn)
+    }
+
+    pub use session::socket_dir;
+    #[cfg(test)]
+    pub use session::{reply_ok, serve_failure, serve_on, socket_path, state_value_off};
+}
+
+#[cfg(windows)]
+mod imp {
+    use std::ffi::{OsStr, OsString};
+    use std::io::{self, Write};
+    use std::os::windows::process::CommandExt;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::time::Duration;
+
+    use interprocess::local_socket::prelude::*;
+    use interprocess::local_socket::traits::{Listener as IpListener, Stream as IpStream};
+    use interprocess::local_socket::{
+        ConnectOptions, GenericNamespaced, ListenerNonblockingMode, ListenerOptions, Name,
+    };
+    use interprocess::os::windows::local_socket::ListenerOptionsExt;
+    use interprocess::os::windows::security_descriptor::SecurityDescriptor;
+
+    use super::session;
+    use super::{Browser, SessionName, Verb};
+    use crate::CliError;
+
+    /// `CREATE_NO_WINDOW`: the hidden daemon gets its own invisible
+    /// console instead of sharing (and outliving) the caller's.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    /// The Windows session transport: a named pipe per session plus a
+    /// marker file where the unix socket would be (`<dir>/<session>.sock`).
+    /// The marker is created exclusively, so it is the session's lock; the
+    /// pipe's name derives from the marker path, whose per-user temp dir
+    /// keeps one user's sessions out of another's.
+    pub struct Transport;
+
+    /// A named-pipe stream. Windows pipes have no kernel read timeout
+    /// (`set_recv_timeout` is unsupported), so the pipe stays nonblocking
+    /// and `read` / `write` poll to blocking semantics; the stored timeout
+    /// bounds each read exactly like a unix socket's `SO_RCVTIMEO`.
+    pub struct PipeStream {
+        inner: LocalSocketStream,
+        recv_timeout: std::cell::Cell<Option<Duration>>,
+    }
+
+    impl PipeStream {
+        fn new(inner: LocalSocketStream) -> io::Result<Self> {
+            IpStream::set_nonblocking(&inner, true)?;
+            Ok(Self {
+                inner,
+                recv_timeout: std::cell::Cell::new(None),
+            })
         }
-        let reply = send(path, &request_line(&verb.request))?;
-        render(verb, &reply)
+    }
+
+    impl session::SessionStream for PipeStream {
+        fn set_nonblocking(&self, _on: bool) -> io::Result<()> {
+            // The pipe is always nonblocking; `read`/`write` block instead.
+            Ok(())
+        }
+        fn set_recv_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+            self.recv_timeout.set(timeout);
+            Ok(())
+        }
+    }
+
+    impl session::SessionListener for LocalSocketListener {
+        type Stream = PipeStream;
+        fn accept(&self) -> io::Result<PipeStream> {
+            IpListener::accept(self).and_then(PipeStream::new)
+        }
+    }
+
+    impl std::io::Read for PipeStream {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let deadline = self
+                .recv_timeout
+                .get()
+                .map(|timeout| std::time::Instant::now() + timeout);
+            // The pipe buffer is 512 bytes, so a long reply arrives in many
+            // small pieces: spin briefly before falling back to sleeps.
+            let mut spins = 0u32;
+            loop {
+                match self.inner.read(buf) {
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                    // interprocess downgrades "no data yet" and "peer
+                    // closed" to the same Ok(0); with a deadline armed both
+                    // poll until it (a real close then surfaces as the
+                    // timeout, like SO_RCVTIMEO). Without one, Ok(0) is EOF.
+                    Ok(0) if deadline.is_some() => {}
+                    result => return result,
+                }
+                if deadline.is_some_and(|at| std::time::Instant::now() >= at) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "session pipe read timed out",
+                    ));
+                }
+                if spins < 1000 {
+                    spins += 1;
+                    std::thread::yield_now();
+                } else {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+    }
+
+    impl std::io::Write for PipeStream {
+        /// Writes at most one pipe buffer at a time: a nonblocking pipe
+        /// takes nothing (`Ok(0)`) of a write larger than its free buffer,
+        /// so a larger one would never land however fast the reader drains.
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let chunk = &buf[..buf.len().min(PIPE_CHUNK)];
+            let mut spins = 0u32;
+            loop {
+                match self.inner.write(chunk) {
+                    Err(err) if pipe_would_block(&err) => {}
+                    // A full pipe takes nothing and reports success; a
+                    // closed peer is an error, not Ok(0).
+                    Ok(0) if !chunk.is_empty() => {}
+                    result => return result,
+                }
+                if spins < 1000 {
+                    spins += 1;
+                    std::thread::yield_now();
+                } else {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.inner.flush()
+        }
+    }
+
+    /// The pipe buffer size (interprocess's default buffer hint).
+    const PIPE_CHUNK: usize = 512;
+
+    /// `ERROR_PIPE_BUSY` (a full nonblocking pipe buffer) reaches `write`
+    /// as an uncategorized OS error, not `WouldBlock`.
+    fn pipe_would_block(err: &io::Error) -> bool {
+        err.kind() == io::ErrorKind::WouldBlock || err.raw_os_error() == Some(231)
+    }
+
+    impl session::Transport for Transport {
+        type Stream = PipeStream;
+        type Listener = LocalSocketListener;
+
+        /// `%TEMP%` is already per-user; the `aui` subdir inherits that.
+        fn private_dir(dir: &Path) -> Result<(), CliError> {
+            std::fs::create_dir_all(dir).map_err(|err| session::io_err(dir, err))
+        }
+
+        /// A protected DACL (nothing inherited) granting owner, SYSTEM and
+        /// administrators only, inherited by every state file: the 0700
+        /// analog, and the session pipe's SDDL. `AUI_STATE_DIR` may name a
+        /// shared directory whose inherited ACL lets other users read.
+        fn private_state_dir(dir: &Path) -> Result<(), CliError> {
+            Self::private_dir(dir)?;
+            restrict_to_owner(dir).map_err(|err| session::io_err(dir, err))
+        }
+
+        /// `%LOCALAPPDATA%\aui`, the Windows `~/.local/state` analog; the
+        /// per-user temp dir when `LOCALAPPDATA` is unset.
+        fn state_dir() -> Option<PathBuf> {
+            if let Some(dir) = session::state_dir_override() {
+                return Some(dir);
+            }
+            if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+                return Some(PathBuf::from(local).join("aui"));
+            }
+            Some(std::env::temp_dir().join("aui-state"))
+        }
+
+        fn open(path: &Path) -> Result<LocalSocketListener, CliError> {
+            // Claim the marker exclusively; it is the session's lock. A
+            // marker whose pipe does not answer is stale and is replaced;
+            // one whose pipe answers is a live daemon.
+            let name = pipe_name(path);
+            for _ in 0..40 {
+                match std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)
+                {
+                    Ok(mut marker) => {
+                        let listener = match bind_pipe(&name) {
+                            Ok(listener) => listener,
+                            Err(err) => {
+                                drop(marker);
+                                let _ = std::fs::remove_file(path);
+                                return Err(err);
+                            }
+                        };
+                        // For humans (`type default.sock`); connect()
+                        // derives the name from the path, not this text.
+                        let _ = marker.write_all(name.as_bytes());
+                        return Ok(listener);
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                        // The marker precedes the pipe bind by a few ms; a
+                        // daemon still starting answers no probe yet. Give
+                        // it a moment across several probes before taking
+                        // the marker over, or two daemons could share one
+                        // pipe name. A live probe writes a blank line so the
+                        // daemon closes the connection at once — a named
+                        // pipe cannot tell an idle connection from a closed
+                        // one, and a bare connect would hold it for the
+                        // whole line timeout.
+                        let mut live = false;
+                        for _ in 0..8 {
+                            if let Ok(mut stream) = connect_name(&name) {
+                                let _ = stream.write_all(b"\n");
+                                live = true;
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(25));
+                        }
+                        if live {
+                            return Err(CliError::Config(format!(
+                                "a daemon already serves {}",
+                                path.display()
+                            )));
+                        }
+                        if std::fs::remove_file(path).is_ok() || !path.exists() {
+                            continue;
+                        }
+                    }
+                    Err(err) => return Err(session::io_err(path, err)),
+                }
+            }
+            Err(CliError::Config(format!(
+                "the session endpoint {} stayed busy; try again",
+                path.display()
+            )))
+        }
+
+        fn connect(path: &Path) -> io::Result<PipeStream> {
+            connect_name(&pipe_name(path))
+        }
+
+        fn spawn_detached(command: Command) -> io::Result<()> {
+            // CreateProcess would hand the daemon this process's inheritable
+            // handles, including the caller's stdout pipe. ShellExecute inherits none.
+            const SCRIPT: &str = "$ErrorActionPreference = 'Stop'; \
+                $psi = [Diagnostics.ProcessStartInfo]::new($env:AUI_SPAWN_EXE, $env:AUI_SPAWN_ARGS); \
+                $psi.UseShellExecute = $true; \
+                $psi.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden; \
+                $null = [Diagnostics.Process]::Start($psi)";
+            let args = command
+                .get_args()
+                .map(quote_arg)
+                .collect::<Vec<_>>()
+                .join(" ");
+            let mut powershell = Command::new("powershell");
+            powershell
+                .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+                .env("AUI_SPAWN_EXE", command.get_program())
+                .env("AUI_SPAWN_ARGS", args)
+                .env_remove("PSModulePath");
+            for (key, value) in command.get_envs() {
+                if let Some(value) = value {
+                    powershell.env(key, value);
+                } else {
+                    powershell.env_remove(key);
+                }
+            }
+            if let Some(dir) = command.get_current_dir() {
+                powershell.current_dir(dir);
+            }
+            let status = powershell
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .creation_flags(CREATE_NO_WINDOW)
+                .status()?;
+            if status.success() {
+                Ok(())
+            } else {
+                Err(io::Error::other(format!(
+                    "could not start the daemon ({status})"
+                )))
+            }
+        }
+    }
+
+    fn quote_arg(arg: &OsStr) -> String {
+        let arg = arg.to_string_lossy();
+        if !arg.is_empty()
+            && !arg
+                .chars()
+                .any(|character| matches!(character, ' ' | '\t' | '\n' | '"'))
+        {
+            return arg.into_owned();
+        }
+
+        let mut quoted = String::from("\"");
+        let mut backslashes = 0;
+        for character in arg.chars() {
+            if character == '\\' {
+                backslashes += 1;
+            } else if character == '"' {
+                quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
+                quoted.push('"');
+                backslashes = 0;
+            } else {
+                quoted.push_str(&"\\".repeat(backslashes));
+                quoted.push(character);
+                backslashes = 0;
+            }
+        }
+        quoted.push_str(&"\\".repeat(backslashes * 2));
+        quoted.push('"');
+        quoted
+    }
+
+    /// Replace `dir`'s DACL through Windows PowerShell (always installed;
+    /// the tree has no Win32 ACL binding and forbids `unsafe`).
+    fn restrict_to_owner(dir: &Path) -> io::Result<()> {
+        // .NET calls only, no cmdlets: a PowerShell 7 parent's
+        // `PSModulePath` can stop Windows PowerShell loading its modules.
+        const SCRIPT: &str = "$ErrorActionPreference = 'Stop'; \
+            $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; \
+            $acl = [Security.AccessControl.DirectorySecurity]::new(); \
+            $acl.SetSecurityDescriptorSddlForm('D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;' + $me + ')'); \
+            [IO.DirectoryInfo]::new($env:AUI_ACL_DIR).SetAccessControl($acl)";
+        let status = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+            .env("AUI_ACL_DIR", dir)
+            .env_remove("PSModulePath")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "could not restrict its access ({status})"
+            )))
+        }
+    }
+
+    /// `aui-<fnv-1a of the marker path>`: hashing the path (which lives in
+    /// the per-user temp dir) keeps sessions apart across users.
+    fn pipe_name(path: &Path) -> String {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in path.to_string_lossy().as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        format!("aui-{hash:016x}")
+    }
+
+    /// `name` as a local-socket name (`\\.\pipe\<name>` on Windows).
+    fn socket_name(name: &str) -> io::Result<Name<'static>> {
+        OsString::from(name)
+            .to_ns_name::<GenericNamespaced>()
+            .map(|name| name.into_owned())
+    }
+
+    /// Connect to the pipe `name` names.
+    fn connect_name(name: &str) -> io::Result<PipeStream> {
+        let stream = ConnectOptions::new()
+            .name(socket_name(name)?)
+            .connect_sync()?;
+        PipeStream::new(stream)
+    }
+
+    /// Bind the pipe `name` names: nonblocking accept, same-user only —
+    /// the named-pipe analog of the unix socket's 0600 in a 0700 dir
+    /// (owner, SYSTEM and administrators get full access; nobody else).
+    fn bind_pipe(name: &str) -> Result<LocalSocketListener, CliError> {
+        let sddl = widestring::U16CString::from_str("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)")
+            .map_err(|err| CliError::Config(format!("session pipe security: {err}")))?;
+        let sd = SecurityDescriptor::deserialize(sddl.as_ucstr())
+            .map_err(|err| CliError::Config(format!("session pipe security: {err}")))?;
+        ListenerOptions::new()
+            .name(socket_name(name).map_err(|err| session::io_err(Path::new(name), err))?)
+            .nonblocking(ListenerNonblockingMode::Accept)
+            .security_descriptor(sd)
+            .create_sync()
+            .map_err(|err| session::io_err(Path::new(name), err))
+    }
+
+    pub(super) fn serve_session(
+        session: &SessionName,
+        browser: Browser,
+        idle: Duration,
+        record: Option<PathBuf>,
+    ) -> Result<(), CliError> {
+        session::serve_session::<Transport>(session, browser, idle, record)
+    }
+
+    pub(super) fn run_verb(verb: &Verb) -> Result<String, CliError> {
+        session::run_verb::<Transport>(verb)
+    }
+
+    pub(super) fn list_sessions(dir: &Path) -> Result<String, CliError> {
+        session::list_sessions::<Transport>(dir)
+    }
+
+    /// A bound Windows endpoint, for the session tests.
+    #[cfg(test)]
+    pub type Daemon = session::Daemon<Transport>;
+
+    #[cfg(test)]
+    pub(super) fn send(path: &Path, line: &str) -> Result<String, CliError> {
+        session::send::<Transport>(path, line)
+    }
+
+    #[cfg(test)]
+    pub(super) fn run_verb_at(
+        verb: &Verb,
+        path: &Path,
+        spawn: impl FnOnce() -> Result<(), CliError>,
+    ) -> Result<String, CliError> {
+        session::run_verb_at::<Transport>(verb, path, spawn)
+    }
+
+    pub use session::socket_dir;
+    #[cfg(test)]
+    pub use session::{reply_ok, serve_failure, serve_on, socket_path, state_value_off};
+
+    #[cfg(test)]
+    mod tests {
+        use super::session::{SessionListener, SessionStream, Transport as _};
+        use super::*;
+        use std::io::Read;
+
+        #[test]
+        fn quote_arg_escapes_windows_command_line_arguments() {
+            assert_eq!(quote_arg(OsStr::new("plain")), "plain");
+            assert_eq!(quote_arg(OsStr::new("a b")), "\"a b\"");
+            assert_eq!(quote_arg(OsStr::new("")), "\"\"");
+            assert_eq!(quote_arg(OsStr::new("a\"b")), "\"a\\\"b\"");
+            assert_eq!(
+                quote_arg(OsStr::new(r"C:\dir with space\")),
+                r#""C:\dir with space\\""#,
+            );
+            assert_eq!(quote_arg(OsStr::new(r#"a\\"b"#)), r#""a\\\\\"b""#,);
+            assert_eq!(quote_arg(OsStr::new(r"C:\no\spaces")), r"C:\no\spaces");
+        }
+
+        fn dir(tag: &str) -> PathBuf {
+            std::env::temp_dir().join(format!("aui-w-{}-{tag}", std::process::id()))
+        }
+
+        #[test]
+        fn a_reply_larger_than_the_pipe_buffer_arrives_whole() {
+            let dir = dir("big");
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("s.sock");
+            let listener = Transport::open(&path).unwrap();
+            let size = 1 << 20;
+            let reader = {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let mut stream = Transport::connect(&path).unwrap();
+                    // Let the writer fill the pipe before anything drains it.
+                    std::thread::sleep(Duration::from_millis(300));
+                    stream
+                        .set_recv_timeout(Some(Duration::from_secs(10)))
+                        .unwrap();
+                    let mut got = 0;
+                    let mut chunk = vec![0u8; 64 << 10];
+                    while got < size {
+                        match stream.read(&mut chunk).unwrap() {
+                            0 => break,
+                            n => got += n,
+                        }
+                    }
+                    got
+                })
+            };
+            let mut stream = loop {
+                match SessionListener::accept(&listener) {
+                    Ok(stream) => break stream,
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(err) => panic!("{err}"),
+                }
+            };
+            stream.write_all(&vec![b'x'; size]).unwrap();
+            assert_eq!(reader.join().unwrap(), size);
+            drop(stream);
+            drop(listener);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn the_state_dir_grants_nobody_but_the_owner_system_and_admins() {
+            let dir = dir("acl");
+            Transport::private_state_dir(&dir).unwrap();
+            let out = Command::new("powershell")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "[IO.DirectoryInfo]::new($env:AUI_ACL_DIR).GetAccessControl().Sddl",
+                ])
+                .env("AUI_ACL_DIR", &dir)
+                .env_remove("PSModulePath")
+                .output()
+                .unwrap();
+            let sddl = String::from_utf8_lossy(&out.stdout);
+            let _ = std::fs::remove_dir_all(&dir);
+            let dacl = sddl.split("D:").nth(1).unwrap_or_default();
+            assert!(
+                dacl.starts_with('P'),
+                "inherited: {sddl} {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            for other in [";WD)", ";AU)", ";BU)", ";IU)", "ID;"] {
+                assert!(!dacl.contains(other), "{other} in {sddl}");
+            }
+        }
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 mod imp {
     use super::{Browser, SessionName, Verb};
     use crate::CliError;
 
     const UNSUPPORTED: &str =
-        "aui shell verbs and the session daemon need Unix sockets (macOS or Linux)";
+        "aui shell verbs and the session daemon need Unix sockets or Windows named pipes";
 
     pub(super) fn run_verb(_verb: &Verb) -> Result<String, CliError> {
         Err(CliError::Config(UNSUPPORTED.into()))
@@ -1381,38 +1273,44 @@ mod tests {
         }
         let both = Browser::named(Some("http://x"), Some(Launch::default()));
         assert!(both.unwrap_err().to_string().contains("pick one"));
-        for other in ["--launch", "--cdp=http://x", "--profile=/p", "--headed"] {
-            let err = daemon_command(&a(&["--attach", other]))
-                .unwrap_err()
-                .to_string();
-            let flag = other.split('=').next().unwrap();
+        // `--attach` multiplexes the user's own Chrome over its
+        // remote-debugging socket, which is unix-only for now.
+        #[cfg(unix)]
+        {
+            for other in ["--launch", "--cdp=http://x", "--profile=/p", "--headed"] {
+                let err = daemon_command(&a(&["--attach", other]))
+                    .unwrap_err()
+                    .to_string();
+                let flag = other.split('=').next().unwrap();
+                assert!(
+                    err.ends_with(&format!("--attach and {flag}: pick one")),
+                    "{err}"
+                );
+            }
+            let err = check_attach(true, [false; 4], false).unwrap_err();
             assert!(
-                err.ends_with(&format!("--attach and {flag}: pick one")),
+                err.to_string()
+                    .contains("name the sites with --allow-domain"),
                 "{err}"
             );
+            let open = |args: &[&str]| parse_verb("open", &a(args)).unwrap();
+            let attach = open(&[
+                "https://m.example/",
+                "--attach",
+                "--allow-domain",
+                "m.example",
+            ]);
+            assert_eq!(attach.browser().unwrap(), Browser::Attach);
+            assert!(attach.spawn_settings());
         }
-        let err = check_attach(true, [false; 4], false).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("name the sites with --allow-domain"),
-            "{err}"
-        );
-        let open = |args: &[&str]| parse_verb("open", &a(args)).unwrap();
-        let attach = open(&[
-            "https://m.example/",
-            "--attach",
-            "--allow-domain",
-            "m.example",
-        ]);
-        assert_eq!(attach.browser().unwrap(), Browser::Attach);
-        assert!(attach.spawn_settings());
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     mod socket {
         use super::super::imp::{list_sessions, run_verb_at as run_verb_with, serve_failure};
         use super::super::*;
         use super::a;
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
         use std::time::Duration;
         use ultra_instinct_browser::script::{Control, PageSpec, ScriptBuilder};
@@ -1429,9 +1327,12 @@ mod tests {
             )
         }
 
-        /// A short socket path (macOS `sun_path` is 104 bytes).
+        /// A short endpoint path in a per-process temp dir (unix `sun_path`
+        /// is 104 bytes; the pipe name is a hash of this path).
         fn path(tag: &str) -> std::path::PathBuf {
-            std::path::PathBuf::from(format!("/tmp/aui-t-{}-{tag}/s.sock", std::process::id()))
+            std::env::temp_dir()
+                .join(format!("aui-t-{}-{tag}", std::process::id()))
+                .join("s.sock")
         }
 
         /// Run a daemon on `path` in a thread over a replay of `script`.
@@ -1529,10 +1430,14 @@ mod tests {
                 .ready_state("complete")
                 .observe_compact(&page());
             let handle = start(&path, script);
-            let mode =
-                |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode(&path), 0o600);
-            assert_eq!(mode(path.parent().unwrap()), 0o700);
+            #[cfg(unix)]
+            {
+                let mode = |p: &std::path::Path| {
+                    std::fs::metadata(p).unwrap().permissions().mode() & 0o777
+                };
+                assert_eq!(mode(&path), 0o600);
+                assert_eq!(mode(path.parent().unwrap()), 0o700);
+            }
             let no_spawn = || panic!("the daemon is running");
             let snap = parse_verb("snap", &[]).unwrap();
             let out = run_verb_with(&snap, &path, no_spawn).unwrap();
@@ -1630,8 +1535,9 @@ mod tests {
         fn a_missing_socket_spawns_the_daemon_and_a_stale_one_is_replaced() {
             let path = path("sp");
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            // A stale socket file: bound once, nobody listening now.
-            drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
+            // A stale endpoint: a leftover file where the socket or marker
+            // would be, with nothing listening on the other side.
+            std::fs::write(&path, b"stale").unwrap();
             assert!(path.exists());
             let mut handle = None;
             let snap = parse_verb("snap", &a(&["--cdp", "http://127.0.0.1:9222"])).unwrap();
@@ -1719,11 +1625,22 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(10));
             }
             // A request resets the idle clock; the daemon still answers it.
+            // The marker can exist a moment before its pipe takes connects,
+            // so retry briefly rather than trusting the file alone.
             let line = request_line(&Request::Tool {
                 name: "browser_dialog",
                 arguments: json!({"action": "status"}),
             });
-            let reply = super::super::imp::send(&socket, &line).unwrap();
+            let mut reply = None;
+            for _ in 0..100 {
+                if let Ok(out) = super::super::imp::send(&socket, &line) {
+                    reply = Some(out);
+                    break;
+                }
+                assert!(started.elapsed() < Duration::from_secs(5), "never answered");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let reply = reply.expect("the daemon never answered");
             assert!(reply.contains("\"jsonrpc\""), "{reply}");
             let asked = std::time::Instant::now();
             assert_eq!(daemon.join().unwrap().unwrap(), "");
@@ -1738,17 +1655,23 @@ mod tests {
             }
         }
 
-        /// A directory someone else made first (`aui doctor` makes it 0700)
-        /// is reused, and made private if it was not.
+        /// A directory someone else made first (`aui doctor` makes it
+        /// private) is reused, and made private if it was not.
         #[test]
         fn a_socket_dir_made_before_the_daemon_is_reused() {
             let path = path("pre");
             let dir = path.parent().unwrap();
             std::fs::create_dir_all(dir).unwrap();
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+            #[cfg(unix)]
+            {
+                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
             let daemon = Daemon::bind(&path).unwrap();
-            let mode = std::fs::metadata(dir).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o700);
+            #[cfg(unix)]
+            {
+                let mode = std::fs::metadata(dir).unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode, 0o700);
+            }
             drop(daemon);
             let _ = std::fs::remove_dir(dir);
         }
@@ -1800,7 +1723,7 @@ mod tests {
             let live = path("ls");
             let dir = live.parent().unwrap().to_owned();
             let handle = start(&live, ScriptBuilder::new());
-            drop(std::os::unix::net::UnixListener::bind(dir.join("old.sock")).unwrap());
+            std::fs::write(dir.join("old.sock"), b"stale").unwrap();
             std::fs::write(dir.join("notes.txt"), b"x").unwrap();
             let out = list_sessions(&dir).unwrap();
             assert_eq!(
@@ -1876,8 +1799,11 @@ mod tests {
             if manifest["video"] == "ok" {
                 assert!(file.exists(), "ffmpeg wrote {}", file.display());
             }
-            let mode = std::fs::metadata(&frames).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o700);
+            #[cfg(unix)]
+            {
+                let mode = std::fs::metadata(&frames).unwrap().permissions().mode() & 0o777;
+                assert_eq!(mode, 0o700);
+            }
             let _ = std::fs::remove_dir_all(path.parent().unwrap());
         }
     }

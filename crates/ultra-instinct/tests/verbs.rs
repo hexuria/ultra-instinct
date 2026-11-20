@@ -7,6 +7,16 @@ fn a(raw: &[&str]) -> Vec<String> {
     raw.iter().map(|s| (*s).to_owned()).collect()
 }
 
+/// What the verb layer's `absolute` produces for `path` on this platform
+/// (on Windows `/x` is drive-relative, so it gains the current drive).
+fn abs(path: &str) -> String {
+    std::env::current_dir()
+        .map(|cwd| cwd.join(path))
+        .unwrap_or_else(|_| std::path::PathBuf::from(path))
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn tool(verb: &str, args: &[&str]) -> (&'static str, Value) {
     match parse_verb(verb, &a(args))
         .unwrap_or_else(|err| panic!("{verb} {args:?}: {err}"))
@@ -212,7 +222,7 @@ fn state_cookie_and_storage_verbs_map_to_their_tools() {
     );
     assert_eq!(
         tool("state", &["load", "/x/s.json"]).1,
-        json!({"path": "/x/s.json"})
+        json!({"path": abs("/x/s.json")})
     );
     assert_eq!(
         tool("cookies", &[]),
@@ -369,7 +379,7 @@ fn env_verbs_map_to_set_download_and_network() {
     assert!(std::path::Path::new(arguments["path"].as_str().unwrap()).is_absolute());
     assert_eq!(
         tool("download", &["2", "/tmp/r.pdf"]).1,
-        json!({"index": "2", "path": "/tmp/r.pdf"})
+        json!({"index": "2", "path": abs("/tmp/r.pdf")})
     );
     assert_eq!(
         tool("network", &["block", "*.png", "*ads*"]),
@@ -495,7 +505,7 @@ fn verb_flags_and_arity_are_checked() {
         &a(&["https://a/", "--launch", "--profile", "/p/shop"]),
     )
     .unwrap();
-    assert_eq!(kept.profile.as_deref(), Some("/p/shop"));
+    assert_eq!(kept.profile, Some(abs("/p/shop")));
     let relative = parse_verb("open", &a(&["https://a/", "--launch", "--profile", "rel"])).unwrap();
     let expect = std::env::current_dir().unwrap().join("rel");
     assert_eq!(relative.profile.as_deref(), Some(expect.to_str().unwrap()));
@@ -962,14 +972,15 @@ fn back_hover_drag_upload_parse_to_their_tools() {
         tool("upload", &["@e4", "/tmp/a.txt", "/tmp/b.txt"]),
         (
             "browser_file_upload",
-            json!({"index": "@e4", "paths": ["/tmp/a.txt", "/tmp/b.txt"]})
+            json!({"index": "@e4", "paths": [abs("/tmp/a.txt"), abs("/tmp/b.txt")]})
         )
     );
     // A relative path is this shell's: the daemon may run elsewhere.
     let (_, arguments) = tool("upload", &["@e4", "a.txt"]);
     let sent = arguments["paths"][0].as_str().unwrap();
     assert!(
-        std::path::Path::new(sent).is_absolute() && sent.ends_with("/a.txt"),
+        std::path::Path::new(sent).is_absolute()
+            && std::path::Path::new(sent).file_name() == Some(std::ffi::OsStr::new("a.txt")),
         "{sent}"
     );
     for (verb, args) in [
@@ -1032,7 +1043,7 @@ fn text_read_html_find_pdf_parse_to_their_tools() {
         tool("pdf", &["/tmp/p.pdf", "--landscape", "--scale", "0.5"]),
         (
             "browser_save_as_pdf",
-            json!({"path": "/tmp/p.pdf", "landscape": true, "print_background": false, "scale": 0.5})
+            json!({"path": abs("/tmp/p.pdf"), "landscape": true, "print_background": false, "scale": 0.5})
         )
     );
     for (verb, args) in [

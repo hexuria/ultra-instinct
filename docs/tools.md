@@ -144,13 +144,17 @@ host). A refused tool answers the stable code `tool_not_allowed` and is left
 out of `tools/list`. A name that is not a tool, or any other key, is an
 error at start, so a typo cannot leave a tool open.
 
-Each verb talks to the session daemon on `$TMPDIR/aui/<session>.sock`, which
+Each verb talks to the session daemon on its per-session endpoint
+(`$TMPDIR/aui/<session>.sock` on unix — a socket file; on Windows a marker
+file plus a named pipe), which
 owns one MCP `Server`. A `--launch` session also keeps its login across
 `aui close` and reopen: the daemon restores `<state dir>/<session>.json`
-(0600, the `browser_state_*` format) when it starts and saves it when it
+(0600 in a 0700 dir on unix, an owner/SYSTEM/administrators-only dir ACL on
+Windows; the `browser_state_*` format) when it starts and saves it when it
 ends. The state dir is `AUI_STATE_DIR`, else
-`~/Library/Application Support/aui` on macOS and
-`${XDG_STATE_HOME:-~/.local/state}/aui` elsewhere; `AUI_SESSION_STATE=0`
+`~/Library/Application Support/aui` on macOS,
+`${XDG_STATE_HOME:-~/.local/state}/aui` on Linux,
+`%LOCALAPPDATA%\aui` on Windows; `AUI_SESSION_STATE=0`
 turns it off, and `--cdp` / `--attach` sessions keep none. Every verb takes
 `--session <name>` (default
 `default`), `--cdp <url>`, `--max-output N` and `--boundary` (the reading
@@ -166,7 +170,7 @@ the full guide.
 
 | Verb | Tool | Does |
 |---|---|---|
-| `open <url> [--launch [--headed] [--profile <dir>] [--proxy <url>] \| --attach] [--idle <secs>] [--record <file>] [--allow-domain <host>]... [--confirm-press <glob>]...` | `browser_navigate` | Start the daemon (and with `--launch` its own Chrome: headless at 1440×900, or maximized with `--headed`; `--profile <dir>` keeps that profile on disk, asks Chrome to quit up to 5 s before killing it at close, and refuses an empty value, a browser's everyday profile folder, or a profile a running Chrome holds), then navigate. `--attach` drives the user's own running Chrome instead (remote debugging on at chrome://inspect/#remote-debugging; up to 90 s for Chrome's allow prompt) in a tab the daemon opens in a new Chrome window (it never sees the user's tabs), needs at least one `--allow-domain`, and refuses `--launch` / `--cdp` / `--profile` / `--headed`; close and idle exit close only that tab, never Chrome; `cookies`, `state`, `storage` and `download` refuse there (profile-wide). A new session needs `--launch`, `--attach` or `--cdp <url>`, only one; with neither, the verb refuses instead of trying port 9222. Session flags are fixed when the daemon starts; `--idle` is 1 to 86400 s, default 3600. `--record <file>` keeps a frame of the page after each verb in `<file>.frames/` (the `shot` screenshot, so secret fields are hidden) and, when the daemon ends however it ends, assembles them into `<file>` with `ffmpeg` when it is on `PATH`; without it the frames and `index.ffconcat` stand alone |
+| `open <url> [--launch [--headed] [--profile <dir>] [--proxy <url>] \| --attach] [--idle <secs>] [--record <file>] [--allow-domain <host>]... [--confirm-press <glob>]...` | `browser_navigate` | Start the daemon (and with `--launch` its own Chrome: headless at 1440×900, or maximized with `--headed`; `--profile <dir>` keeps that profile on disk, asks Chrome to quit up to 5 s before killing it at close, and refuses an empty value, a browser's everyday profile folder, or a profile a running Chrome holds), then navigate. `--attach` drives the user's own running Chrome instead (remote debugging on at chrome://inspect/#remote-debugging; up to 90 s for Chrome's allow prompt; macOS/Linux only for now) in a tab the daemon opens in a new Chrome window (it never sees the user's tabs), needs at least one `--allow-domain`, and refuses `--launch` / `--cdp` / `--profile` / `--headed`; close and idle exit close only that tab, never Chrome; `cookies`, `state`, `storage` and `download` refuse there (profile-wide). A new session needs `--launch`, `--attach` or `--cdp <url>`, only one; with neither, the verb refuses instead of trying port 9222. Session flags are fixed when the daemon starts; `--idle` is 1 to 86400 s, default 3600. `--record <file>` keeps a frame of the page after each verb in `<file>.frames/` (the `shot` screenshot, so secret fields are hidden) and, when the daemon ends however it ends, assembles them into `<file>` with `ffmpeg` when it is on `PATH`; without it the frames and `index.ffconcat` stand alone |
 | `snap [--json]` | `browser_get_state` | Read the page |
 | `diff` | `browser_get_state` | Look again and print what changed since the last `snap` / `diff` (`+` appeared, `-` gone, `~` state changed, `page:` title or URL, `=` an unchanged control whose ref moved); the daemon compares the two snap texts |
 | `click <ref> [--confirm <label>] [--script]` | `browser_click` | Ticketed click: a pointer press; `--script` for a DOM script click |

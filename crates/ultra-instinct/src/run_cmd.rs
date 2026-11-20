@@ -1116,7 +1116,18 @@ mod tests {
         assert!(parse(&a(&["--goal", "Go", "--cdp", "--headed"])).is_err());
         assert!(parse(&a(&["--goal", "Go", "--fixture", "x", "--launch"])).is_err());
         let kept = parse(&a(&["--goal", "Go", "--launch", "--profile", "/p/shop"])).unwrap();
-        assert_eq!(kept.profile.as_deref(), Some("/p/shop"));
+        // `/p/shop` is absolute on unix; on Windows it is drive-relative and
+        // gains the current drive, like every other rooted path here.
+        let profile = std::path::PathBuf::from("/p/shop");
+        let expect = if profile.is_absolute() {
+            profile
+        } else {
+            std::env::current_dir().unwrap().join(&profile)
+        };
+        assert_eq!(
+            kept.profile.as_deref(),
+            Some(expect.to_string_lossy().as_ref())
+        );
         assert!(parse(&a(&[
             "--goal",
             "Go",
