@@ -4,7 +4,8 @@
 #   2. every crate root carries #![forbid(unsafe_code)] (belt and braces next to the workspace lint);
 #   3. every crate stays under its line ceiling (scripts/crate-ceilings.txt);
 #   4. workflows never install a different stable toolchain (nightly only with a pinned date);
-#   5. CHANGELOG.md has a section for the workspace version.
+#   5. CHANGELOG.md has a section for the workspace version;
+#   6. every anti-drift rule number in AGENTS.md resolves to its docs/boundaries/ file.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 fail=0
@@ -53,6 +54,20 @@ version="$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Ca
 if ! scripts/release-notes.sh "v$version" >/dev/null 2>&1; then
   echo "changelog: CHANGELOG.md has no \"## $version\" section for the workspace version"; fail=1
 fi
+
+# AGENTS.md is an index (plan P4.2): every anti-drift rule number resolves
+# to its file under docs/boundaries/, and every link in AGENTS.md exists.
+for rule in 1 2 3 4 5 6 7 7a 7b 8 9 10; do
+  file="$(sed -n "s/^| $rule | \\[.*\\](\\(docs\\/boundaries\\/[^)]*\\)) |\$/\\1/p" AGENTS.md)"
+  if [[ -z "$file" || ! -f "$file" ]]; then
+    echo "AGENTS.md: anti-drift rule $rule has no file under docs/boundaries/"; fail=1
+  elif ! head -1 "$file" | grep -q "^# Anti-drift $rule: "; then
+    echo "$file: first line is not \"# Anti-drift $rule: ...\""; fail=1
+  fi
+done
+while read -r link; do
+  [[ -e "$link" ]] || { echo "AGENTS.md: link to missing file $link"; fail=1; }
+done < <(grep -oE '\]\([^)#]+' AGENTS.md | sed 's/^](//' | grep -vE '^https?:')
 
 if (( fail )); then exit 1; fi
 echo "repo rules: ok"
