@@ -16,6 +16,8 @@
 #                         of hexuria/ultra-instinct; set by the tests)
 
 $ErrorActionPreference = 'Stop'
+# The progress bar slows Invoke-WebRequest down by an order of magnitude in 5.1.
+$ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $Repo = 'hexuria/ultra-instinct'
@@ -49,7 +51,7 @@ function Place($From) {
         ([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';') |
         Where-Object { $_ } | ForEach-Object { [IO.Path]::GetFullPath($_) }
     if ($onPath -notcontains [IO.Path]::GetFullPath($Dir)) {
-        Warn "warning: $Dir is not on PATH; add it to use aui"
+        Warn "$Dir is not on PATH; add it to use aui"
     }
 }
 
