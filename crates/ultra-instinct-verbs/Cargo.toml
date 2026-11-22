@@ -20,5 +20,5 @@ version = "1"
 # Local-socket IPC for the session daemon: Windows named pipes.
 # Pinned: 2.4.9 is under a week old. widestring builds the pipe's
 # security descriptor from SDDL.
-interprocess = "=2.4.8"
+interprocess = "=2.4.9"
 widestring = "=1.2.1"
